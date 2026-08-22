@@ -43,6 +43,31 @@ func TestBroadcast(t *testing.T) {
 	}
 }
 
+func TestSerialServerForwardsToTCP(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	state.Lock()
+	state.clients = map[net.Conn]struct{}{server: {}}
+	state.Unlock()
+	defer func() {
+		state.Lock()
+		state.clients = nil
+		state.Unlock()
+	}()
+
+	done := make(chan error, 1)
+	go func() { done <- forwardToNetwork([]byte("serial-data")) }()
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, len("serial-data"))
+	if _, err := client.Read(buf); err != nil || string(buf) != "serial-data" {
+		t.Fatalf("串口服务器 TCP 透传失败: %q, %v", buf, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUDPSend(t *testing.T) {
 	server, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
 	if err != nil {
