@@ -4,7 +4,6 @@ go 1.26
 
 require (
 	github.com/lxn/walk v0.0.0-20210112085537-c389da54e794
-	github.com/mattn/go-sqlite3 v1.14.50
 	go.bug.st/serial v1.6.4
 	modernc.org/sqlite v1.57.0
 )

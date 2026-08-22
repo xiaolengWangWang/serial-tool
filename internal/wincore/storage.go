@@ -15,7 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const databaseSizeLimit = 100 << 20
+var databaseSizeLimit int64 = 100 << 20
 
 type Store struct {
 	sync.Mutex

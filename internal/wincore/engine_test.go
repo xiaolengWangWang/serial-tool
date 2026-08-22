@@ -57,6 +57,53 @@ func TestTCPClientSend(t *testing.T) {
 	}
 }
 
+func TestTCPServerBroadcast(t *testing.T) {
+	engine, err := New(t.TempDir(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	server, client := net.Pipe()
+	defer client.Close()
+	engine.Lock()
+	engine.clients = map[net.Conn]struct{}{server: {}}
+	engine.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- engine.Send("ping", false, "") }()
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 4)
+	if _, err := client.Read(buf); err != nil || string(buf) != "ping" {
+		t.Fatalf("广播失败: %q, %v", buf, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUDPClientSend(t *testing.T) {
+	server, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	engine, err := New(t.TempDir(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if err = engine.Connect(Config{Mode: ModeUDPClient, Address: server.LocalAddr().String()}); err != nil {
+		t.Fatal(err)
+	}
+	if err = engine.Send("ping", false, ""); err != nil {
+		t.Fatal(err)
+	}
+	_ = server.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 4)
+	if _, _, err := server.ReadFromUDP(buf); err != nil || string(buf) != "ping" {
+		t.Fatalf("UDP 发送失败: %q, %v", buf, err)
+	}
+}
+
 func TestStoreRawAndText(t *testing.T) {
 	store, err := OpenStore(t.TempDir())
 	if err != nil {
@@ -78,5 +125,34 @@ func TestStoreRawAndText(t *testing.T) {
 	}
 	if !bytes.Equal(saved, raw) || valid || text == "" {
 		t.Fatalf("SQLite 数据错误: raw=% X text=%q utf8=%v", saved, text, valid)
+	}
+}
+
+func TestStoreRotates(t *testing.T) {
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err = store.StartSession("TCP 服务端", ":9000", "test"); err != nil {
+		t.Fatal(err)
+	}
+	orig := databaseSizeLimit
+	databaseSizeLimit = 1
+	t.Cleanup(func() { databaseSizeLimit = orig })
+
+	firstPath := store.path
+	if err = store.Received("串口", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if store.path == firstPath {
+		t.Fatal("超过大小限制后未滚动数据库")
+	}
+	var saved []byte
+	if err = store.db.QueryRow(`SELECT raw_data FROM received_data ORDER BY id DESC LIMIT 1`).Scan(&saved); err != nil {
+		t.Fatal(err)
+	}
+	if string(saved) != "x" {
+		t.Fatalf("滚动后数据写入失败: %q", saved)
 	}
 }
