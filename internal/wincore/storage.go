@@ -79,6 +79,38 @@ func (s *Store) Received(source string, data []byte) error {
 	return err
 }
 
+// SessionInfo 是一条历史连接记录。
+type SessionInfo struct {
+	Mode       string
+	Endpoint   string
+	Parameters string
+	StartedAt  string
+}
+
+// RecentSessions 返回去重后最近使用的若干条连接配置(按最近使用时间倒序)。
+func (s *Store) RecentSessions(limit int) ([]SessionInfo, error) {
+	s.Lock()
+	defer s.Unlock()
+	if s.db == nil {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`SELECT mode, endpoint, parameters, MAX(started_at)
+		FROM sessions GROUP BY mode, endpoint, parameters ORDER BY MAX(id) DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SessionInfo
+	for rows.Next() {
+		var si SessionInfo
+		if err := rows.Scan(&si.Mode, &si.Endpoint, &si.Parameters, &si.StartedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, si)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) Close() {
 	s.Lock()
 	defer s.Unlock()

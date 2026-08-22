@@ -2,13 +2,18 @@
 #include <stdlib.h>
 #include "app.h"
 
-@interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate> {
+@interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource> {
     NSWindow *_window;
     NSWindow *_monitorWindow;
-    NSPopUpButton *_mode, *_bridgeProtocol, *_bridgeRole;
-    NSComboBox *_ports, *_baud, *_data, *_stop, *_parity, *_eol;
-    NSTextField *_address, *_bridgeAddress, *_endpointLabel, *_status, *_interval;
-    NSArray *_serialControls, *_bridgeControls;
+    NSWindow *_vsWindow;
+    NSTableView *_vsTable;
+    NSComboBox *_vsIP;
+    NSTextField *_vsPort;
+    NSMutableArray *_vsList;
+    NSPopUpButton *_mode, *_bridgeProtocol, *_role, *_history;
+    NSComboBox *_ports, *_baud, *_data, *_stop, *_parity, *_eol, *_ip;
+    NSTextField *_port, *_endpointLabel, *_roleLabel, *_ipLabel, *_portLabel, *_protocolLabel, *_status, *_interval;
+    NSArray *_serialControls;
     NSButton *_refresh, *_connect, *_hexView, *_hexSend, *_timerButton;
     NSTextView *_log, *_send, *_monitorLog;
     NSTimer *_sendTimer;
@@ -39,8 +44,19 @@ static NSComboBox *Combo(NSRect frame, NSArray *items, NSString *value) {
     return box;
 }
 
+static void Item(NSMenu *menu, NSString *title, SEL action, NSString *key, NSEventModifierFlags mask) {
+    NSMenuItem *item = [menu addItemWithTitle:title action:action keyEquivalent:key];
+    item.keyEquivalentModifierMask = mask;
+}
+
+static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
+    NSMenuItem *item = [mainMenu addItemWithTitle:title action:NULL keyEquivalent:@""];
+    item.submenu = submenu;
+}
+
 @implementation AppDelegate
 - (void)applicationDidFinishLaunching:(NSNotification *)note {
+    [self buildMenu];
     _window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 1040, 700)
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
         backing:NSBackingStoreBuffered defer:NO];
@@ -58,7 +74,7 @@ static NSComboBox *Combo(NSRect frame, NSArray *items, NSString *value) {
     NSTextField *modeLabel = Label(@"工作模式", NSMakeRect(40, 620, 100, 22));
     [view addSubview:modeLabel];
     _mode = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(40, 586, 240, 30) pullsDown:NO];
-    [_mode addItemsWithTitles:@[@"串口", @"TCP 服务端", @"TCP 客户端", @"UDP 服务端", @"UDP 客户端", @"串口服务器"]];
+    [_mode addItemsWithTitles:@[@"串口", @"TCP", @"UDP", @"串口服务器", @"HTTP 客户端"]];
     _mode.target = self; _mode.action = @selector(modeChanged:);
     [view addSubview:_mode];
 
@@ -68,9 +84,6 @@ static NSComboBox *Combo(NSRect frame, NSArray *items, NSString *value) {
     [view addSubview:_ports];
     _refresh = [[NSButton buttonWithTitle:@"刷新" target:self action:@selector(refresh:)] retain];
     _refresh.frame = NSMakeRect(220, 514, 60, 30); [view addSubview:_refresh];
-    _address = [[NSTextField alloc] initWithFrame:NSMakeRect(40, 514, 240, 30)];
-    _address.placeholderString = @"例如 192.168.1.10:9000";
-    _address.hidden = YES; [view addSubview:_address];
 
     NSTextField *baudLabel = Label(@"波特率", NSMakeRect(40, 466, 100, 22)); [view addSubview:baudLabel];
     NSTextField *dataLabel = Label(@"数据位", NSMakeRect(165, 466, 100, 22)); [view addSubview:dataLabel];
@@ -84,27 +97,35 @@ static NSComboBox *Combo(NSRect frame, NSArray *items, NSString *value) {
     [view addSubview:_parity]; [view addSubview:_stop];
     _serialControls = [[NSArray alloc] initWithObjects:baudLabel, dataLabel, parityLabel, stopLabel, _baud, _data, _parity, _stop, nil];
 
-    NSTextField *protocolLabel = Label(@"网络协议", NSMakeRect(40, 310, 100, 22)); [view addSubview:protocolLabel];
-    NSTextField *roleLabel = Label(@"网络角色", NSMakeRect(165, 310, 100, 22)); [view addSubview:roleLabel];
+    // 网络控件:协议(仅串口服务器)、角色(服务端/客户端)、IP、端口。位置由 modeChanged 按模式重排。
+    _protocolLabel = [Label(@"网络协议", NSMakeRect(40, 310, 100, 22)) retain]; [view addSubview:_protocolLabel];
     _bridgeProtocol = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(40, 278, 110, 30) pullsDown:NO];
     [_bridgeProtocol addItemsWithTitles:@[@"TCP", @"UDP"]]; [view addSubview:_bridgeProtocol];
-    _bridgeRole = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(165, 278, 115, 30) pullsDown:NO];
-    [_bridgeRole addItemsWithTitles:@[@"服务端", @"客户端"]];
-    _bridgeRole.target = self; _bridgeRole.action = @selector(bridgeOptionsChanged:); [view addSubview:_bridgeRole];
-    NSTextField *bridgeAddressLabel = Label(@"网络地址", NSMakeRect(40, 242, 150, 22)); [view addSubview:bridgeAddressLabel];
-    _bridgeAddress = [[NSTextField alloc] initWithFrame:NSMakeRect(40, 208, 240, 30)];
-    _bridgeAddress.placeholderString = @"例如 :9000"; [view addSubview:_bridgeAddress];
-    _bridgeControls = [[NSArray alloc] initWithObjects:protocolLabel, roleLabel, bridgeAddressLabel,
-                        _bridgeProtocol, _bridgeRole, _bridgeAddress, nil];
-    for (NSView *control in _bridgeControls) control.hidden = YES;
+    _roleLabel = [Label(@"角色", NSMakeRect(165, 310, 100, 22)) retain]; [view addSubview:_roleLabel];
+    _role = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(165, 278, 115, 30) pullsDown:NO];
+    [_role addItemsWithTitles:@[@"服务端", @"客户端"]];
+    _role.target = self; _role.action = @selector(roleChanged:); [view addSubview:_role];
+    _ipLabel = [Label(@"IP 地址", NSMakeRect(40, 242, 100, 22)) retain]; [view addSubview:_ipLabel];
+    _ip = [Combo(NSMakeRect(40, 208, 150, 30), @[], @"") retain]; // 可下拉选择本机 IP,也可手输
+    [view addSubview:_ip];
+    _portLabel = [Label(@"端口", NSMakeRect(196, 242, 84, 22)) retain]; [view addSubview:_portLabel];
+    _port = [[NSTextField alloc] initWithFrame:NSMakeRect(196, 208, 84, 30)];
+    _port.placeholderString = @"9000"; [view addSubview:_port];
 
-    _status = [Label(@"● 未连接", NSMakeRect(40, 158, 240, 24)) retain];
+    _status = [Label(@"● 未连接", NSMakeRect(30, 150, 260, 52)) retain];
     _status.alignment = NSTextAlignmentCenter;
     _status.textColor = NSColor.secondaryLabelColor;
+    _status.usesSingleLineMode = NO;
+    _status.maximumNumberOfLines = 3;
+    ((NSTextFieldCell *)_status.cell).wraps = YES;
     [view addSubview:_status];
     _connect = [[NSButton buttonWithTitle:@"连接" target:self action:@selector(toggleConnect:)] retain];
     _connect.frame = NSMakeRect(40, 112, 240, 36); _connect.keyEquivalent = @"\r";
     [view addSubview:_connect];
+    _history = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(40, 72, 240, 28) pullsDown:YES];
+    [_history addItemWithTitle:@"历史连接"];
+    _history.target = self; _history.action = @selector(historySelected:);
+    [view addSubview:_history];
     NSTextField *addressHint = Label(@"服务端绑定本机地址，客户端填写远程地址", NSMakeRect(40, 34, 240, 22));
     addressHint.font = [NSFont systemFontOfSize:11]; addressHint.textColor = NSColor.tertiaryLabelColor;
     addressHint.alignment = NSTextAlignmentCenter; [view addSubview:addressHint];
@@ -130,6 +151,7 @@ static NSComboBox *Combo(NSRect frame, NSArray *items, NSString *value) {
     NSTextField *sendTitle = Label(@"发送数据", NSMakeRect(320, 242, 120, 24));
     sendTitle.font = [NSFont boldSystemFontOfSize:14]; [view addSubview:sendTitle];
     _hexSend = [[NSButton checkboxWithTitle:@"HEX 发送" target:nil action:nil] retain];
+    _hexSend.state = NSControlStateValueOn; // 默认使用 HEX 发送
     _hexSend.frame = NSMakeRect(590, 240, 100, 26); _hexSend.autoresizingMask = NSViewMinXMargin; [view addSubview:_hexSend];
     [view addSubview:Label(@"行尾", NSMakeRect(700, 242, 36, 24))];
     _eol = [Combo(NSMakeRect(740, 238, 90, 30), @[@"无",@"LF",@"CR",@"CRLF"], @"无") retain];
@@ -153,17 +175,62 @@ static NSComboBox *Combo(NSRect frame, NSArray *items, NSString *value) {
 
     [_window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
-    [self refresh:nil];
+    [self modeChanged:nil];
+    [self reloadHistory];
     char *database = GoDatabaseInfo();
     NSString *databaseInfo = [NSString stringWithUTF8String:database ?: ""]; free(database);
     if ([databaseInfo hasPrefix:@"错误:"]) [self alert:databaseInfo];
     else [self appendText:[NSString stringWithFormat:@"[SQLite 数据目录：%@]\n", databaseInfo]];
 }
 
+- (void)buildMenu {
+    NSMenu *mainMenu = [[[NSMenu alloc] init] autorelease];
+
+    NSMenu *appMenu = [[[NSMenu alloc] init] autorelease];
+    Item(appMenu, @"隐藏", @selector(hide:), @"h", NSEventModifierFlagCommand);
+    [appMenu addItem:[NSMenuItem separatorItem]];
+    Item(appMenu, @"退出", @selector(terminate:), @"q", NSEventModifierFlagCommand);
+    Submenu(mainMenu, @"", appMenu);
+
+    NSMenu *actionMenu = [[[NSMenu alloc] initWithTitle:@"操作"] autorelease];
+    Item(actionMenu, @"连接 / 断开", @selector(toggleConnect:), @"l", NSEventModifierFlagCommand);
+    Item(actionMenu, @"发送一次", @selector(send:), @"\r", NSEventModifierFlagCommand);
+    Item(actionMenu, @"定时发送开关", @selector(toggleTimer:), @"t", NSEventModifierFlagCommand);
+    Item(actionMenu, @"刷新串口", @selector(refresh:), @"r", NSEventModifierFlagCommand);
+    Item(actionMenu, @"虚拟串口映射", @selector(openVSerialManager:), @"v", NSEventModifierFlagCommand | NSEventModifierFlagShift);
+    Submenu(mainMenu, @"操作", actionMenu);
+
+    NSMenu *editMenu = [[[NSMenu alloc] initWithTitle:@"编辑"] autorelease];
+    Item(editMenu, @"剪切", @selector(cut:), @"x", NSEventModifierFlagCommand);
+    Item(editMenu, @"复制", @selector(copy:), @"c", NSEventModifierFlagCommand);
+    Item(editMenu, @"粘贴", @selector(paste:), @"v", NSEventModifierFlagCommand);
+    Item(editMenu, @"全选", @selector(selectAll:), @"a", NSEventModifierFlagCommand);
+    Submenu(mainMenu, @"编辑", editMenu);
+
+    NSMenu *viewMenu = [[[NSMenu alloc] initWithTitle:@"视图"] autorelease];
+    Item(viewMenu, @"清空接收区", @selector(clear:), @"k", NSEventModifierFlagCommand);
+    Item(viewMenu, @"导出接收数据", @selector(exportLog:), @"e", NSEventModifierFlagCommand);
+    Item(viewMenu, @"HEX 显示开关", @selector(toggleHexView:), @"h", NSEventModifierFlagCommand | NSEventModifierFlagShift);
+    Item(viewMenu, @"监控窗口", @selector(openMonitor:), @"m", NSEventModifierFlagCommand | NSEventModifierFlagShift);
+    Submenu(mainMenu, @"视图", viewMenu);
+
+    NSApp.mainMenu = mainMenu;
+}
+
+- (void)toggleHexView:(id)sender {
+    _hexView.state = _hexView.state == NSControlStateValueOn ? NSControlStateValueOff : NSControlStateValueOn;
+    GoSetHexView(_hexView.state == NSControlStateValueOn);
+}
+
 - (NSString *)modeName { return _mode.titleOfSelectedItem; }
+- (BOOL)isSerialMode { return [[self modeName] isEqualToString:@"串口"]; }
 - (BOOL)isBridgeMode { return [[self modeName] isEqualToString:@"串口服务器"]; }
-- (BOOL)isServerMode { return [self isBridgeMode] ? [_bridgeRole.titleOfSelectedItem isEqualToString:@"服务端"] : [[self modeName] hasSuffix:@"服务端"]; }
-- (BOOL)isNetworkMode { return ![[self modeName] isEqualToString:@"串口"] && ![self isBridgeMode]; }
+- (BOOL)isHTTPMode { return [[self modeName] isEqualToString:@"HTTP 客户端"]; }
+- (BOOL)isNetworkMode { NSString *m = [self modeName]; return [m isEqualToString:@"TCP"] || [m isEqualToString:@"UDP"]; }
+- (BOOL)isServerMode {
+    if ([self isNetworkMode] || [self isBridgeMode]) return [_role.titleOfSelectedItem isEqualToString:@"服务端"];
+    return NO;
+}
 
 - (void)setStatus:(NSString *)text color:(NSColor *)color {
     _status.stringValue = text;
@@ -180,25 +247,47 @@ static NSComboBox *Combo(NSRect frame, NSArray *items, NSString *value) {
     if (items.count) [_ports selectItemAtIndex:0];
 }
 
+- (void)resetToDisconnected {
+    [self stopTimer];
+    _connected = NO;
+    _mode.enabled = YES;
+    [self setStatus:@"● 未连接" color:NSColor.secondaryLabelColor];
+    [self modeChanged:nil];
+}
+
+// 连接被动断开(远端关闭、串口拔出等),由 Go 引擎的 onClosed 回调触发。
+- (void)connectionClosed {
+    if (!_connected) return;
+    GoDisconnect();
+    [self resetToDisconnected];
+}
+
 - (void)toggleConnect:(id)sender {
     if (_connected) {
-        [self stopTimer]; GoDisconnect(); _connected = NO; _mode.enabled = YES;
-        [self setStatus:@"● 未连接" color:NSColor.secondaryLabelColor];
-        [self modeChanged:nil]; [self appendText:@"\n[已停止]\n"]; return;
+        GoDisconnect();
+        [self resetToDisconnected];
+        [self appendText:@"\n[已停止]\n"];
+        return;
     }
 
     NSString *mode = [self modeName];
-    BOOL network = [self isNetworkMode], bridge = [self isBridgeMode], server = [self isServerMode];
+    BOOL serial = [self isSerialMode], bridge = [self isBridgeMode];
+    BOOL http = [self isHTTPMode], net = [self isNetworkMode], server = [self isServerMode];
     NSString *serialName = _ports.stringValue;
-    NSString *endpoint = bridge ? _bridgeAddress.stringValue : (network ? _address.stringValue : serialName);
-    if ((bridge || !network) && !serialName.length) { [self alert:@"请选择串口"]; return; }
-    if ((network || bridge) && !endpoint.length) { [self alert:@"请输入 IP:端口"]; return; }
-    if ((network || bridge) && ![endpoint containsString:@":"]) {
-        NSInteger port = endpoint.integerValue;
-        if (port <= 0) { [self alert:@"地址格式应为 IP:端口，例如 192.168.1.10:9000"]; return; }
-        endpoint = server ? [NSString stringWithFormat:@":%ld", (long)port]
-                          : [NSString stringWithFormat:@"127.0.0.1:%ld", (long)port];
-        if (bridge) _bridgeAddress.stringValue = endpoint; else _address.stringValue = endpoint;
+    if ((serial || bridge) && !serialName.length) { [self alert:@"请选择串口"]; return; }
+
+    NSString *endpoint;
+    if (http) {
+        endpoint = [_ip.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if (!endpoint.length) { [self alert:@"请输入 URL"]; return; }
+    } else if (net || bridge) {
+        NSString *ip = [_ip.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        NSString *port = [_port.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if (port.integerValue <= 0) { [self alert:@"请输入有效端口"]; return; }
+        if (!server && !ip.length) { [self alert:@"客户端请输入服务器 IP"]; return; }
+        endpoint = [NSString stringWithFormat:@"%@:%@", ip, port]; // 服务端 IP 可空 → ":端口"
+    } else {
+        endpoint = serialName;
     }
 
     BOOL hex = _hexView.state == NSControlStateValueOn;
@@ -206,36 +295,47 @@ static NSComboBox *Combo(NSRect frame, NSArray *items, NSString *value) {
     if (bridge) err = GoStartSerialServer((char *)serialName.UTF8String, _baud.intValue, _data.intValue, _stop.intValue,
                                            (char *)_parity.stringValue.UTF8String,
                                            (char *)_bridgeProtocol.titleOfSelectedItem.UTF8String,
-                                           (char *)_bridgeRole.titleOfSelectedItem.UTF8String,
+                                           (char *)_role.titleOfSelectedItem.UTF8String,
                                            (char *)endpoint.UTF8String, hex);
-    else if ([mode isEqualToString:@"TCP 服务端"]) err = GoListen((char *)endpoint.UTF8String, hex);
-    else if ([mode isEqualToString:@"TCP 客户端"]) err = GoConnectTCP((char *)endpoint.UTF8String, hex);
-    else if ([mode isEqualToString:@"UDP 服务端"]) err = GoListenUDP((char *)endpoint.UTF8String, hex);
-    else if ([mode isEqualToString:@"UDP 客户端"]) err = GoConnectUDP((char *)endpoint.UTF8String, hex);
+    else if ([mode isEqualToString:@"TCP"]) err = server ? GoListen((char *)endpoint.UTF8String, hex)
+                                                         : GoConnectTCP((char *)endpoint.UTF8String, hex);
+    else if ([mode isEqualToString:@"UDP"]) err = server ? GoListenUDP((char *)endpoint.UTF8String, hex)
+                                                         : GoConnectUDP((char *)endpoint.UTF8String, hex);
+    else if (http) err = GoConnectHTTP((char *)endpoint.UTF8String);
     else err = GoConnect((char *)endpoint.UTF8String, _baud.intValue, _data.intValue, _stop.intValue,
                          (char *)_parity.stringValue.UTF8String, hex);
     NSString *message = [NSString stringWithUTF8String:err ?: ""]; free(err);
     if (message.length) { [self alert:message]; return; }
 
-    _connected = YES; _mode.enabled = NO; _ports.enabled = NO; _address.enabled = NO; _bridgeAddress.enabled = NO;
-    _refresh.enabled = NO; for (NSControl *control in _serialControls) control.enabled = NO;
-    for (NSControl *control in _bridgeControls) control.enabled = NO;
+    _connected = YES; _mode.enabled = NO;
+    _ports.enabled = NO; _refresh.enabled = NO; _ip.enabled = NO; _port.enabled = NO;
+    _role.enabled = NO; _bridgeProtocol.enabled = NO;
+    for (NSControl *control in _serialControls) control.enabled = NO;
     _connect.title = server ? @"停止监听" : @"断开";
-    [self setStatus:server ? @"● 监听中" : @"● 已连接" color:NSColor.systemGreenColor];
+    NSString *modeDesc = net ? [NSString stringWithFormat:@"%@ %@", mode, _role.titleOfSelectedItem] : mode;
+    NSString *state = server ? @"● 监听中" : @"● 已连接";
+    NSString *detail = bridge ? [NSString stringWithFormat:@"%@ ↔ %@", serialName, endpoint]
+                              : [NSString stringWithFormat:@"%@ · %@", modeDesc, endpoint];
+    NSString *params = (serial || bridge)
+        ? [NSString stringWithFormat:@"%@ %@ %@%@ · ", _baud.stringValue, _data.stringValue, _parity.stringValue, _stop.stringValue]
+        : @"";
+    [self setStatus:[NSString stringWithFormat:@"%@\n%@\n%@开始 %@", state, detail, params, [self nowTime]]
+              color:NSColor.systemGreenColor];
     if (bridge)
         [self appendText:[NSString stringWithFormat:@"[串口服务器已启动：%@ ↔ %@ %@ %@]\n", serialName,
-                          _bridgeProtocol.titleOfSelectedItem, _bridgeRole.titleOfSelectedItem, endpoint]];
+                          _bridgeProtocol.titleOfSelectedItem, _role.titleOfSelectedItem, endpoint]];
     else
-        [self appendText:server
-            ? [NSString stringWithFormat:@"[正在监听 %@ %@]\n", mode, endpoint]
-            : [NSString stringWithFormat:@"[已连接 %@ %@]\n", mode, endpoint]];
+        [self appendText:[NSString stringWithFormat:@"[%@ %@ %@]\n", server ? @"正在监听" : @"已连接", modeDesc, endpoint]];
+    [self reloadHistory];
 }
 
 - (NSString *)sendCurrentData {
     NSString *mode = [self modeName];
     BOOL hex = _hexSend.state == NSControlStateValueOn;
     char *err;
-    if ([mode hasPrefix:@"TCP"])
+    if ([mode isEqualToString:@"HTTP 客户端"])
+        err = GoHTTPRequest((char *)_send.string.UTF8String);
+    else if ([mode hasPrefix:@"TCP"])
         err = GoNetworkSend((char *)_send.string.UTF8String, hex, (char *)_eol.stringValue.UTF8String);
     else if ([mode hasPrefix:@"UDP"])
         err = GoUDPSend((char *)_send.string.UTF8String, hex, (char *)_eol.stringValue.UTF8String);
@@ -280,24 +380,231 @@ static NSComboBox *Combo(NSRect frame, NSArray *items, NSString *value) {
 }
 
 - (void)hexViewChanged:(id)sender { GoSetHexView(_hexView.state == NSControlStateValueOn); }
-- (void)bridgeOptionsChanged:(id)sender {
-    BOOL server = [self isServerMode];
-    _bridgeAddress.stringValue = server ? @":9000" : @"127.0.0.1:9000";
-    _connect.title = server ? @"启动服务器" : @"连接并启动";
-}
+- (void)roleChanged:(id)sender { [self modeChanged:sender]; }
 - (void)modeChanged:(id)sender {
-    BOOL network = [self isNetworkMode], bridge = [self isBridgeMode], server = [self isServerMode];
-    _ports.hidden = network; _refresh.hidden = network; _address.hidden = !network;
-    for (NSView *control in _serialControls) control.hidden = network;
-    for (NSView *control in _bridgeControls) control.hidden = !bridge;
-    _endpointLabel.stringValue = network ? (server ? @"本机监听地址" : @"远程服务器地址") : @"串口";
+    BOOL serial = [self isSerialMode], bridge = [self isBridgeMode];
+    BOOL http = [self isHTTPMode], net = [self isNetworkMode];
+    BOOL usesSerialName = serial || bridge;
+    BOOL usesNet = net || bridge;              // 需要角色 + IP + 端口
+    BOOL server = [self isServerMode];
+
+    // 串口名 / URL 标签行
+    _endpointLabel.hidden = !(usesSerialName || http);
+    _endpointLabel.stringValue = http ? @"请求 URL" : @"串口";
+    _ports.hidden = !usesSerialName; _refresh.hidden = !usesSerialName;
+    for (NSView *c in _serialControls) c.hidden = !usesSerialName;
+    _protocolLabel.hidden = !bridge; _bridgeProtocol.hidden = !bridge;
+    _roleLabel.hidden = !usesNet; _role.hidden = !usesNet;
+    _ipLabel.hidden = !(usesNet || http); _ip.hidden = !(usesNet || http);
+    _ipLabel.stringValue = net ? (server ? @"监听网卡" : @"服务器 IP") : @"IP 地址";
+    _portLabel.hidden = !usesNet; _port.hidden = !usesNet;
+
+    // 网络控件按模式重排位置(串口服务器在底部,其余在顶部)
+    if (bridge) {
+        _roleLabel.frame = NSMakeRect(165, 310, 100, 22); _role.frame = NSMakeRect(165, 278, 115, 30);
+        _ipLabel.frame = NSMakeRect(40, 242, 100, 22);     _ip.frame = NSMakeRect(40, 208, 150, 30);
+        _portLabel.frame = NSMakeRect(196, 242, 84, 22);   _port.frame = NSMakeRect(196, 208, 84, 30);
+    } else if (http) {
+        _ipLabel.frame = NSMakeRect(40, 548, 150, 22);     _ip.frame = NSMakeRect(40, 514, 240, 30);
+    } else { // TCP / UDP
+        _roleLabel.frame = NSMakeRect(40, 548, 100, 22);   _role.frame = NSMakeRect(40, 514, 150, 30);
+        _ipLabel.frame = NSMakeRect(40, 466, 100, 22);     _ip.frame = NSMakeRect(40, 432, 150, 30);
+        _portLabel.frame = NSMakeRect(196, 466, 84, 22);   _port.frame = NSMakeRect(196, 432, 84, 30);
+    }
+
     _connect.title = bridge ? (server ? @"启动服务器" : @"连接并启动") : (server ? @"开始监听" : @"连接");
-    if (sender && network) _address.stringValue = server ? @":9000" : @"127.0.0.1:9000";
-    if (sender && bridge) _bridgeAddress.stringValue = server ? @":9000" : @"127.0.0.1:9000";
-    if (!network) [self refresh:nil];
-    _ports.enabled = !_connected; _address.enabled = !_connected; _bridgeAddress.enabled = !_connected;
-    _refresh.enabled = !_connected; for (NSControl *control in _serialControls) control.enabled = !_connected;
-    for (NSControl *control in _bridgeControls) control.enabled = !_connected;
+
+    if (usesNet) [self populateIPs:server]; else [_ip removeAllItems]; // 列出本机 IP 供选择
+    if (sender) { // 切换模式/角色时填默认值
+        if (http) {
+            _ip.stringValue = @"http://39.107.191.77:8080/api/data";
+        } else if (usesNet) {
+            _ip.stringValue = server ? @"0.0.0.0" : [self localIP];
+            if (!_port.stringValue.length) _port.stringValue = @"9000";
+        }
+    }
+    if (usesSerialName) [self refresh:nil];
+
+    BOOL en = !_connected;
+    _ports.enabled = en; _refresh.enabled = en; _ip.enabled = en; _port.enabled = en;
+    _role.enabled = en; _bridgeProtocol.enabled = en;
+    for (NSControl *c in _serialControls) c.enabled = en;
+}
+
+- (NSString *)localIP {
+    char *raw = GoLocalIP();
+    NSString *ip = [NSString stringWithUTF8String:raw ?: "127.0.0.1"]; free(raw);
+    return ip.length ? ip : @"127.0.0.1";
+}
+
+- (void)populateIPs:(BOOL)server {
+    char *raw = GoLocalIPs();
+    NSString *v = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
+    NSString *current = _ip.stringValue;
+    [_ip removeAllItems];
+    if (server) [_ip addItemWithObjectValue:@"0.0.0.0"]; // 服务端:监听所有网卡
+    if (v.length) [_ip addItemsWithObjectValues:[v componentsSeparatedByString:@"\n"]];
+    _ip.stringValue = current; // 保留用户已输入内容
+}
+
+- (NSString *)nowTime {
+    NSDateFormatter *fmt = [[[NSDateFormatter alloc] init] autorelease];
+    fmt.dateFormat = @"HH:mm:ss";
+    return [fmt stringFromDate:[NSDate date]];
+}
+
+- (NSDictionary *)parseParameters:(NSString *)params {
+    NSMutableDictionary *dict = [NSMutableDictionary dictionary];
+    for (NSString *pair in [params componentsSeparatedByString:@","]) {
+        NSRange eq = [pair rangeOfString:@"="];
+        if (eq.location != NSNotFound)
+            dict[[pair substringToIndex:eq.location]] = [pair substringFromIndex:eq.location + 1];
+    }
+    return dict;
+}
+
+- (void)reloadHistory {
+    char *raw = GoRecentSessions();
+    NSString *value = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
+    while (_history.numberOfItems > 1) [_history removeItemAtIndex:1];
+    for (NSString *line in [value componentsSeparatedByString:@"\n"]) {
+        if (!line.length) continue;
+        NSArray *f = [line componentsSeparatedByString:@"\x1f"];
+        if (f.count < 3) continue;
+        NSString *mode = f[0], *endpoint = f[1], *parameters = f[2];
+        NSString *where = endpoint.length ? endpoint : ([self parseParameters:parameters][@"serial"] ?: @"");
+        NSString *when = (f.count > 3 && [f[3] length] >= 16)
+            ? [[f[3] substringWithRange:NSMakeRange(5, 11)] stringByReplacingOccurrencesOfString:@"T" withString:@" "] : @"";
+        [_history addItemWithTitle:[NSString stringWithFormat:@"%@ · %@  (%@)", mode, where, when]];
+        _history.lastItem.representedObject = @{@"mode": mode, @"endpoint": endpoint, @"parameters": parameters};
+    }
+}
+
+- (void)fillIPPort:(NSString *)endpoint {
+    NSRange colon = [endpoint rangeOfString:@":" options:NSBackwardsSearch];
+    if (colon.location != NSNotFound) {
+        _ip.stringValue = [endpoint substringToIndex:colon.location];
+        _port.stringValue = [endpoint substringFromIndex:colon.location + 1];
+    } else {
+        _ip.stringValue = endpoint;
+    }
+}
+
+- (void)historySelected:(id)sender {
+    NSDictionary *info = _history.selectedItem.representedObject;
+    if (!info) return;
+    if (_connected) { [self alert:@"请先断开当前连接再切换历史配置"]; return; }
+    NSString *storedMode = info[@"mode"], *endpoint = info[@"endpoint"];
+    NSDictionary *p = [self parseParameters:info[@"parameters"]];
+
+    // 存储的是细分模式(如 TCP 客户端),映射到新 UI 的"模式 + 角色"
+    NSString *uiMode = storedMode, *role = nil;
+    if ([storedMode hasPrefix:@"TCP"]) { uiMode = @"TCP"; role = [storedMode hasSuffix:@"服务端"] ? @"服务端" : @"客户端"; }
+    else if ([storedMode hasPrefix:@"UDP"]) { uiMode = @"UDP"; role = [storedMode hasSuffix:@"服务端"] ? @"服务端" : @"客户端"; }
+    else if ([storedMode isEqualToString:@"串口服务器"]) { role = [p[@"role"] length] ? p[@"role"] : @"服务端"; }
+
+    [_mode selectItemWithTitle:uiMode];
+    if (role) [_role selectItemWithTitle:role];
+    [self modeChanged:nil];
+
+    if ([self isBridgeMode]) {
+        if ([p[@"serial"] length]) _ports.stringValue = p[@"serial"];
+        if ([p[@"protocol"] length]) [_bridgeProtocol selectItemWithTitle:p[@"protocol"]];
+        [self fillIPPort:endpoint];
+    } else if ([self isNetworkMode]) {
+        [self fillIPPort:endpoint];
+    } else if ([self isHTTPMode]) {
+        _ip.stringValue = endpoint;
+    } else {
+        _ports.stringValue = endpoint;
+    }
+    if ([p[@"baud"] length]) _baud.stringValue = p[@"baud"];
+    if ([p[@"data"] length]) _data.stringValue = p[@"data"];
+    if ([p[@"parity"] length]) _parity.stringValue = p[@"parity"];
+    if ([p[@"stop"] length]) _stop.stringValue = p[@"stop"];
+    [self appendText:[NSString stringWithFormat:@"[已载入历史连接：%@ · %@]\n", storedMode, endpoint.length ? endpoint : (p[@"serial"] ?: @"")]];
+}
+
+- (void)openVSerialManager:(id)sender {
+    if (!_vsWindow) {
+        _vsList = [[NSMutableArray alloc] init];
+        _vsWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 620, 420)
+            styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
+            backing:NSBackingStoreBuffered defer:NO];
+        _vsWindow.title = @"虚拟串口映射(后台运行,可多个)";
+        _vsWindow.releasedWhenClosed = NO;
+        NSView *v = _vsWindow.contentView;
+
+        [v addSubview:Label(@"TCP 端点 → 本机虚拟串口。添加后在后台持续运行,断开主连接也不受影响。", NSMakeRect(20, 384, 580, 20))];
+        [v addSubview:Label(@"IP", NSMakeRect(20, 350, 24, 22))];
+        _vsIP = [Combo(NSMakeRect(46, 346, 200, 28), @[], @"") retain];
+        char *raw = GoLocalIPs();
+        NSString *ips = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
+        if (ips.length) [_vsIP addItemsWithObjectValues:[ips componentsSeparatedByString:@"\n"]];
+        [v addSubview:_vsIP];
+        [v addSubview:Label(@"端口", NSMakeRect(256, 350, 36, 22))];
+        _vsPort = [[NSTextField alloc] initWithFrame:NSMakeRect(296, 346, 80, 28)];
+        _vsPort.placeholderString = @"1502"; [v addSubview:_vsPort];
+        NSButton *add = [NSButton buttonWithTitle:@"添加映射" target:self action:@selector(addVSerial:)];
+        add.frame = NSMakeRect(390, 344, 100, 30); [v addSubview:add];
+
+        NSScrollView *scroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(20, 56, 580, 276)] autorelease];
+        scroll.borderType = NSBezelBorder; scroll.hasVerticalScroller = YES;
+        scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        _vsTable = [[NSTableView alloc] initWithFrame:scroll.contentView.bounds];
+        NSTableColumn *c1 = [[[NSTableColumn alloc] initWithIdentifier:@"addr"] autorelease];
+        c1.title = @"TCP 端点"; c1.width = 200; [_vsTable addTableColumn:c1];
+        NSTableColumn *c2 = [[[NSTableColumn alloc] initWithIdentifier:@"link"] autorelease];
+        c2.title = @"虚拟串口设备"; c2.width = 360; [_vsTable addTableColumn:c2];
+        _vsTable.dataSource = self;
+        _vsTable.usesAlternatingRowBackgroundColors = YES;
+        scroll.documentView = _vsTable; [v addSubview:scroll];
+
+        NSButton *del = [NSButton buttonWithTitle:@"停止选中" target:self action:@selector(removeSelectedVSerial:)];
+        del.frame = NSMakeRect(20, 18, 100, 30); [v addSubview:del];
+        NSButton *copy = [NSButton buttonWithTitle:@"复制设备路径" target:self action:@selector(copyVSerialPath:)];
+        copy.frame = NSMakeRect(128, 18, 130, 30); [v addSubview:copy];
+        [v addSubview:Label(@"用 screen /路径 115200 或另一个串口工具打开该设备", NSMakeRect(268, 22, 340, 20))];
+        [_vsWindow center];
+    }
+    [_vsWindow makeKeyAndOrderFront:nil];
+}
+
+- (void)addVSerial:(id)sender {
+    NSString *ip = [_vsIP.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    NSString *port = [_vsPort.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    if (!ip.length || port.integerValue <= 0) { [self alert:@"请输入 IP 和有效端口"]; return; }
+    NSString *addr = [NSString stringWithFormat:@"%@:%@", ip, port];
+    char *raw = GoAddVSerial((char *)addr.UTF8String);
+    NSString *res = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
+    if ([res hasPrefix:@"错误:"]) { [self alert:res]; return; }
+    NSArray *f = [res componentsSeparatedByString:@"\x1f"];
+    if (f.count < 3) return;
+    [_vsList addObject:@{@"id": f[0], @"addr": f[1], @"link": f[2]}];
+    [_vsTable reloadData];
+    [self appendText:[NSString stringWithFormat:@"[虚拟串口 #%@ 已创建:%@ → %@]\n", f[0], f[1], f[2]]];
+}
+
+- (void)removeSelectedVSerial:(id)sender {
+    NSInteger row = _vsTable.selectedRow;
+    if (row < 0 || row >= (NSInteger)_vsList.count) { [self alert:@"请先选中一行"]; return; }
+    NSDictionary *d = _vsList[row];
+    GoRemoveVSerial([d[@"id"] intValue]);
+    [_vsList removeObjectAtIndex:row];
+    [_vsTable reloadData];
+    [self appendText:[NSString stringWithFormat:@"[虚拟串口 #%@ 已停止]\n", d[@"id"]]];
+}
+
+- (void)copyVSerialPath:(id)sender {
+    NSInteger row = _vsTable.selectedRow;
+    if (row < 0 || row >= (NSInteger)_vsList.count) { [self alert:@"请先选中一行"]; return; }
+    [[NSPasteboard generalPasteboard] clearContents];
+    [[NSPasteboard generalPasteboard] setString:_vsList[row][@"link"] forType:NSPasteboardTypeString];
+}
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView { return _vsList.count; }
+- (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
+    return _vsList[row][col.identifier];
 }
 
 - (void)openMonitor:(id)sender {
@@ -389,6 +696,10 @@ void UIMonitorAppend(const char *text) {
     NSString *value = [[NSString alloc] initWithUTF8String:text ?: ""];
     dispatch_async(dispatch_get_main_queue(), ^{ [(AppDelegate *)NSApp.delegate appendMonitorText:value]; });
     [value release];
+}
+
+void UIConnectionClosed(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [(AppDelegate *)NSApp.delegate connectionClosed]; });
 }
 
 void RunApp(void) {

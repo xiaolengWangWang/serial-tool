@@ -128,6 +128,39 @@ func TestStoreRawAndText(t *testing.T) {
 	}
 }
 
+func TestRecentSessions(t *testing.T) {
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	// 同一配置连接两次 + 另一配置一次
+	for i := 0; i < 2; i++ {
+		if err := store.StartSession("TCP 客户端", "39.107.191.77:1502", "baud=115200"); err != nil {
+			t.Fatal(err)
+		}
+		store.EndSession()
+	}
+	if err := store.StartSession("串口", "/dev/ttyUSB0", "baud=9600"); err != nil {
+		t.Fatal(err)
+	}
+	store.EndSession()
+
+	sessions, err := store.RecentSessions(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("应去重为 2 条配置,实际 %d 条", len(sessions))
+	}
+	if sessions[0].Mode != "串口" || sessions[0].Endpoint != "/dev/ttyUSB0" {
+		t.Fatalf("最近一条应为串口配置,实际 %+v", sessions[0])
+	}
+	if sessions[1].Endpoint != "39.107.191.77:1502" {
+		t.Fatalf("第二条应为 TCP 配置,实际 %+v", sessions[1])
+	}
+}
+
 func TestStoreRotates(t *testing.T) {
 	store, err := OpenStore(t.TempDir())
 	if err != nil {

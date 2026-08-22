@@ -3,8 +3,10 @@ module serial-tool
 go 1.26
 
 require (
+	github.com/creack/pty v1.1.24
 	github.com/lxn/walk v0.0.0-20210112085537-c389da54e794
 	go.bug.st/serial v1.6.4
+	golang.org/x/term v0.45.0
 	modernc.org/sqlite v1.57.0
 )
 

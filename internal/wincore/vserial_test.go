@@ -1,0 +1,124 @@
+package wincore
+
+import (
+	"net"
+	"os"
+	"testing"
+	"time"
+)
+
+func echoServer(t *testing.T) net.Listener {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 64)
+				for {
+					n, err := c.Read(buf)
+					if n > 0 {
+						_, _ = c.Write(buf[:n])
+					}
+					if err != nil {
+						return
+					}
+				}
+			}(conn)
+		}
+	}()
+	return listener
+}
+
+// TestVirtualSerialBridge 验证单个后台虚拟串口的双向透传。
+func TestVirtualSerialBridge(t *testing.T) {
+	listener := echoServer(t)
+	defer listener.Close()
+
+	engine, err := New(t.TempDir(), nil, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+
+	info, err := engine.AddVirtualSerial(listener.Addr().String())
+	if err != nil {
+		t.Skipf("虚拟串口不可用(平台可能不支持 PTY): %v", err)
+	}
+	if info.Link == "" {
+		t.Fatal("未创建虚拟串口设备")
+	}
+
+	dev, err := os.OpenFile(info.Link, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("打开虚拟串口失败: %v", err)
+	}
+	defer dev.Close()
+
+	if _, err := dev.Write([]byte("PING")); err != nil {
+		t.Fatal(err)
+	}
+	_ = dev.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 4)
+	n, err := dev.Read(buf)
+	if err != nil || string(buf[:n]) != "PING" {
+		t.Fatalf("虚拟串口回显失败: %q, %v", buf[:n], err)
+	}
+}
+
+// TestMultipleVirtualSerials 验证可同时存在多个互相独立的虚拟串口映射。
+func TestMultipleVirtualSerials(t *testing.T) {
+	l1, l2 := echoServer(t), echoServer(t)
+	defer l1.Close()
+	defer l2.Close()
+
+	engine, err := New(t.TempDir(), nil, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+
+	a, err := engine.AddVirtualSerial(l1.Addr().String())
+	if err != nil {
+		t.Skipf("虚拟串口不可用: %v", err)
+	}
+	b, err := engine.AddVirtualSerial(l2.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.ID == b.ID || a.Link == b.Link {
+		t.Fatalf("两个映射应互相独立: %+v vs %+v", a, b)
+	}
+	if got := engine.ListVirtualSerials(); len(got) != 2 {
+		t.Fatalf("应有 2 个映射,实际 %d", len(got))
+	}
+
+	// 两个设备都可独立收发
+	for _, info := range []VSerialInfo{a, b} {
+		dev, err := os.OpenFile(info.Link, os.O_RDWR, 0)
+		if err != nil {
+			t.Fatalf("打开 %s 失败: %v", info.Link, err)
+		}
+		_, _ = dev.Write([]byte("HI"))
+		_ = dev.SetReadDeadline(time.Now().Add(2 * time.Second))
+		buf := make([]byte, 2)
+		n, err := dev.Read(buf)
+		_ = dev.Close()
+		if err != nil || string(buf[:n]) != "HI" {
+			t.Fatalf("设备 #%d 回显失败: %q, %v", info.ID, buf[:n], err)
+		}
+	}
+
+	// 移除一个,另一个仍在
+	engine.RemoveVirtualSerial(a.ID)
+	if got := engine.ListVirtualSerials(); len(got) != 1 || got[0].ID != b.ID {
+		t.Fatalf("移除后应只剩 #%d,实际 %+v", b.ID, got)
+	}
+}

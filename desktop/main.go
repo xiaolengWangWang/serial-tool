@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"serial-tool/internal/wincore"
@@ -32,27 +33,71 @@ func main() {
 	if err != nil {
 		return
 	}
+	engine.SetOnClosed(onClosed)
 	defer engine.Close()
 	C.RunApp()
 }
 
-func onData(_ string, data []byte) {
-	var text string
+// formatData 按当前 HEX 显示开关格式化一段数据。
+func formatData(data []byte) string {
 	if hexMode.Load() {
-		text = fmt.Sprintf("% X\n", data)
-	} else {
-		text = strings.ReplaceAll(strings.ToValidUTF8(string(data), "�"), "\x00", "␀")
+		return fmt.Sprintf("% X", data)
 	}
-	s := C.CString(text)
+	return strings.ReplaceAll(strings.ToValidUTF8(string(data), "�"), "\x00", "␀")
+}
+
+func timestamp() string { return time.Now().Format("15:04:05.000") }
+
+func onData(_ string, data []byte) {
+	line := fmt.Sprintf("[%s 接收] %s\n", timestamp(), formatData(data))
+	s := C.CString(line)
 	C.UIAppend(s)
 	C.UIMonitorAppend(s)
 	C.free(unsafe.Pointer(s))
 }
 
+// logSent 把成功发送的数据带时间戳写入接收区(不进监控窗口)。
+func logSent(input string, asHex bool, eol string) {
+	data, err := wincore.ParseData(input, asHex, eol)
+	if err != nil {
+		return
+	}
+	line := fmt.Sprintf("[%s 发送] %s\n", timestamp(), formatData(data))
+	s := C.CString(line)
+	C.UIAppend(s)
+	C.free(unsafe.Pointer(s))
+}
+
+func onClosed() { C.UIConnectionClosed() }
+
 func onLog(text string) {
 	s := C.CString("\n[" + text + "]\n")
 	C.UIAppend(s)
 	C.free(unsafe.Pointer(s))
+}
+
+//export GoRecentSessions
+func GoRecentSessions() *C.char {
+	sessions, err := engine.RecentSessions(5)
+	if err != nil {
+		return C.CString("")
+	}
+	lines := make([]string, 0, len(sessions))
+	for _, s := range sessions {
+		// 字段用 \x1f 分隔,记录用 \n 分隔
+		lines = append(lines, strings.Join([]string{s.Mode, s.Endpoint, s.Parameters, s.StartedAt}, "\x1f"))
+	}
+	return C.CString(strings.Join(lines, "\n"))
+}
+
+//export GoLocalIP
+func GoLocalIP() *C.char {
+	return C.CString(wincore.LocalIP())
+}
+
+//export GoLocalIPs
+func GoLocalIPs() *C.char {
+	return C.CString(strings.Join(wincore.LocalIPs(), "\n"))
 }
 
 //export GoDatabaseInfo
@@ -132,6 +177,37 @@ func GoStartSerialServer(serialName *C.char, baud, dataBits, stopBits C.int, par
 	return C.CString("")
 }
 
+//export GoConnectHTTP
+func GoConnectHTTP(url *C.char) *C.char {
+	if err := engine.Connect(wincore.Config{Mode: wincore.ModeHTTPClient, Address: C.GoString(url)}); err != nil {
+		return C.CString(err.Error())
+	}
+	return C.CString("")
+}
+
+//export GoAddVSerial
+func GoAddVSerial(address *C.char) *C.char {
+	info, err := engine.AddVirtualSerial(C.GoString(address))
+	if err != nil {
+		return C.CString("错误:" + err.Error())
+	}
+	// 返回 "id\x1f端点\x1f设备路径"
+	return C.CString(fmt.Sprintf("%d\x1f%s\x1f%s", info.ID, info.Addr, info.Link))
+}
+
+//export GoRemoveVSerial
+func GoRemoveVSerial(id C.int) {
+	engine.RemoveVirtualSerial(int(id))
+}
+
+//export GoHTTPRequest
+func GoHTTPRequest(spec *C.char) *C.char {
+	if err := engine.HTTPRequest(C.GoString(spec)); err != nil {
+		return C.CString(err.Error())
+	}
+	return C.CString("")
+}
+
 //export GoDisconnect
 func GoDisconnect() { engine.Disconnect() }
 
@@ -140,24 +216,30 @@ func GoSetHexView(enabled C.int) { hexMode.Store(enabled != 0) }
 
 //export GoSend
 func GoSend(text *C.char, hex C.int, eol *C.char) *C.char {
-	if err := engine.Send(C.GoString(text), hex != 0, C.GoString(eol)); err != nil {
+	input, asHex, e := C.GoString(text), hex != 0, C.GoString(eol)
+	if err := engine.Send(input, asHex, e); err != nil {
 		return C.CString(err.Error())
 	}
+	logSent(input, asHex, e)
 	return C.CString("")
 }
 
 //export GoNetworkSend
 func GoNetworkSend(text *C.char, hex C.int, eol *C.char) *C.char {
-	if err := engine.SendNetwork(C.GoString(text), hex != 0, C.GoString(eol)); err != nil {
+	input, asHex, e := C.GoString(text), hex != 0, C.GoString(eol)
+	if err := engine.SendNetwork(input, asHex, e); err != nil {
 		return C.CString(err.Error())
 	}
+	logSent(input, asHex, e)
 	return C.CString("")
 }
 
 //export GoUDPSend
 func GoUDPSend(text *C.char, hex C.int, eol *C.char) *C.char {
-	if err := engine.SendUDP(C.GoString(text), hex != 0, C.GoString(eol)); err != nil {
+	input, asHex, e := C.GoString(text), hex != 0, C.GoString(eol)
+	if err := engine.SendUDP(input, asHex, e); err != nil {
 		return C.CString(err.Error())
 	}
+	logSent(input, asHex, e)
 	return C.CString("")
 }
