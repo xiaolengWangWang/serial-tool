@@ -64,13 +64,15 @@ func (e *Engine) DataDir() string { return e.store.Dir() }
 
 func (e *Engine) Connect(cfg Config) error {
 	e.Disconnect()
-	if cfg.Baud <= 0 || cfg.DataBits < 5 || cfg.DataBits > 8 || (cfg.StopBits != 1 && cfg.StopBits != 2) {
-		return errors.New("串口参数无效")
-	}
 	usesSerial := cfg.Mode == ModeSerial || cfg.Mode == ModeSerialServer
 	usesNetwork := cfg.Mode != ModeSerial
-	if usesSerial && cfg.SerialName == "" {
-		return errors.New("请选择串口")
+	if usesSerial {
+		if cfg.Baud <= 0 || cfg.DataBits < 5 || cfg.DataBits > 8 || (cfg.StopBits != 1 && cfg.StopBits != 2) {
+			return errors.New("串口参数无效")
+		}
+		if cfg.SerialName == "" {
+			return errors.New("请选择串口")
+		}
 	}
 	if usesNetwork && cfg.Address == "" {
 		return errors.New("请输入 IP:端口")
@@ -220,12 +222,12 @@ func (e *Engine) Send(input string, asHex bool, eol string) error {
 		return err
 	}
 	e.Lock()
-	p, listener, udp := e.port, e.listener, e.udp
+	p, listener, udp, n := e.port, e.listener, e.udp, len(e.clients)
 	e.Unlock()
 	if p != nil {
 		return e.writeSerial(data)
 	}
-	if listener != nil || e.hasTCPClients() {
+	if listener != nil || n > 0 {
 		return e.broadcast(data, true)
 	}
 	if udp != nil {
@@ -234,10 +236,20 @@ func (e *Engine) Send(input string, asHex bool, eol string) error {
 	return errors.New("尚未连接")
 }
 
-func (e *Engine) hasTCPClients() bool {
-	e.Lock()
-	defer e.Unlock()
-	return len(e.clients) > 0
+func (e *Engine) SendNetwork(input string, asHex bool, eol string) error {
+	data, err := ParseData(input, asHex, eol)
+	if err != nil {
+		return err
+	}
+	return e.broadcast(data, true)
+}
+
+func (e *Engine) SendUDP(input string, asHex bool, eol string) error {
+	data, err := ParseData(input, asHex, eol)
+	if err != nil {
+		return err
+	}
+	return e.sendUDP(data, true)
 }
 
 func (e *Engine) acceptLoop(listener net.Listener) {
