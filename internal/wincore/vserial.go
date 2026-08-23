@@ -34,6 +34,9 @@ type VSerialInfo struct {
 	Link string
 }
 
+// makeRaw 便于测试注入 term.MakeRaw 的失败路径,默认即 term.MakeRaw。
+var makeRaw = term.MakeRaw
+
 // AddVirtualSerial 连接一个 TCP 端点并新建一个后台虚拟串口桥接,
 // 与主连接及其它桥接互不影响,可同时存在多个。设备常驻:TCP 断开会自动重连。
 func (e *Engine) AddVirtualSerial(addr string) (VSerialInfo, error) {
@@ -44,9 +47,14 @@ func (e *Engine) AddVirtualSerial(addr string) (VSerialInfo, error) {
 	if err != nil {
 		return VSerialInfo{}, fmt.Errorf("创建虚拟串口失败(该平台可能不支持): %w", err)
 	}
-	// raw 模式:关回显与行规程,避免二进制数据被改写或形成回显环路
-	if _, err := term.MakeRaw(int(tty.Fd())); err != nil {
-		e.emitLog("虚拟串口 raw 模式设置失败: " + err.Error())
+	// raw 模式:关回显与行规程,避免二进制数据被改写或形成回显环路。
+	// 失败即终止创建并清理资源,不允许降级运行(二进制透明传输依赖 raw 模式)。
+	if _, err := makeRaw(int(tty.Fd())); err != nil {
+		name := tty.Name()
+		_ = ptmx.Close()
+		_ = tty.Close()
+		e.emitLog(fmt.Sprintf("虚拟串口创建失败: raw 模式设置失败(%s): %v", name, err))
+		return VSerialInfo{}, fmt.Errorf("虚拟串口 raw 模式设置失败(%s): %w", name, err)
 	}
 
 	e.Lock()
