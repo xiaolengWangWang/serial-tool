@@ -97,6 +97,9 @@ func main() {
 		walk.MsgBox(nil, "界面初始化失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
+	if icon, err := walk.NewIconFromResourceId(1); err == nil {
+		_ = app.mw.SetIcon(icon)
+	}
 	app.setupTray()
 	app.refreshPorts()
 	app.updateMode()
