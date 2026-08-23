@@ -18,6 +18,7 @@
 go build -o serial-tool .
 
 ./serial-tool -list                                             # 列出串口
+./serial-tool -version                                          # 显示版本号
 ./serial-tool -port /dev/tty.usbserial-0001 -baud 115200 -eol crlf   # 文本收发
 ./serial-tool -port /dev/tty.usbserial-0001 -baud 9600 -hex -hex-send # HEX 收发
 ./serial-tool vserial --host 127.0.0.1 --port 7000              # 虚拟串口(桥接 TCP 到本机串口设备)
@@ -113,7 +114,7 @@ GET /api/v1/health
 
 ```bash
 # 命令行(多平台,纯 Go)
-CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o serial-tool .
+CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X main.version=0.3.0' -o serial-tool .
 
 # Windows 桌面版(可交叉编译)
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath \

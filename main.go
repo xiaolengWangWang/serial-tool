@@ -21,6 +21,9 @@ import (
 	"serial-tool/internal/wincore"
 )
 
+// version 为当前版本号,构建时可用 -ldflags "-X main.version=vX.Y.Z" 覆盖。
+var version = "0.3.0"
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "错误:", err)
@@ -33,6 +36,7 @@ func run() error {
 		return runVSerial(os.Args[2:])
 	}
 	list := flag.Bool("list", false, "列出可用串口")
+	versionFlag := flag.Bool("version", false, "显示版本号")
 	portName := flag.String("port", "", "串口名称，如 /dev/tty.usbserial-0001 或 COM3")
 	baud := flag.Int("baud", 115200, "波特率")
 	dataBits := flag.Int("data", 8, "数据位: 5/6/7/8")
@@ -43,6 +47,10 @@ func run() error {
 	eol := flag.String("eol", "none", "文本发送行尾: none/lf/cr/crlf")
 	flag.Parse()
 
+	if *versionFlag {
+		fmt.Println(version)
+		return nil
+	}
 	if *list {
 		ports, err := serial.GetPortsList()
 		if err != nil {
