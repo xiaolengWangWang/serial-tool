@@ -28,11 +28,11 @@ type application struct {
 	sendHistory, favorites               *walk.ComboBox
 	autoReconnect                        *walk.CheckBox
 	reconnectInterval                    *walk.LineEdit
-	address, interval                     *walk.LineEdit
+	netIP, netPort, interval             *walk.LineEdit
 	serialGroup, networkGroup             *walk.GroupBox
 	connectButton, timerButton            *walk.PushButton
 	status                                *walk.Label
-	addressLabel                          *walk.Label
+	addressLabel, portLabel               *walk.Label
 	receiveEdit, sendEdit, logEdit        *walk.TextEdit
 	hexView, hexSend                      *walk.CheckBox
 	monitorWindow                         *walk.MainWindow
@@ -141,48 +141,57 @@ func (a *application) createWindow() error {
 		Children: []Widget{
 			Composite{
 				MinSize: Size{Width: 300}, MaxSize: Size{Width: 330}, Layout: VBox{},
+				Font: Font{PointSize: 10},
 				Children: []Widget{
-					Label{Text: "工作模式"},
-					ComboBox{AssignTo: &a.mode, Model: modes, CurrentIndex: 0, OnCurrentIndexChanged: a.updateMode},
+					Label{Text: "工作模式", Font: Font{PointSize: 10}},
+					ComboBox{AssignTo: &a.mode, Model: modes, CurrentIndex: 0, OnCurrentIndexChanged: a.updateMode, Font: Font{PointSize: 10}},
 					GroupBox{
 						AssignTo: &a.serialGroup, Title: "串口参数", Layout: VBox{},
+						Font: Font{PointSize: 10},
 						Children: []Widget{
 							Composite{Layout: HBox{}, Children: []Widget{
-								Label{Text: "端口", MinSize: Size{Width: 45}},
-								ComboBox{AssignTo: &a.ports, Editable: true, StretchFactor: 1},
-								PushButton{Text: "刷新", OnClicked: a.refreshPorts},
+								Label{Text: "端口", MinSize: Size{Width: 45}, Font: Font{PointSize: 10}},
+								ComboBox{AssignTo: &a.ports, Editable: true, StretchFactor: 1, Font: Font{PointSize: 10}},
+								PushButton{Text: "刷新", OnClicked: a.refreshPorts, Font: Font{PointSize: 10}},
 							}},
 							Composite{Layout: HBox{}, Children: []Widget{
-								Label{Text: "波特率", MinSize: Size{Width: 55}},
-								ComboBox{AssignTo: &a.baud, Editable: true, Model: []string{"1200", "2400", "4800", "9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"}, CurrentIndex: 7},
-								Label{Text: "数据位"}, ComboBox{AssignTo: &a.data, Model: []string{"5", "6", "7", "8"}, CurrentIndex: 3},
+								Label{Text: "波特率", MinSize: Size{Width: 55}, Font: Font{PointSize: 10}},
+								ComboBox{AssignTo: &a.baud, Editable: true, Model: []string{"1200", "2400", "4800", "9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"}, CurrentIndex: 7, Font: Font{PointSize: 10}},
+								Label{Text: "数据位", Font: Font{PointSize: 10}}, ComboBox{AssignTo: &a.data, Model: []string{"5", "6", "7", "8"}, CurrentIndex: 3, Font: Font{PointSize: 10}},
 							}},
 							Composite{Layout: HBox{}, Children: []Widget{
-								Label{Text: "校验", MinSize: Size{Width: 55}}, ComboBox{AssignTo: &a.parity, Model: []string{"无校验", "奇校验", "偶校验"}, CurrentIndex: 0},
-								Label{Text: "停止位"}, ComboBox{AssignTo: &a.stop, Model: []string{"1", "2"}, CurrentIndex: 0},
+								Label{Text: "校验", MinSize: Size{Width: 55}, Font: Font{PointSize: 10}}, ComboBox{AssignTo: &a.parity, Model: []string{"无校验", "奇校验", "偶校验"}, CurrentIndex: 0, Font: Font{PointSize: 10}},
+								Label{Text: "停止位", Font: Font{PointSize: 10}}, ComboBox{AssignTo: &a.stop, Model: []string{"1", "2"}, CurrentIndex: 0, Font: Font{PointSize: 10}},
 							}},
 						},
 					},
 					GroupBox{
 						AssignTo: &a.networkGroup, Title: "网络参数", Layout: VBox{},
+						Font: Font{PointSize: 10},
 						Children: []Widget{
-							Label{AssignTo: &a.addressLabel, Text: "远程地址"},
-							LineEdit{AssignTo: &a.address, Text: ":9000", CueBanner: "例如 192.168.1.100:9000"},
 							Composite{Layout: HBox{}, Children: []Widget{
-								Label{Text: "协议", MinSize: Size{Width: 45}}, ComboBox{AssignTo: &a.protocol, Model: []string{"TCP", "UDP"}, CurrentIndex: 0},
-								Label{Text: "角色"}, ComboBox{AssignTo: &a.role, Model: []string{"服务端", "客户端"}, CurrentIndex: 0, OnCurrentIndexChanged: a.updateMode},
+								Label{AssignTo: &a.addressLabel, Text: "服务器 IP", MinSize: Size{Width: 65}, Font: Font{PointSize: 10}},
+								LineEdit{AssignTo: &a.netIP, StretchFactor: 1, CueBanner: "IP 地址", Font: Font{PointSize: 10}},
 							}},
 							Composite{Layout: HBox{}, Children: []Widget{
-								CheckBox{AssignTo: &a.autoReconnect, Text: "自动重连", Checked: true},
-								Label{Text: "重连间隔(秒)"},
-								LineEdit{AssignTo: &a.reconnectInterval, Text: "2", MinSize: Size{Width: 50}},
+								Label{AssignTo: &a.portLabel, Text: "端口", MinSize: Size{Width: 65}, Font: Font{PointSize: 10}},
+								LineEdit{AssignTo: &a.netPort, Text: "9000", MinSize: Size{Width: 90}, MaxSize: Size{Width: 120}, Font: Font{PointSize: 10}},
+							}},
+							Composite{Layout: HBox{}, Children: []Widget{
+								Label{Text: "协议", MinSize: Size{Width: 45}, Font: Font{PointSize: 10}}, ComboBox{AssignTo: &a.protocol, Model: []string{"TCP", "UDP"}, CurrentIndex: 0, Font: Font{PointSize: 10}},
+								Label{Text: "角色", Font: Font{PointSize: 10}}, ComboBox{AssignTo: &a.role, Model: []string{"服务端", "客户端"}, CurrentIndex: 0, OnCurrentIndexChanged: a.updateMode, Font: Font{PointSize: 10}},
+							}},
+							Composite{Layout: HBox{}, Children: []Widget{
+								CheckBox{AssignTo: &a.autoReconnect, Text: "自动重连", Checked: true, Font: Font{PointSize: 10}},
+								Label{Text: "重连间隔(秒)", Font: Font{PointSize: 10}},
+								LineEdit{AssignTo: &a.reconnectInterval, Text: "2", MinSize: Size{Width: 50}, Font: Font{PointSize: 10}},
 							}},
 						},
 					},
 					VSpacer{},
-					Label{AssignTo: &a.status, Text: "● 未连接"},
-					PushButton{AssignTo: &a.connectButton, Text: "连接", MinSize: Size{Height: 38}, OnClicked: a.toggleConnection},
-					Label{Text: "数据库按日期和 100 MiB 自动分文件"},
+					Label{AssignTo: &a.status, Text: "● 未连接", Font: Font{PointSize: 11}},
+					PushButton{AssignTo: &a.connectButton, Text: "连接", MinSize: Size{Height: 42}, OnClicked: a.toggleConnection, Font: Font{PointSize: 11}},
+					Label{Text: "数据库按日期和 100 MiB 自动分文件", Font: Font{PointSize: 9}},
 				},
 			},
 			Composite{
@@ -205,9 +214,10 @@ func (a *application) createWindow() error {
 						PushButton{Text: "清除", OnClicked: a.clearFilter},
 					}},
 					TabWidget{
+						StretchFactor: 4,
 						Pages: []TabPage{
 							TabPage{Title: "数据", Layout: VBox{}, Children: []Widget{
-								TextEdit{AssignTo: &a.receiveEdit, ReadOnly: true, VScroll: true, HScroll: true, StretchFactor: 3, MaxLength: 5000000, Font: Font{Family: "Consolas", PointSize: 10}},
+								TextEdit{AssignTo: &a.receiveEdit, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: "Consolas", PointSize: 10}},
 							}},
 							TabPage{Title: "日志", Layout: VBox{}, Children: []Widget{
 								TextEdit{AssignTo: &a.logEdit, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: "Consolas", PointSize: 10}},
@@ -267,14 +277,21 @@ func (a *application) updateMode() {
 	a.serialGroup.SetEnabled(!a.connected)
 	a.networkGroup.SetEnabled(!a.connected)
 	// 网络标签随模式变化
+	isHTTP := a.mode.Text() == "HTTP 客户端"
 	if a.addressLabel != nil {
-		if a.mode.Text() == "HTTP 客户端" {
+		if isHTTP {
 			a.addressLabel.SetText("URL")
 		} else if a.isServer() {
-			a.addressLabel.SetText("监听地址")
+			a.addressLabel.SetText("监听 IP")
 		} else {
-			a.addressLabel.SetText("服务器地址")
+			a.addressLabel.SetText("服务器 IP")
 		}
+	}
+	if a.portLabel != nil {
+		a.portLabel.SetVisible(!isHTTP)
+	}
+	if a.netPort != nil {
+		a.netPort.SetVisible(!isHTTP)
 	}
 	// 协议:TCP/UDP 模式由模式决定并禁用,仅串口服务器可改;角色:TCP/UDP/串口服务器可改
 	net := a.mode.Text() == "TCP" || a.mode.Text() == "UDP"
@@ -295,14 +312,15 @@ func (a *application) updateMode() {
 
 func (a *application) updateAddressDefault() {
 	mode := a.mode.Text()
-	if a.address == nil || a.mode == nil || a.connected || mode == "串口" || mode == "HTTP 客户端" {
+	if a.netIP == nil || a.mode == nil || a.connected || mode == "串口" || mode == "HTTP 客户端" {
 		return
 	}
 	if a.isServer() {
-		_ = a.address.SetText(":9000")
+		_ = a.netIP.SetText("")
 	} else {
-		_ = a.address.SetText("127.0.0.1:9000")
+		_ = a.netIP.SetText("127.0.0.1")
 	}
+	_ = a.netPort.SetText("9000")
 }
 
 func (a *application) isServer() bool {
@@ -344,18 +362,16 @@ func (a *application) config() (wincore.Config, error) {
 	if err != nil {
 		return wincore.Config{}, fmt.Errorf("停止位无效")
 	}
-	address := strings.TrimSpace(a.address.Text())
-	if a.mode.Text() != string(wincore.ModeSerial) && !strings.Contains(address, ":") {
-		port, parseErr := strconv.Atoi(address)
-		if parseErr != nil || port <= 0 {
-			return wincore.Config{}, fmt.Errorf("地址应为 IP:端口")
-		}
-		if a.isServer() {
-			address = ":" + address
-		} else {
-			address = "127.0.0.1:" + address
-		}
-		_ = a.address.SetText(address)
+	ip := strings.TrimSpace(a.netIP.Text())
+	port := strings.TrimSpace(a.netPort.Text())
+	var address string
+	switch {
+	case port == "":
+		address = ip // HTTP 模式：URL 直接填在 IP 栏
+	case ip == "":
+		address = ":" + port // 服务端：监听所有接口
+	default:
+		address = ip + ":" + port
 	}
 	autoReconnect := a.autoReconnect.Checked()
 	interval := 2
