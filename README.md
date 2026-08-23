@@ -1,46 +1,128 @@
-# Go 串口工具
+# Go 串口 / 网络工具
+
+一个跨平台的串口与网络调试工具:命令行 + macOS / Windows 原生桌面版,共享同一套核心引擎(`internal/wincore`)。支持串口、TCP/UDP 服务端与客户端、串口↔网络透传、HTTP 客户端、虚拟串口,以及全量 SQLite 收发存档。
+
+## 目录
+- [命令行](#命令行)
+- [桌面版功能总览](#桌面版功能总览)
+- [工作模式](#工作模式)
+- [HTTP 客户端](#http-客户端)
+- [虚拟串口](#虚拟串口macoslinux)
+- [数据存储](#数据存储)
+- [快捷键(macOS)](#快捷键macos)
+- [构建](#构建)
+
+## 命令行
 
 ```bash
 go build -o serial-tool .
 
-# 查看串口
-./serial-tool -list
+./serial-tool -list                                             # 列出串口
+./serial-tool -port /dev/tty.usbserial-0001 -baud 115200 -eol crlf   # 文本收发
+./serial-tool -port /dev/tty.usbserial-0001 -baud 9600 -hex -hex-send # HEX 收发
+```
+Windows 串口名可写 `COM3`。`./serial-tool -h` 查看全部参数。
 
-# 115200 8N1，文本收发
-./serial-tool -port /dev/tty.usbserial-0001 -baud 115200 -eol crlf
+## 桌面版功能总览
 
-# HEX 收发
-./serial-tool -port /dev/tty.usbserial-0001 -baud 9600 -hex -hex-send
+- 收发区**每条数据带毫秒时间戳**,并区分 `发送` / `接收`
+- **HEX 发送默认开启**,可切换;HEX 显示可切换
+- 连接被远端断开时**按钮/状态自动同步**回未连接
+- **历史连接**下拉:从数据库读最近 5 个配置,选中自动回填
+- 连接状态显示模式、地址、串口参数、开始时间
+- 实时监控独立窗口、日志导出、定时发送(最小间隔 10 ms)
+
+## 工作模式
+
+| 模式 | 说明 |
+|---|---|
+| **串口** | 串口收发,可配置波特率/数据位/校验/停止位 |
+| **TCP** | 用**角色**开关切换服务端/客户端。服务端可选"监听网卡"(`0.0.0.0`=所有网卡/具体 IP/`127.0.0.1`=仅本机);客户端填服务器 IP |
+| **UDP** | 同上,UDP 服务端回复最近一次来包的客户端 |
+| **串口服务器** | 串口 ↔ 网络双向透明透传;可配置协议(TCP/UDP)、角色、地址 |
+| **HTTP 客户端** | 见下 |
+| **虚拟串口** | 见下(仅 macOS/Linux) |
+
+**IP 与端口分开填写**;IP 为下拉框,自动列出本机所有网卡地址,也可手输。TCP 服务端发送广播到全部客户端。
+
+## HTTP 客户端
+
+像 curl 一样调 HTTP 接口,自动保持 Cookie 会话(可先登录再调受保护接口)。
+
+**发送框格式**:第一行 `[方法] 路径`(方法省略默认 GET),其后为请求头行,空行后是 body。
+
+```
+POST /login
+username=admin&password=secret
+
+```
+再发:
+```
+GET /api/v1/health
 ```
 
-Windows 串口名称可写成 `COM3`。运行 `./serial-tool -h` 查看全部参数。
+- 方法:GET / POST / PUT / DELETE / PATCH / HEAD / OPTIONS
+- body 以 `{` 或 `[` 开头自动设 `Content-Type: application/json`,否则表单;自定义头可覆盖
+- 不自动跟随重定向(直接显示 3xx + Set-Cookie,Cookie 仍存入会话)
+- 响应显示耗时、字节数,JSON 自动缩进
+- 连接期间复用同一 Cookie jar
 
-## macOS 原生桌面版
+## 虚拟串口(macOS/Linux)
 
-已构建应用位于 `build/Go 串口工具.app`，双击即可运行。界面支持串口、TCP/UDP 服务端和 TCP/UDP 客户端。服务端填写本机监听地址，客户端填写远程 `IP:端口`。TCP 服务端发送会广播到全部客户端，UDP 服务端发送会回复最近一次来包的客户端。
+把一个 TCP 端点桥接成本机虚拟串口设备,供任意串口软件打开(内置等价于 `socat PTY,raw TCP:host:port`)。
 
-`串口服务器` 模式可同时配置串口参数、TCP/UDP、客户端/服务端和网络地址，并在串口与网络之间双向透明透传。TCP 服务端支持多个客户端；UDP 服务端会将串口数据发给最近一次来包的客户端。
+- 菜单 **操作 → 虚拟串口映射**(⌘⇧V)打开管理窗口
+- 填 IP + 端口 → **添加映射**,生成设备如 `/tmp/GoSerialTool-vserial-1`
+- **后台常驻,可同时多个**,与主连接互不影响
+- **自动重连**:被桥接的服务端空闲断开后,设备保留并自动重连
+- 在"串口"模式点刷新,列表会包含这些虚拟串口设备,可直接打开
+- 用法:`screen /tmp/GoSerialTool-vserial-1 115200`,或用另一个串口工具/本工具第二实例打开
 
-接收区支持将当前日志导出为 UTF-8 文本；发送区支持单次发送和定时发送，时间间隔以毫秒配置，最小为 10 ms。连接断开或发送失败时定时任务会自动停止。
+> Windows 无 PTY,暂不提供虚拟串口。
 
-每次底层接收的原始数据都会写入 SQLite：`raw_data` 保存无损 BLOB，`text_data` 保存 UTF-8 字符串，`is_utf8` 标记原数据是否为有效文本。数据库位于 `~/Library/Application Support/GoSerialTool/data`，按日期和 100 MiB 大小滚动分文件保存；监控窗口可直接打开数据库目录。
+## 数据存储
 
-## Windows 原生桌面版
+每条发送、接收、断开事件都写入 SQLite,**一条报文一条记录**:
 
-Windows 64 位安装包位于 `build/windows/GoSerialTool-Windows-x64.zip`。该版本使用 Win32 原生控件，功能包括串口、TCP/UDP 客户端与服务端、串口服务器透明透传、日志导出、定时发送、监控窗口和 SQLite 分文件存储。
+| `source` | 内容 |
+|---|---|
+| `发送` | 发出的报文 |
+| `串口`/`TCP …`/`UDP …`/`HTTP …` | 收到的报文 |
+| `断开` | 被动断开事件 |
 
-重新构建：
+`raw_data` 保存无损 BLOB,`text_data` 保存 UTF-8 文本,`received_at` 为毫秒时间戳。数据库位于 `~/Library/Application Support/GoSerialTool/data`(Windows 为对应 `%AppData%`),按日期和 100 MiB 自动滚动分文件。监控窗口可直接打开数据目录。
+
+## 快捷键(macOS)
+
+| 快捷键 | 功能 |
+|---|---|
+| ⌘L | 连接 / 断开 |
+| ⌘↩ | 发送一次 |
+| ⌘T | 定时发送开关 |
+| ⌘R | 刷新串口 |
+| ⌘⇧V | 虚拟串口映射 |
+| ⌘K | 清空接收区 |
+| ⌘E | 导出接收数据 |
+| ⌘⇧H | HEX 显示开关 |
+| ⌘⇧M | 监控窗口 |
+| ⌘X/C/V/A | 剪切 / 复制 / 粘贴 / 全选 |
+| ⌘Q | 退出 |
+
+## 构建
 
 ```bash
+# 命令行(多平台,纯 Go)
+CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o serial-tool .
+
+# Windows 桌面版(可交叉编译)
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath \
   -ldflags='-s -w -H windowsgui' -o build/windows/GoSerialTool.exe ./windows
-```
 
-重新构建：
-
-```bash
+# macOS 桌面版(需在 macOS 上用 CGo 构建)
 mkdir -p 'build/Go 串口工具.app/Contents/MacOS'
 cp desktop/Info.plist 'build/Go 串口工具.app/Contents/Info.plist'
 go build -o 'build/Go 串口工具.app/Contents/MacOS/GoSerialTool' ./desktop
 codesign --force --deep --sign - 'build/Go 串口工具.app'
 ```
+
+运行测试:`go test ./...`

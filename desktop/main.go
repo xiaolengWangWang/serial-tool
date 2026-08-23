@@ -200,6 +200,16 @@ func GoRemoveVSerial(id C.int) {
 	engine.RemoveVirtualSerial(int(id))
 }
 
+//export GoListVSerialLinks
+func GoListVSerialLinks() *C.char {
+	infos := engine.ListVirtualSerials()
+	links := make([]string, 0, len(infos))
+	for _, i := range infos {
+		links = append(links, i.Link)
+	}
+	return C.CString(strings.Join(links, "\n"))
+}
+
 //export GoHTTPRequest
 func GoHTTPRequest(spec *C.char) *C.char {
 	if err := engine.HTTPRequest(C.GoString(spec)); err != nil {

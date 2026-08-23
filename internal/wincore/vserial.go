@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"sort"
+	"sync"
+	"time"
 
 	"github.com/creack/pty"
 	"golang.org/x/term"
@@ -17,7 +19,10 @@ type vBridge struct {
 	link string
 	ptmx *os.File
 	tty  *os.File
+	mu   sync.Mutex
 	conn net.Conn
+	stop chan struct{}
+	once sync.Once
 }
 
 // VSerialInfo 描述一个后台虚拟串口桥接。
@@ -28,12 +33,12 @@ type VSerialInfo struct {
 }
 
 // AddVirtualSerial 连接一个 TCP 端点并新建一个后台虚拟串口桥接,
-// 与主连接及其它桥接互不影响,可同时存在多个。返回设备信息。
+// 与主连接及其它桥接互不影响,可同时存在多个。设备常驻:TCP 断开会自动重连。
 func (e *Engine) AddVirtualSerial(addr string) (VSerialInfo, error) {
 	if addr == "" {
 		return VSerialInfo{}, fmt.Errorf("请输入要桥接的 IP:端口")
 	}
-	conn, err := net.Dial("tcp", addr)
+	conn, err := net.Dial("tcp", addr) // 首次连接,验证地址可达
 	if err != nil {
 		return VSerialInfo{}, err
 	}
@@ -57,20 +62,78 @@ func (e *Engine) AddVirtualSerial(addr string) (VSerialInfo, error) {
 		link = tty.Name() // 建软链失败则用真实设备路径
 	}
 
-	b := &vBridge{id: id, addr: addr, link: link, ptmx: ptmx, tty: tty, conn: conn}
+	b := &vBridge{id: id, addr: addr, link: link, ptmx: ptmx, tty: tty, conn: conn, stop: make(chan struct{})}
 	e.Lock()
 	e.vbridges[id] = b
 	e.Unlock()
 
-	// 双向透传;任一方向结束即拆除该桥
-	go func() { _, _ = io.Copy(ptmx, conn); e.RemoveVirtualSerial(id) }()
-	go func() { _, _ = io.Copy(conn, ptmx); e.RemoveVirtualSerial(id) }()
+	go e.vPtmxReader(b)     // 虚拟串口 → 当前网络连接(常驻)
+	go e.vDialLoop(b, conn) // 网络 → 虚拟串口,断线自动重连
 
 	e.emitLog(fmt.Sprintf("虚拟串口 #%d 已创建: %s ↔ %s", id, link, addr))
 	return VSerialInfo{ID: id, Addr: addr, Link: link}, nil
 }
 
-// RemoveVirtualSerial 停止并清理指定桥接,幂等(可被两个方向的 goroutine 重复调用)。
+// vPtmxReader 常驻:把虚拟串口写入的数据发往当前 TCP 连接(重连期间无连接则丢弃)。
+func (e *Engine) vPtmxReader(b *vBridge) {
+	buf := make([]byte, 4096)
+	for {
+		n, err := b.ptmx.Read(buf)
+		if n > 0 {
+			b.mu.Lock()
+			c := b.conn
+			b.mu.Unlock()
+			if c != nil {
+				_, _ = c.Write(buf[:n])
+			}
+		}
+		if err != nil {
+			return // ptmx 关闭,桥接已拆除
+		}
+	}
+}
+
+// vDialLoop 把 TCP 数据泵入虚拟串口;连接断开后自动重连,直到桥接被移除。
+func (e *Engine) vDialLoop(b *vBridge, conn net.Conn) {
+	for {
+		_, _ = io.Copy(b.ptmx, conn) // 阻塞直到该连接断开
+		b.mu.Lock()
+		if b.conn == conn {
+			b.conn = nil
+		}
+		b.mu.Unlock()
+		_ = conn.Close()
+
+		select {
+		case <-b.stop:
+			return
+		default:
+		}
+		e.emitLog(fmt.Sprintf("虚拟串口 #%d 到 %s 的连接断开,重连中...", b.id, b.addr))
+
+		var next net.Conn
+		for next == nil {
+			select {
+			case <-b.stop:
+				return
+			case <-time.After(2 * time.Second):
+			}
+			c, err := net.Dial("tcp", b.addr)
+			if err != nil {
+				e.emitLog(fmt.Sprintf("虚拟串口 #%d 重连 %s 失败: %v", b.id, b.addr, err))
+				continue
+			}
+			next = c
+		}
+		b.mu.Lock()
+		b.conn = next
+		b.mu.Unlock()
+		conn = next
+		e.emitLog(fmt.Sprintf("虚拟串口 #%d 已重连 %s", b.id, b.addr))
+	}
+}
+
+// RemoveVirtualSerial 停止并清理指定桥接,幂等。
 func (e *Engine) RemoveVirtualSerial(id int) {
 	e.Lock()
 	b := e.vbridges[id]
@@ -79,14 +142,19 @@ func (e *Engine) RemoveVirtualSerial(id int) {
 	if b == nil {
 		return
 	}
+	b.once.Do(func() { close(b.stop) })
+	b.mu.Lock()
+	c := b.conn
+	b.conn = nil
+	b.mu.Unlock()
+	if c != nil {
+		_ = c.Close()
+	}
 	if b.ptmx != nil {
 		_ = b.ptmx.Close()
 	}
 	if b.tty != nil {
 		_ = b.tty.Close()
-	}
-	if b.conn != nil {
-		_ = b.conn.Close()
 	}
 	if b.link != "" {
 		_ = os.Remove(b.link)

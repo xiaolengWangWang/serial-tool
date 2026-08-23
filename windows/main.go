@@ -18,7 +18,7 @@ import (
 	"serial-tool/internal/wincore"
 )
 
-var modes = []string{"串口", "TCP 服务端", "TCP 客户端", "UDP 服务端", "UDP 客户端", "串口服务器"}
+var modes = []string{"串口", "TCP 服务端", "TCP 客户端", "UDP 服务端", "UDP 客户端", "串口服务器", "HTTP 客户端"}
 
 type application struct {
 	mw                                    *walk.MainWindow
@@ -53,6 +53,7 @@ func main() {
 		walk.MsgBox(nil, "SQLite 初始化失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
+	app.engine.SetOnClosed(app.onClosed)
 	defer app.engine.Close()
 	if err = app.createWindow(); err != nil {
 		walk.MsgBox(nil, "界面初始化失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
@@ -126,7 +127,7 @@ func (a *application) createWindow() error {
 					}},
 					TextEdit{AssignTo: &a.receiveEdit, ReadOnly: true, VScroll: true, HScroll: true, StretchFactor: 3, MaxLength: 5000000, Font: Font{Family: "Consolas", PointSize: 10}},
 					Composite{Layout: HBox{}, Children: []Widget{
-						Label{Text: "发送数据"}, HSpacer{}, CheckBox{AssignTo: &a.hexSend, Text: "HEX 发送"},
+						Label{Text: "发送数据"}, HSpacer{}, CheckBox{AssignTo: &a.hexSend, Text: "HEX 发送", Checked: true},
 						Label{Text: "行尾"}, ComboBox{AssignTo: &a.eol, Model: []string{"无", "LF", "CR", "CRLF"}, CurrentIndex: 0, MinSize: Size{Width: 75}},
 						Label{Text: "间隔(ms)"}, LineEdit{AssignTo: &a.interval, Text: "1000", MinSize: Size{Width: 75}, MaxSize: Size{Width: 90}},
 					}},
@@ -285,12 +286,28 @@ func (a *application) toggleConnection() {
 }
 
 func (a *application) sendOnce(fromTimer bool) {
-	err := a.engine.Send(a.sendEdit.Text(), a.hexSend.Checked(), a.eol.Text())
+	input, asHex := a.sendEdit.Text(), a.hexSend.Checked()
+	err := a.engine.Send(input, asHex, a.eol.Text())
 	if err != nil {
 		if fromTimer {
 			a.stopTimer(true)
 		}
 		a.showError(err)
+		return
+	}
+	// HTTP 模式的请求/响应由引擎日志与 onData 呈现,此处只记录其它模式的发送
+	if a.mode.Text() != "HTTP 客户端" {
+		var body string
+		if a.hexDisplay.Load() {
+			body = fmt.Sprintf("% X", []byte(input))
+			if data, e := wincore.ParseData(input, asHex, a.eol.Text()); e == nil {
+				body = fmt.Sprintf("% X", data)
+			}
+		} else {
+			body = input
+		}
+		text := fmt.Sprintf("[%s 发送] %s\r\n", time.Now().Format("15:04:05.000"), body)
+		a.mw.Synchronize(func() { a.appendDisplay(a.receiveEdit, text) })
 	}
 }
 
@@ -362,13 +379,14 @@ func (a *application) stopTimer(logIt bool) {
 }
 
 func (a *application) onData(source string, data []byte) {
-	var text string
+	var body string
 	if a.hexDisplay.Load() {
-		text = fmt.Sprintf("% X\r\n", data)
+		body = fmt.Sprintf("% X", data)
 	} else {
-		text = strings.ReplaceAll(strings.ToValidUTF8(string(data), "�"), "\x00", "␀")
-		text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\n", "\r\n")
+		body = strings.ReplaceAll(strings.ToValidUTF8(string(data), "�"), "\x00", "␀")
+		body = strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\n", "\r\n")
 	}
+	text := fmt.Sprintf("[%s 接收] %s\r\n", time.Now().Format("15:04:05.000"), body)
 	a.mw.Synchronize(func() {
 		a.appendDisplay(a.receiveEdit, text)
 		if a.monitorEdit != nil {
@@ -377,6 +395,22 @@ func (a *application) onData(source string, data []byte) {
 				a.monitorEdit.ScrollToCaret()
 			}
 		}
+	})
+}
+
+// onClosed 在被动断开(远端关闭等)时把界面同步回未连接状态。
+func (a *application) onClosed() {
+	a.mw.Synchronize(func() {
+		if !a.connected {
+			return
+		}
+		a.stopTimer(false)
+		a.engine.Disconnect()
+		a.connected = false
+		a.mode.SetEnabled(true)
+		a.status.SetText("● 未连接")
+		a.updateMode()
+		a.appendLog("连接已断开")
 	})
 }
 

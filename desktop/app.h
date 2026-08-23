@@ -18,6 +18,7 @@ char *GoConnectHTTP(char *url);
 char *GoHTTPRequest(char *path);
 char *GoAddVSerial(char *address);
 void GoRemoveVSerial(int id);
+char *GoListVSerialLinks(void);
 void GoDisconnect(void);
 char *GoSend(char *text, int hexMode, char *eol);
 char *GoNetworkSend(char *text, int hexMode, char *eol);

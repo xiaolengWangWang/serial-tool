@@ -3,9 +3,71 @@ package wincore
 import (
 	"net"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// TestVirtualSerialReconnect 验证:被桥接的服务端断开后,虚拟串口设备常驻并自动重连。
+func TestVirtualSerialReconnect(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	var count int32
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			if atomic.AddInt32(&count, 1) == 1 {
+				_ = conn.Close() // 第一次立即断开,模拟服务端空闲超时
+				continue
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 64)
+				for {
+					n, err := c.Read(buf)
+					if n > 0 {
+						_, _ = c.Write(buf[:n])
+					}
+					if err != nil {
+						return
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	engine, err := New(t.TempDir(), nil, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	info, err := engine.AddVirtualSerial(listener.Addr().String())
+	if err != nil {
+		t.Skipf("虚拟串口不可用: %v", err)
+	}
+
+	time.Sleep(3 * time.Second) // 等待自动重连(重连间隔 2s)
+	dev, err := os.OpenFile(info.Link, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("打开虚拟串口失败: %v", err)
+	}
+	defer dev.Close()
+	if _, err := dev.Write([]byte("PING")); err != nil {
+		t.Fatal(err)
+	}
+	_ = dev.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 4)
+	n, err := dev.Read(buf)
+	if err != nil || string(buf[:n]) != "PING" {
+		t.Fatalf("重连后回显失败: %q, %v (accept 次数=%d)", buf[:n], err, atomic.LoadInt32(&count))
+	}
+}
 
 func echoServer(t *testing.T) net.Listener {
 	t.Helper()

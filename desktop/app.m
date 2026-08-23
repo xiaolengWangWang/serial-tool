@@ -244,7 +244,11 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     if ([value hasPrefix:@"错误:"]) { [self alert:value]; return; }
     NSArray *items = value.length ? [value componentsSeparatedByString:@"\n"] : @[];
     [_ports addItemsWithObjectValues:items];
-    if (items.count) [_ports selectItemAtIndex:0];
+    // 把后台运行的虚拟串口设备也列出来,可直接在串口模式打开
+    char *vraw = GoListVSerialLinks();
+    NSString *vlinks = [NSString stringWithUTF8String:vraw ?: ""]; free(vraw);
+    if (vlinks.length) [_ports addItemsWithObjectValues:[vlinks componentsSeparatedByString:@"\n"]];
+    if (_ports.numberOfItems) [_ports selectItemAtIndex:0];
 }
 
 - (void)resetToDisconnected {
