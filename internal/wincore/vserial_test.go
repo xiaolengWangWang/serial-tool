@@ -384,6 +384,44 @@ func TestVirtualSerialOfflineCreate(t *testing.T) {
 	}
 }
 
+// TestVirtualSerialStored 验证虚拟串口收发数据被写入 SQLite。
+func TestVirtualSerialStored(t *testing.T) {
+	listener := echoServer(t)
+	defer listener.Close()
+
+	engine, err := New(t.TempDir(), nil, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+
+	info, err := engine.AddVirtualSerial(listener.Addr().String())
+	if err != nil {
+		t.Skipf("虚拟串口不可用: %v", err)
+	}
+	waitVirtualConnected(t, engine, info.ID)
+
+	dev, err := os.OpenFile(info.Link, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = dev.Write([]byte("PING"))
+	_ = dev.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 4)
+	_, _ = dev.Read(buf)
+	_ = dev.Close()
+
+	engine.RemoveVirtualSerial(info.ID)
+
+	var count int
+	if err := engine.store.db.QueryRow(`SELECT COUNT(*) FROM received_data WHERE source LIKE '虚拟串口 #%'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count == 0 {
+		t.Fatal("虚拟串口收发数据未写入 SQLite")
+	}
+}
+
 // waitVirtualConnected 等待指定虚拟串口桥接建立 TCP 连接(异步连接建立后再收发)。
 func waitVirtualConnected(t *testing.T, e *Engine, id int) {
 	t.Helper()

@@ -105,6 +105,11 @@ func GoDatabaseInfo() *C.char {
 	return C.CString(engine.DataDir())
 }
 
+//export GoVersion
+func GoVersion() *C.char {
+	return C.CString(wincore.Version)
+}
+
 //export GoListPorts
 func GoListPorts() *C.char {
 	ports, err := wincore.ListPorts()

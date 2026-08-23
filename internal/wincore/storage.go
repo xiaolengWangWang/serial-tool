@@ -196,12 +196,59 @@ func (s *Store) openFileLocked(now time.Time, forceNew bool) error {
 }
 
 func (s *Store) insertSessionLocked(now time.Time) error {
-	result, err := s.db.Exec(`INSERT INTO sessions(started_at, mode, endpoint, parameters) VALUES (?, ?, ?, ?)`,
-		now.Format(time.RFC3339Nano), s.mode, s.endpoint, s.parameters)
+	id, err := s.insertSessionRow(now, s.mode, s.endpoint, s.parameters)
 	if err != nil {
 		return err
 	}
-	s.sessionID, err = result.LastInsertId()
+	s.sessionID = id
+	return nil
+}
+
+// insertSessionRow 插入一条会话记录并返回其 ID,不影响全局 sessionID。
+func (s *Store) insertSessionRow(now time.Time, mode, endpoint, parameters string) (int64, error) {
+	result, err := s.db.Exec(`INSERT INTO sessions(started_at, mode, endpoint, parameters) VALUES (?, ?, ?, ?)`,
+		now.Format(time.RFC3339Nano), mode, endpoint, parameters)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+// NewSession 为后台任务(如虚拟串口)插入独立会话并返回 ID,不影响主连接的全局会话。
+func (s *Store) NewSession(mode, endpoint, parameters string) (int64, error) {
+	s.Lock()
+	defer s.Unlock()
+	return s.insertSessionRow(time.Now(), mode, endpoint, parameters)
+}
+
+// EndSessionID 结束指定会话。
+func (s *Store) EndSessionID(id int64) {
+	s.Lock()
+	defer s.Unlock()
+	if s.db == nil || id == 0 {
+		return
+	}
+	_, _ = s.db.Exec(`UPDATE sessions SET ended_at = ? WHERE id = ?`, time.Now().Format(time.RFC3339Nano), id)
+}
+
+// ReceivedForSession 把一条报文写入指定会话(用于后台任务如虚拟串口)。
+func (s *Store) ReceivedForSession(sessionID int64, source string, data []byte) error {
+	s.Lock()
+	defer s.Unlock()
+	if s.db == nil || sessionID == 0 {
+		return nil
+	}
+	now := time.Now()
+	if err := s.rotateIfNeededLocked(now, int64(len(data))); err != nil {
+		return err
+	}
+	validUTF8 := utf8.Valid(data)
+	textData := string(data)
+	if !validUTF8 {
+		textData = strings.ToValidUTF8(textData, "�")
+	}
+	_, err := s.db.Exec(`INSERT INTO received_data(session_id, received_at, source, size_bytes, raw_data, text_data, is_utf8)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, sessionID, now.Format(time.RFC3339Nano), source, len(data), data, textData, validUTF8)
 	return err
 }
 

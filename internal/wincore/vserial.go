@@ -2,7 +2,6 @@ package wincore
 
 import (
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"sort"
@@ -23,8 +22,9 @@ type vBridge struct {
 	mu      sync.Mutex
 	conn    net.Conn
 	stop    chan struct{}
-	once    sync.Once
-	dropped uint64 // 断线/重连期间被丢弃的字节数(原子)
+	once      sync.Once
+	dropped   uint64 // 断线/重连期间被丢弃的字节数(原子)
+	sessionID int64  // 该桥接的 SQLite 会话 ID(0 表示不记录)
 }
 
 // VSerialInfo 描述一个后台虚拟串口桥接。
@@ -70,7 +70,8 @@ func (e *Engine) AddVirtualSerial(addr string) (VSerialInfo, error) {
 
 	// TCP 连接放到后台:服务端未启动时也允许先创建虚拟串口,
 	// 由 vDialLoop 统一负责首次连接与断线重连(conn 初始为 nil)。
-	b := &vBridge{id: id, addr: addr, link: link, ptmx: ptmx, tty: tty, stop: make(chan struct{})}
+	sessionID, _ := e.store.NewSession("虚拟串口", addr, "") // 失败则 sessionID=0,不记录数据
+	b := &vBridge{id: id, addr: addr, link: link, ptmx: ptmx, tty: tty, stop: make(chan struct{}), sessionID: sessionID}
 	e.Lock()
 	e.vbridges[id] = b
 	e.Unlock()
@@ -90,6 +91,9 @@ func (e *Engine) vPtmxReader(b *vBridge) {
 	for {
 		n, err := b.ptmx.Read(buf)
 		if n > 0 {
+			if b.sessionID != 0 {
+				_ = e.store.ReceivedForSession(b.sessionID, fmt.Sprintf("虚拟串口 #%d 发送", b.id), append([]byte(nil), buf[:n]...))
+			}
 			b.mu.Lock()
 			c := b.conn
 			b.mu.Unlock()
@@ -128,7 +132,20 @@ func (e *Engine) vDialLoop(b *vBridge) {
 		b.mu.Unlock()
 		e.emitLog(fmt.Sprintf("虚拟串口 #%d 已连接 %s", b.id, b.addr))
 
-		_, _ = io.Copy(b.ptmx, conn) // 阻塞直到该连接断开
+		// 网络 → 虚拟串口,逐块写入并记录到 SQLite
+		rbuf := make([]byte, 4096)
+		for {
+			n, rerr := conn.Read(rbuf)
+			if n > 0 {
+				_, _ = b.ptmx.Write(rbuf[:n])
+				if b.sessionID != 0 {
+					_ = e.store.ReceivedForSession(b.sessionID, fmt.Sprintf("虚拟串口 #%d 接收", b.id), append([]byte(nil), rbuf[:n]...))
+				}
+			}
+			if rerr != nil {
+				break
+			}
+		}
 
 		b.mu.Lock()
 		if b.conn == conn {
@@ -187,6 +204,9 @@ func (e *Engine) RemoveVirtualSerial(id int) {
 	}
 	if b.link != "" {
 		_ = os.Remove(b.link)
+	}
+	if b.sessionID != 0 {
+		e.store.EndSessionID(b.sessionID)
 	}
 	e.emitLog(fmt.Sprintf("虚拟串口 #%d 已停止", id))
 }

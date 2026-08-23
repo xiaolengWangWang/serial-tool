@@ -60,7 +60,10 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 1040, 700)
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
         backing:NSBackingStoreBuffered defer:NO];
-    _window.title = @"Go 网络与串口工具";
+    char *ver = GoVersion();
+    NSString *version = [NSString stringWithUTF8String:ver ?: ""];
+    free(ver);
+    _window.title = [NSString stringWithFormat:@"Go 网络与串口工具 v%@", version];
     _window.contentMinSize = NSMakeSize(900, 700);
     _window.delegate = self;
     [_window center];
@@ -193,6 +196,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     Submenu(mainMenu, @"", appMenu);
 
     NSMenu *actionMenu = [[[NSMenu alloc] initWithTitle:@"操作"] autorelease];
+    Item(actionMenu, @"新建实例", @selector(newInstance:), @"n", NSEventModifierFlagCommand);
     Item(actionMenu, @"连接 / 断开", @selector(toggleConnect:), @"l", NSEventModifierFlagCommand);
     Item(actionMenu, @"发送一次", @selector(send:), @"\r", NSEventModifierFlagCommand);
     Item(actionMenu, @"定时发送开关", @selector(toggleTimer:), @"t", NSEventModifierFlagCommand);
@@ -257,6 +261,15 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _mode.enabled = YES;
     [self setStatus:@"● 未连接" color:NSColor.secondaryLabelColor];
     [self modeChanged:nil];
+}
+
+// 新建实例:用 open -n 强制再启动一个进程(多开)。
+- (void)newInstance:(id)sender {
+    NSString *path = [[NSBundle mainBundle] bundlePath];
+    NSTask *task = [[NSTask alloc] init];
+    task.launchPath = @"/usr/bin/open";
+    task.arguments = @[@"-n", path];
+    [task launch];
 }
 
 // 连接被动断开(远端关闭、串口拔出等),由 Go 引擎的 onClosed 回调触发。
@@ -334,15 +347,10 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 }
 
 - (NSString *)sendCurrentData {
-    NSString *mode = [self modeName];
     BOOL hex = _hexSend.state == NSControlStateValueOn;
     char *err;
-    if ([mode isEqualToString:@"HTTP 客户端"])
+    if ([self isHTTPMode])
         err = GoHTTPRequest((char *)_send.string.UTF8String);
-    else if ([mode hasPrefix:@"TCP"])
-        err = GoNetworkSend((char *)_send.string.UTF8String, hex, (char *)_eol.stringValue.UTF8String);
-    else if ([mode hasPrefix:@"UDP"])
-        err = GoUDPSend((char *)_send.string.UTF8String, hex, (char *)_eol.stringValue.UTF8String);
     else
         err = GoSend((char *)_send.string.UTF8String, hex, (char *)_eol.stringValue.UTF8String);
     NSString *message = [NSString stringWithUTF8String:err ?: ""]; free(err);
@@ -501,7 +509,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSString *storedMode = info[@"mode"], *endpoint = info[@"endpoint"];
     NSDictionary *p = [self parseParameters:info[@"parameters"]];
 
-    // 存储的是细分模式(如 TCP 客户端),映射到新 UI 的"模式 + 角色"
+    // 存储的是细分模式(如 TCP 客户端),映射到 UI 的"模式 + 角色"
     NSString *uiMode = storedMode, *role = nil;
     if ([storedMode hasPrefix:@"TCP"]) { uiMode = @"TCP"; role = [storedMode hasSuffix:@"服务端"] ? @"服务端" : @"客户端"; }
     else if ([storedMode hasPrefix:@"UDP"]) { uiMode = @"UDP"; role = [storedMode hasSuffix:@"服务端"] ? @"服务端" : @"客户端"; }
@@ -686,7 +694,14 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSAlert *alert = [[[NSAlert alloc] init] autorelease];
     alert.messageText = @"网络与串口工具"; alert.informativeText = message; [alert runModal];
 }
-- (BOOL)windowShouldClose:(NSWindow *)sender { [NSApp terminate:nil]; return YES; }
+- (BOOL)windowShouldClose:(NSWindow *)sender {
+    [sender orderOut:nil];  // 关闭窗口仅隐藏,后台运行(连接/虚拟串口保持)
+    return NO;
+}
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag {
+    [_window makeKeyAndOrderFront:nil];
+    return YES;
+}
 - (void)applicationWillTerminate:(NSNotification *)note { [self stopTimer]; GoDisconnect(); }
 @end
 

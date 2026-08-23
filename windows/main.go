@@ -18,7 +18,7 @@ import (
 	"serial-tool/internal/wincore"
 )
 
-var modes = []string{"串口", "TCP 服务端", "TCP 客户端", "UDP 服务端", "UDP 客户端", "串口服务器", "HTTP 客户端"}
+var modes = []string{"串口", "TCP", "UDP", "串口服务器", "HTTP 客户端"}
 
 type application struct {
 	mw                                    *walk.MainWindow
@@ -38,6 +38,34 @@ type application struct {
 	hexDisplay                            atomic.Bool
 	timerMu                               sync.Mutex
 	timerCancel                           chan struct{}
+	vsWindow                              *walk.MainWindow
+	vsIP                                  *walk.ComboBox
+	vsPort                                *walk.LineEdit
+	vsTable                               *walk.TableView
+	vsModel                               *vserialModel
+	notifyIcon                            *walk.NotifyIcon
+}
+
+// vserialEntry 与 vserialModel 是虚拟串口管理窗口的表格数据。
+type vserialEntry struct {
+	id   int
+	addr string
+	link string
+}
+
+type vserialModel struct {
+	walk.TableModelBase
+	items []vserialEntry
+}
+
+func (m *vserialModel) RowCount() int { return len(m.items) }
+
+func (m *vserialModel) Value(row, col int) interface{} {
+	it := m.items[row]
+	if col == 0 {
+		return it.addr
+	}
+	return it.link
 }
 
 func main() {
@@ -59,6 +87,7 @@ func main() {
 		walk.MsgBox(nil, "界面初始化失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
+	app.setupTray()
 	app.refreshPorts()
 	app.updateMode()
 	app.appendLog("SQLite 数据目录: " + app.engine.DataDir())
@@ -69,9 +98,31 @@ func main() {
 func (a *application) createWindow() error {
 	return (MainWindow{
 		AssignTo: &a.mw,
-		Title:    "Go 网络与串口工具 - Windows",
+		Title:    "Go 网络与串口工具 v" + wincore.Version + " - Windows",
 		MinSize:  Size{Width: 1000, Height: 680},
 		Size:     Size{Width: 1180, Height: 760},
+		MenuItems: []MenuItem{
+			Menu{
+				Text: "操作",
+				Items: []MenuItem{
+					Action{Text:"新建实例", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyN}, OnTriggered: a.newInstance},
+					Action{Text:"连接 / 断开", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyL}, OnTriggered: a.toggleConnection},
+					Action{Text:"发送一次", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyReturn}, OnTriggered: func() { a.sendOnce(false) }},
+					Action{Text:"定时发送开关", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyT}, OnTriggered: a.toggleTimer},
+					Action{Text:"刷新串口", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyR}, OnTriggered: a.refreshPorts},
+					Action{Text:"虚拟串口映射", Shortcut: Shortcut{Modifiers: walk.ModControl | walk.ModShift, Key: walk.KeyV}, OnTriggered: a.openVSerial},
+				},
+			},
+			Menu{
+				Text: "视图",
+				Items: []MenuItem{
+					Action{Text:"清空接收区", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyK}, OnTriggered: func() { _ = a.receiveEdit.SetText("") }},
+					Action{Text:"导出接收数据", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyE}, OnTriggered: func() { a.exportText(a.receiveEdit.Text(), "serial-log", a.mw) }},
+					Action{Text:"HEX 显示开关", Shortcut: Shortcut{Modifiers: walk.ModControl | walk.ModShift, Key: walk.KeyH}, OnTriggered: a.toggleHexView},
+					Action{Text:"监控窗口", Shortcut: Shortcut{Modifiers: walk.ModControl | walk.ModShift, Key: walk.KeyM}, OnTriggered: a.openMonitor},
+				},
+			},
+		},
 		Layout:   HBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}},
 		Children: []Widget{
 			Composite{
@@ -121,7 +172,9 @@ func (a *application) createWindow() error {
 					Composite{Layout: HBox{}, Children: []Widget{
 						Label{Text: "接收数据"}, HSpacer{},
 						CheckBox{AssignTo: &a.hexView, Text: "HEX 显示", OnCheckedChanged: func() { a.hexDisplay.Store(a.hexView.Checked()) }},
+						PushButton{Text: "新建实例", OnClicked: a.newInstance},
 						PushButton{Text: "监控窗口", OnClicked: a.openMonitor},
+						PushButton{Text: "虚拟串口", OnClicked: a.openVSerial},
 						PushButton{Text: "导出", OnClicked: func() { a.exportText(a.receiveEdit.Text(), "serial-log", a.mw) }},
 						PushButton{Text: "清空", OnClicked: func() { _ = a.receiveEdit.SetText("") }},
 					}},
@@ -166,27 +219,19 @@ func (a *application) updateMode() {
 	if a.mode == nil || a.serialGroup == nil {
 		return
 	}
-	mode := wincore.Mode(a.mode.Text())
-	serialEnabled := mode == wincore.ModeSerial || mode == wincore.ModeSerialServer
-	networkEnabled := mode != wincore.ModeSerial
-	a.serialGroup.SetEnabled(serialEnabled && !a.connected)
-	a.networkGroup.SetEnabled(networkEnabled && !a.connected)
-	if mode != wincore.ModeSerialServer {
-		switch mode {
-		case wincore.ModeTCPServer:
-			a.setProtocolRole(0, 0)
-		case wincore.ModeTCPClient:
-			a.setProtocolRole(0, 1)
-		case wincore.ModeUDPServer:
-			a.setProtocolRole(1, 0)
-		case wincore.ModeUDPClient:
-			a.setProtocolRole(1, 1)
+	spec := wincore.SpecOf(a.uiMode())
+	a.serialGroup.SetEnabled(spec.NeedsSerial && !a.connected)
+	a.networkGroup.SetEnabled(spec.NeedsNet && !a.connected)
+	// 协议:TCP/UDP 模式由模式决定并禁用,仅串口服务器可改;角色:TCP/UDP/串口服务器可改
+	net := a.mode.Text() == "TCP" || a.mode.Text() == "UDP"
+	a.protocol.SetEnabled(spec.NeedsProto && !a.connected)
+	a.role.SetEnabled((spec.NeedsRole || net) && !a.connected)
+	if net {
+		idx := 0
+		if a.mode.Text() == "UDP" {
+			idx = 1
 		}
-		a.protocol.SetEnabled(false)
-		a.role.SetEnabled(false)
-	} else {
-		a.protocol.SetEnabled(!a.connected)
-		a.role.SetEnabled(!a.connected)
+		_ = a.protocol.SetCurrentIndex(idx)
 	}
 	a.updateAddressDefault()
 	if !a.connected {
@@ -194,13 +239,9 @@ func (a *application) updateMode() {
 	}
 }
 
-func (a *application) setProtocolRole(protocol, role int) {
-	_ = a.protocol.SetCurrentIndex(protocol)
-	_ = a.role.SetCurrentIndex(role)
-}
-
 func (a *application) updateAddressDefault() {
-	if a.address == nil || a.mode == nil || a.connected || a.mode.Text() == string(wincore.ModeSerial) {
+	mode := a.mode.Text()
+	if a.address == nil || a.mode == nil || a.connected || mode == "串口" || mode == "HTTP 客户端" {
 		return
 	}
 	if a.isServer() {
@@ -212,7 +253,28 @@ func (a *application) updateAddressDefault() {
 
 func (a *application) isServer() bool {
 	mode := a.mode.Text()
-	return strings.HasSuffix(mode, "服务端") || (mode == string(wincore.ModeSerialServer) && a.role.Text() == "服务端")
+	if mode == "TCP" || mode == "UDP" || mode == "串口服务器" {
+		return a.role.Text() == "服务端"
+	}
+	return false
+}
+
+// uiMode 把 UI 的「5 模式 + 角色」映射到引擎的 Mode 枚举。
+func (a *application) uiMode() wincore.Mode {
+	switch a.mode.Text() {
+	case "TCP":
+		if a.isServer() {
+			return wincore.ModeTCPServer
+		}
+		return wincore.ModeTCPClient
+	case "UDP":
+		if a.isServer() {
+			return wincore.ModeUDPServer
+		}
+		return wincore.ModeUDPClient
+	default:
+		return wincore.Mode(a.mode.Text())
+	}
 }
 
 func (a *application) config() (wincore.Config, error) {
@@ -241,11 +303,11 @@ func (a *application) config() (wincore.Config, error) {
 		}
 		_ = a.address.SetText(address)
 	}
-	return wincore.Config{
-		Mode: wincore.Mode(a.mode.Text()), SerialName: strings.TrimSpace(a.ports.Text()), Baud: baud,
-		DataBits: dataBits, StopBits: stopBits, Parity: a.parity.Text(), Protocol: a.protocol.Text(),
-		Role: a.role.Text(), Address: address,
-	}, nil
+	return wincore.BuildConfig(wincore.ConnParams{
+		Mode: a.uiMode(), SerialName: strings.TrimSpace(a.ports.Text()), Address: address,
+		Baud: baud, DataBits: dataBits, StopBits: stopBits, Parity: a.parity.Text(),
+		Protocol: a.protocol.Text(), Role: a.role.Text(),
+	})
 }
 
 func (a *application) toggleConnection() {
@@ -462,6 +524,141 @@ func (a *application) openMonitor() {
 		})
 	}
 	a.monitorWindow.Show()
+}
+
+// newInstance 启动一个新实例(多开)。
+func (a *application) newInstance() {
+	exe, err := os.Executable()
+	if err != nil {
+		a.showError(err)
+		return
+	}
+	if err := exec.Command(exe).Start(); err != nil {
+		a.showError(err)
+	}
+}
+
+func (a *application) toggleHexView() {
+	if a.hexView != nil {
+		a.hexView.SetChecked(!a.hexView.Checked())
+	}
+}
+
+// setupTray 让应用关闭窗口后仍在后台运行(托盘图标),点击图标恢复,右键可退出。
+func (a *application) setupTray() {
+	a.mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
+		*canceled = true
+		a.mw.Hide()
+	})
+	ni, err := walk.NewNotifyIcon(a.mw)
+	if err != nil {
+		return
+	}
+	a.notifyIcon = ni
+	if icon, err := walk.NewIconFromResourceId(2); err == nil {
+		_ = ni.SetIcon(icon)
+	}
+	_ = ni.SetToolTip("Go 网络与串口工具")
+	_ = ni.SetVisible(true)
+
+	ni.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
+		if button == walk.LeftButton {
+			a.mw.Show()
+		}
+	})
+
+	showAction := walk.NewAction()
+	showAction.SetText("显示主界面")
+	showAction.Triggered().Attach(func() {
+		a.mw.Show()
+	})
+	quitAction := walk.NewAction()
+	quitAction.SetText("退出")
+	quitAction.Triggered().Attach(func() {
+		a.stopTimer(false)
+		a.engine.Close()
+		walk.App().Exit(0)
+	})
+	_ = ni.ContextMenu().Actions().Add(showAction)
+	_ = ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
+	_ = ni.ContextMenu().Actions().Add(quitAction)
+}
+
+func (a *application) openVSerial() {
+	if a.vsWindow == nil {
+		a.vsModel = new(vserialModel)
+		if err := (MainWindow{
+			AssignTo: &a.vsWindow, Title: "虚拟串口映射(后台运行,可多个)", MinSize: Size{Width: 640, Height: 420}, Size: Size{Width: 680, Height: 480}, Layout: VBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}},
+			Children: []Widget{
+				Label{Text: "TCP 端点 → 本机虚拟串口。添加后在后台持续运行,断开主连接也不受影响。"},
+				Composite{Layout: HBox{}, Children: []Widget{
+					Label{Text: "IP"},
+					ComboBox{AssignTo: &a.vsIP, Editable: true, MinSize: Size{Width: 180}},
+					Label{Text: "端口"},
+					LineEdit{AssignTo: &a.vsPort, Text: "1502", MinSize: Size{Width: 80}},
+					PushButton{Text: "添加映射", OnClicked: a.addVSerial},
+				}},
+				TableView{AssignTo: &a.vsTable, Model: a.vsModel, StretchFactor: 1, Columns: []TableViewColumn{
+					{Title: "TCP 端点", Width: 200},
+					{Title: "虚拟串口设备", Width: 380},
+				}},
+				Composite{Layout: HBox{}, Children: []Widget{
+					PushButton{Text: "停止选中", OnClicked: a.removeVSerial},
+					PushButton{Text: "复制设备路径", OnClicked: a.copyVSerialPath},
+					Label{Text: "用 screen 或另一个串口工具打开该设备"},
+				}},
+			},
+		}).Create(); err != nil {
+			a.showError(err)
+			return
+		}
+		_ = a.vsIP.SetModel(wincore.LocalIPs())
+	}
+	a.vsWindow.Show()
+}
+
+func (a *application) addVSerial() {
+	ip := strings.TrimSpace(a.vsIP.Text())
+	port := strings.TrimSpace(a.vsPort.Text())
+	if ip == "" || port == "" {
+		a.showError(fmt.Errorf("请输入 IP 和端口"))
+		return
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil || p <= 0 {
+		a.showError(fmt.Errorf("端口无效"))
+		return
+	}
+	info, err := a.engine.AddVirtualSerial(fmt.Sprintf("%s:%d", ip, p))
+	if err != nil {
+		a.showError(err)
+		return
+	}
+	a.vsModel.items = append(a.vsModel.items, vserialEntry{id: info.ID, addr: info.Addr, link: info.Link})
+	a.vsModel.PublishRowsReset()
+	a.appendLog(fmt.Sprintf("虚拟串口 #%d 已创建: %s → %s", info.ID, info.Addr, info.Link))
+}
+
+func (a *application) removeVSerial() {
+	idx := a.vsTable.CurrentIndex()
+	if idx < 0 || idx >= len(a.vsModel.items) {
+		a.showError(fmt.Errorf("请先选中一行"))
+		return
+	}
+	it := a.vsModel.items[idx]
+	a.engine.RemoveVirtualSerial(it.id)
+	a.vsModel.items = append(a.vsModel.items[:idx], a.vsModel.items[idx+1:]...)
+	a.vsModel.PublishRowsReset()
+	a.appendLog(fmt.Sprintf("虚拟串口 #%d 已停止", it.id))
+}
+
+func (a *application) copyVSerialPath() {
+	idx := a.vsTable.CurrentIndex()
+	if idx < 0 || idx >= len(a.vsModel.items) {
+		a.showError(fmt.Errorf("请先选中一行"))
+		return
+	}
+	_ = walk.Clipboard().SetText(a.vsModel.items[idx].link)
 }
 
 func (a *application) exportText(text, prefix string, owner walk.Form) {
