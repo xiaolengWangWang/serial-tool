@@ -38,34 +38,46 @@ func main() {
 	C.RunApp()
 }
 
-// formatData 按当前 HEX 显示开关格式化一段数据。
-func formatData(data []byte) string {
-	if hexMode.Load() {
-		return fmt.Sprintf("% X", data)
-	}
-	return strings.ReplaceAll(strings.ToValidUTF8(string(data), "�"), "\x00", "␀")
-}
-
 func timestamp() string { return time.Now().Format("15:04:05.000") }
 
-func onData(_ string, data []byte) {
-	line := fmt.Sprintf("[%s 接收] %s\n", timestamp(), formatData(data))
-	s := C.CString(line)
-	C.UIAppend(s)
-	C.UIMonitorAppend(s)
-	C.free(unsafe.Pointer(s))
+func toASCII(data []byte) string {
+	b := make([]byte, len(data))
+	for i, c := range data {
+		if c >= 32 && c < 127 {
+			b[i] = c
+		} else {
+			b[i] = '.'
+		}
+	}
+	return string(b)
 }
 
-// logSent 把成功发送的数据带时间戳写入接收区(不进监控窗口)。
+func addPacket(dir string, data []byte) {
+	ts := C.CString(timestamp())
+	cdir := C.CString(dir)
+	hex := C.CString(fmt.Sprintf("% X", data))
+	ascii := C.CString(toASCII(data))
+	C.UIAddPacket(ts, cdir, hex, ascii, C.int(len(data)))
+	C.free(unsafe.Pointer(ts))
+	C.free(unsafe.Pointer(cdir))
+	C.free(unsafe.Pointer(hex))
+	C.free(unsafe.Pointer(ascii))
+}
+
+func onData(_ string, data []byte) {
+	addPacket("RX", data)
+	monLine := C.CString(fmt.Sprintf("[%s 接收] % X\n", timestamp(), data))
+	C.UIMonitorAppend(monLine)
+	C.free(unsafe.Pointer(monLine))
+}
+
+// logSent 把成功发送的数据加入报文表格。
 func logSent(input string, asHex bool, eol string) {
 	data, err := wincore.ParseData(input, asHex, eol)
 	if err != nil {
 		return
 	}
-	line := fmt.Sprintf("[%s 发送] %s\n", timestamp(), formatData(data))
-	s := C.CString(line)
-	C.UIAppend(s)
-	C.free(unsafe.Pointer(s))
+	addPacket("TX", data)
 }
 
 func onClosed() { C.UIConnectionClosed() }
@@ -162,25 +174,7 @@ func GoRecentSends() *C.char {
 
 //export GoChecksum
 func GoChecksum(kind, input *C.char) *C.char {
-	data, err := wincore.HexToBytes(C.GoString(input))
-	if err != nil {
-		return C.CString("输入不是有效的 HEX")
-	}
-	var result string
-	switch C.GoString(kind) {
-	case "modbus":
-		c := wincore.CRC16Modbus(data)
-		result = fmt.Sprintf("0x%04X (低字节在前: %02X %02X)", c, byte(c), byte(c>>8))
-	case "crc16":
-		result = fmt.Sprintf("0x%04X", wincore.CRC16CCITT(data))
-	case "crc32":
-		result = fmt.Sprintf("0x%08X", wincore.CRC32(data))
-	case "xor":
-		result = fmt.Sprintf("0x%02X", wincore.XORChecksum(data))
-	case "sum":
-		result = fmt.Sprintf("0x%02X", wincore.SUMChecksum(data))
-	}
-	return C.CString(result)
+	return C.CString(wincore.ParseToolbox(C.GoString(kind), C.GoString(input)))
 }
 
 //export GoListPorts

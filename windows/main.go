@@ -346,6 +346,11 @@ func (a *application) createWindow() error {
 										{Title: "ASCII", Width: 200},
 										{Title: "长度", Width: 70},
 									},
+									ContextMenuItems: []MenuItem{
+										Action{Text: "复制 HEX", OnTriggered: func() { a.copyPacketField("hex") }},
+										Action{Text: "复制 ASCII", OnTriggered: func() { a.copyPacketField("ascii") }},
+										Action{Text: "复制整行", OnTriggered: func() { a.copyPacketField("all") }},
+									},
 								},
 							}},
 							TabPage{Title: "日志", Layout: VBox{}, Children: []Widget{
@@ -1010,6 +1015,27 @@ func (a *application) toggleHexView() {
 	}
 }
 
+func (a *application) copyPacketField(field string) {
+	if a.packetTable == nil || a.packetModel == nil {
+		return
+	}
+	idx := a.packetTable.CurrentIndex()
+	if idx < 0 || idx >= len(a.packetModel.visible) {
+		return
+	}
+	p := a.packetModel.visible[idx]
+	var text string
+	switch field {
+	case "hex":
+		text = p.Hex
+	case "ascii":
+		text = p.ASCII
+	default:
+		text = fmt.Sprintf("[%s %s] %s | %s | %d B", p.TS.Format("15:04:05.000"), p.Direction, p.Hex, p.ASCII, p.Length)
+	}
+	_ = walk.Clipboard().SetText(text)
+}
+
 // setupTray 让应用关闭窗口后仍在后台运行(托盘图标),点击图标恢复,右键可退出。
 func (a *application) setupTray() {
 	a.mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
@@ -1053,16 +1079,22 @@ func (a *application) setupTray() {
 func (a *application) openToolbox() {
 	if a.toolboxWindow == nil {
 		if err := (MainWindow{
-			AssignTo: &a.toolboxWindow, Title: "工具箱", MinSize: Size{Width: 480, Height: 300}, Size: Size{Width: 520, Height: 340}, Layout: VBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}},
+			AssignTo: &a.toolboxWindow, Title: "工具箱", MinSize: Size{Width: 520, Height: 340}, Size: Size{Width: 560, Height: 380}, Layout: VBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}},
 			Children: []Widget{
-				Label{Text: "HEX 输入(如 01 03 00 00 00 0A)"},
+				Label{Text: "输入(HEX 校验用 01 03 00 0A；Base64/Unix 时间戳直接输文本或数字)"},
 				TextEdit{AssignTo: &a.toolboxInput, MinSize: Size{Height: 60}},
 				Composite{Layout: HBox{}, Children: []Widget{
-					PushButton{Text: "CRC16 Modbus", OnClicked: func() { a.showChecksum("modbus") }},
-					PushButton{Text: "CRC16", OnClicked: func() { a.showChecksum("crc16") }},
-					PushButton{Text: "CRC32", OnClicked: func() { a.showChecksum("crc32") }},
-					PushButton{Text: "XOR", OnClicked: func() { a.showChecksum("xor") }},
-					PushButton{Text: "SUM", OnClicked: func() { a.showChecksum("sum") }},
+					PushButton{Text: "CRC16 Modbus", OnClicked: func() { a.runToolbox("modbus") }},
+					PushButton{Text: "CRC16", OnClicked: func() { a.runToolbox("crc16") }},
+					PushButton{Text: "CRC32", OnClicked: func() { a.runToolbox("crc32") }},
+					PushButton{Text: "XOR", OnClicked: func() { a.runToolbox("xor") }},
+					PushButton{Text: "SUM", OnClicked: func() { a.runToolbox("sum") }},
+				}},
+				Composite{Layout: HBox{}, Children: []Widget{
+					PushButton{Text: "Base64 编码", OnClicked: func() { a.runToolbox("base64enc") }},
+					PushButton{Text: "Base64 解码", OnClicked: func() { a.runToolbox("base64dec") }},
+					PushButton{Text: "Unix 时间戳", OnClicked: func() { a.runToolbox("unixtime") }},
+					HSpacer{},
 				}},
 				Label{AssignTo: &a.toolboxOutput, Text: "结果", MinSize: Size{Height: 40}},
 			},
@@ -1074,28 +1106,13 @@ func (a *application) openToolbox() {
 	a.toolboxWindow.Show()
 }
 
-func (a *application) showChecksum(kind string) {
-	data, err := wincore.HexToBytes(a.toolboxInput.Text())
-	if err != nil {
-		a.toolboxOutput.SetText("输入不是有效的 HEX")
-		return
-	}
-	var result string
-	switch kind {
-	case "modbus":
-		c := wincore.CRC16Modbus(data)
-		result = fmt.Sprintf("0x%04X (低字节在前: %02X %02X)", c, byte(c), byte(c>>8))
-	case "crc16":
-		result = fmt.Sprintf("0x%04X", wincore.CRC16CCITT(data))
-	case "crc32":
-		result = fmt.Sprintf("0x%08X", wincore.CRC32(data))
-	case "xor":
-		result = fmt.Sprintf("0x%02X", wincore.XORChecksum(data))
-	case "sum":
-		result = fmt.Sprintf("0x%02X", wincore.SUMChecksum(data))
-	}
+func (a *application) runToolbox(kind string) {
+	result := wincore.ParseToolbox(kind, a.toolboxInput.Text())
 	a.toolboxOutput.SetText(result)
 }
+
+// showChecksum 保留兼容旧调用路径。
+func (a *application) showChecksum(kind string) { a.runToolbox(kind) }
 
 func (a *application) openVSerial() {
 	if a.vsWindow == nil {

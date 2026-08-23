@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#import <objc/runtime.h>
 #include <stdlib.h>
 #include "app.h"
 
@@ -8,16 +9,19 @@
     NSWindow *_vsWindow;
     NSWindow *_toolboxWindow;
     NSTableView *_vsTable;
+    NSTableView *_dataTable;
+    NSMutableArray *_packets;
+    NSMutableArray *_visiblePackets;
+    NSPopUpButton *_dirFilter;
     NSComboBox *_vsIP;
     NSTextField *_vsPort;
     NSMutableArray *_vsList;
     NSPopUpButton *_mode, *_bridgeProtocol, *_role, *_history, *_sendHistory, *_favorites;
     NSComboBox *_ports, *_baud, *_data, *_stop, *_parity, *_eol, *_ip;
     NSTextField *_port, *_endpointLabel, *_roleLabel, *_ipLabel, *_portLabel, *_protocolLabel, *_status, *_interval, *_toolboxInput, *_toolboxOutput, *_searchField;
-    NSMutableString *_fullLog;
     NSArray *_serialControls;
     NSButton *_refresh, *_connect, *_hexView, *_hexSend, *_timerButton;
-    NSTextView *_log, *_send, *_monitorLog, *_sysLog;
+    NSTextView *_send, *_monitorLog, *_sysLog;
     NSTimer *_sendTimer;
     BOOL _connected;
     BOOL _monitorPaused;
@@ -26,6 +30,7 @@
 - (void)appendMonitorText:(NSString *)text;
 - (NSString *)sendCurrentData;
 - (void)stopTimer;
+- (void)addPacketWithTS:(NSString *)ts dir:(NSString *)dir hex:(NSString *)hex ascii:(NSString *)ascii len:(NSInteger)len;
 @end
 
 static NSTextField *Label(NSString *text, NSRect frame) {
@@ -149,22 +154,47 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     clear.frame = NSMakeRect(930, 652, 90, 28); clear.autoresizingMask = NSViewMinXMargin; [view addSubview:clear];
 
     [view addSubview:Label(@"搜索", NSMakeRect(320, 616, 40, 22))];
-_searchField = [[NSTextField alloc] initWithFrame:NSMakeRect(360, 612, 300, 26)];
-[view addSubview:_searchField];
-NSButton *filterBtn = [NSButton buttonWithTitle:@"过滤" target:self action:@selector(applyFilter)];
-filterBtn.frame = NSMakeRect(668, 610, 70, 28); [view addSubview:filterBtn];
-NSButton *clearFilterBtn = [NSButton buttonWithTitle:@"清除" target:self action:@selector(clearFilter)];
-clearFilterBtn.frame = NSMakeRect(742, 610, 70, 28); [view addSubview:clearFilterBtn];
+    _searchField = [[NSTextField alloc] initWithFrame:NSMakeRect(360, 612, 220, 26)];
+    [view addSubview:_searchField];
+    _dirFilter = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(588, 610, 80, 28) pullsDown:NO];
+    [_dirFilter addItemsWithTitles:@[@"全部", @"RX", @"TX"]];
+    _dirFilter.target = self; _dirFilter.action = @selector(applyFilter);
+    [view addSubview:_dirFilter];
+    NSButton *filterBtn = [NSButton buttonWithTitle:@"过滤" target:self action:@selector(applyFilter)];
+    filterBtn.frame = NSMakeRect(676, 610, 60, 28); [view addSubview:filterBtn];
+    NSButton *clearFilterBtn = [NSButton buttonWithTitle:@"清除" target:self action:@selector(clearFilter)];
+    clearFilterBtn.frame = NSMakeRect(742, 610, 60, 28); [view addSubview:clearFilterBtn];
 
-NSTabView *tabView = [[NSTabView alloc] initWithFrame:NSMakeRect(320, 276, 700, 334)];
+    NSTabView *tabView = [[NSTabView alloc] initWithFrame:NSMakeRect(320, 276, 700, 334)];
     tabView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 
+    // 数据 Tab — NSTableView 结构化报文表格
+    _packets = [[NSMutableArray alloc] init];
+    _visiblePackets = [[NSMutableArray alloc] init];
     NSScrollView *dataScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 700, 290)] autorelease];
-    dataScroll.borderType = NSBezelBorder; dataScroll.hasVerticalScroller = YES;
+    dataScroll.borderType = NSBezelBorder; dataScroll.hasVerticalScroller = YES; dataScroll.hasHorizontalScroller = YES;
     dataScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    _log = [[NSTextView alloc] initWithFrame:dataScroll.contentView.bounds];
-    _log.editable = NO; _log.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
-    _log.autoresizingMask = NSViewWidthSizable; dataScroll.documentView = _log;
+    _dataTable = [[NSTableView alloc] initWithFrame:dataScroll.contentView.bounds];
+    _dataTable.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
+    _dataTable.usesAlternatingRowBackgroundColors = YES;
+    _dataTable.dataSource = self;
+    NSTableColumn *tc0 = [[[NSTableColumn alloc] initWithIdentifier:@"ts"] autorelease];
+    tc0.title = @"时间"; tc0.width = 100; [_dataTable addTableColumn:tc0];
+    NSTableColumn *tc1 = [[[NSTableColumn alloc] initWithIdentifier:@"dir"] autorelease];
+    tc1.title = @"方向"; tc1.width = 45; [_dataTable addTableColumn:tc1];
+    NSTableColumn *tc2 = [[[NSTableColumn alloc] initWithIdentifier:@"hex"] autorelease];
+    tc2.title = @"HEX"; tc2.width = 300; [_dataTable addTableColumn:tc2];
+    NSTableColumn *tc3 = [[[NSTableColumn alloc] initWithIdentifier:@"ascii"] autorelease];
+    tc3.title = @"ASCII"; tc3.width = 180; [_dataTable addTableColumn:tc3];
+    NSTableColumn *tc4 = [[[NSTableColumn alloc] initWithIdentifier:@"len"] autorelease];
+    tc4.title = @"长度"; tc4.width = 65; [_dataTable addTableColumn:tc4];
+    dataScroll.documentView = _dataTable;
+    // 右键菜单
+    NSMenu *tableMenu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
+    [tableMenu addItemWithTitle:@"复制 HEX" action:@selector(copyPacketHex:) keyEquivalent:@""];
+    [tableMenu addItemWithTitle:@"复制 ASCII" action:@selector(copyPacketASCII:) keyEquivalent:@""];
+    [tableMenu addItemWithTitle:@"复制整行" action:@selector(copyPacketAll:) keyEquivalent:@""];
+    _dataTable.menu = tableMenu;
     NSTabViewItem *dataItem = [[[NSTabViewItem alloc] initWithIdentifier:@"data"] autorelease];
     dataItem.label = @"数据"; dataItem.view = dataScroll;
     [tabView addTabViewItem:dataItem];
@@ -371,25 +401,34 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
 
 - (void)openToolbox:(id)sender {
     if (!_toolboxWindow) {
-        _toolboxWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 200)
+        _toolboxWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 560, 270)
             styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
             backing:NSBackingStoreBuffered defer:NO];
         _toolboxWindow.title = @"工具箱";
         _toolboxWindow.releasedWhenClosed = NO;
         NSView *v = _toolboxWindow.contentView;
 
-        [v addSubview:Label(@"HEX 输入(如 01 03 00 00 00 0A)", NSMakeRect(16, 168, 440, 20))];
-        _toolboxInput = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 136, 448, 26)];
+        [v addSubview:Label(@"输入(HEX 校验用 01 03 00 0A；Base64/Unix 时间戳直接输文本/数字)", NSMakeRect(16, 228, 520, 20))];
+        _toolboxInput = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 196, 528, 26)];
         [v addSubview:_toolboxInput];
 
         NSArray *titles = @[@"CRC16 Modbus", @"CRC16", @"CRC32", @"XOR", @"SUM"];
         for (NSUInteger i = 0; i < titles.count; i++) {
             NSButton *b = [NSButton buttonWithTitle:titles[i] target:self action:@selector(calcChecksum:)];
-            b.frame = NSMakeRect(16 + i * 92, 100, 88, 28);
+            b.frame = NSMakeRect(16 + i * 108, 158, 104, 28);
             b.tag = (NSInteger)i;
             [v addSubview:b];
         }
-        _toolboxOutput = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 56, 448, 26)];
+        NSArray *titles2 = @[@"Base64 编码", @"Base64 解码", @"Unix 时间戳"];
+        NSArray *kinds2  = @[@"base64enc",   @"base64dec",   @"unixtime"];
+        for (NSUInteger i = 0; i < titles2.count; i++) {
+            NSButton *b = [NSButton buttonWithTitle:titles2[i] target:self action:@selector(calcToolbox:)];
+            b.frame = NSMakeRect(16 + i * 120, 120, 116, 28);
+            b.tag = (NSInteger)i;
+            [v addSubview:b];
+            objc_setAssociatedObject(b, "kind", kinds2[i], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        _toolboxOutput = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 76, 528, 26)];
         _toolboxOutput.editable = NO; _toolboxOutput.bordered = NO; _toolboxOutput.drawsBackground = NO;
         [v addSubview:_toolboxOutput];
         [_toolboxWindow center];
@@ -400,6 +439,13 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
 - (void)calcChecksum:(NSButton *)sender {
     NSArray *kinds = @[@"modbus", @"crc16", @"crc32", @"xor", @"sum"];
     NSString *kind = kinds[sender.tag];
+    char *raw = GoChecksum((char *)kind.UTF8String, (char *)_toolboxInput.stringValue.UTF8String);
+    NSString *result = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
+    _toolboxOutput.stringValue = result;
+}
+
+- (void)calcToolbox:(NSButton *)sender {
+    NSString *kind = objc_getAssociatedObject(sender, "kind");
     char *raw = GoChecksum((char *)kind.UTF8String, (char *)_toolboxInput.stringValue.UTF8String);
     NSString *result = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
     _toolboxOutput.stringValue = result;
@@ -764,9 +810,15 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
     [[NSPasteboard generalPasteboard] setString:_vsList[row][@"link"] forType:NSPasteboardTypeString];
 }
 
-- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView { return _vsList.count; }
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
+    if (tableView == _vsTable) return (NSInteger)_vsList.count;
+    if (tableView == _dataTable) return (NSInteger)_visiblePackets.count;
+    return 0;
+}
 - (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
-    return _vsList[row][col.identifier];
+    if (tableView == _vsTable) return _vsList[row][col.identifier];
+    if (tableView == _dataTable) return _visiblePackets[row][col.identifier];
+    return nil;
 }
 
 - (void)openMonitor:(id)sender {
@@ -824,7 +876,11 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
     [_sysLog scrollRangeToVisible:NSMakeRange(_sysLog.string.length, 0)];
 }
 
-- (void)clear:(id)sender { [_log setString:@""]; [_fullLog setString:@""]; }
+- (void)clear:(id)sender {
+    [_packets removeAllObjects];
+    [_visiblePackets removeAllObjects];
+    [_dataTable reloadData];
+}
 - (void)saveText:(NSString *)text prefix:(NSString *)prefix window:(NSWindow *)window {
     NSSavePanel *panel = [NSSavePanel savePanel];
     NSDateFormatter *formatter = [[[NSDateFormatter alloc] init] autorelease];
@@ -839,37 +895,92 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
 }
 
 - (void)exportLog:(id)sender {
-    [self saveText:_log.string prefix:@"serial-log" window:_window];
+    NSMutableString *out = [NSMutableString string];
+    for (NSDictionary *p in _visiblePackets) {
+        [out appendFormat:@"[%@ %@] %@\n", p[@"ts"], p[@"dir"], p[@"hex"]];
+    }
+    [self saveText:out prefix:@"serial-log" window:_window];
 }
 - (void)exportMonitor:(id)sender { [self saveText:_monitorLog.string prefix:@"monitor-data" window:_monitorWindow]; }
 - (void)appendText:(NSString *)text {
-    if (!_fullLog) _fullLog = [[NSMutableString alloc] init];
-    [_fullLog appendString:text];
-    if (_searchField && _searchField.stringValue.length) {
-        [self applyFilter];
-        return;
-    }
-    [_log.textStorage appendAttributedString:[[[NSAttributedString alloc] initWithString:text] autorelease]];
-    [_log scrollRangeToVisible:NSMakeRange(_log.string.length, 0)];
+    // 系统消息统一输出到日志 Tab
+    [self appendLogText:text];
 }
 
 - (void)applyFilter {
     NSString *kw = [_searchField.stringValue lowercaseString];
-    if (!kw.length) { [_log setString:_fullLog]; return; }
-    NSMutableString *out = [NSMutableString string];
-    for (NSString *line in [_fullLog componentsSeparatedByString:@"\n"]) {
-        if ([[line lowercaseString] containsString:kw]) {
-            [out appendString:line];
-            [out appendString:@"\n"];
+    NSString *dir = _dirFilter ? _dirFilter.titleOfSelectedItem : @"全部";
+    [_visiblePackets removeAllObjects];
+    for (NSDictionary *p in _packets) {
+        if (![dir isEqualToString:@"全部"] && ![p[@"dir"] isEqualToString:dir]) continue;
+        if (kw.length) {
+            if (![[p[@"hex"] lowercaseString] containsString:kw] &&
+                ![[p[@"ascii"] lowercaseString] containsString:kw]) continue;
         }
+        [_visiblePackets addObject:p];
     }
-    [_log setString:out];
+    [_dataTable reloadData];
+    if (_visiblePackets.count > 0)
+        [_dataTable scrollRowToVisible:(NSInteger)_visiblePackets.count - 1];
 }
 
 - (void)clearFilter {
     _searchField.stringValue = @"";
-    [_log setString:_fullLog];
+    if (_dirFilter) [_dirFilter selectItemWithTitle:@"全部"];
+    [_visiblePackets removeAllObjects];
+    [_visiblePackets addObjectsFromArray:_packets];
+    [_dataTable reloadData];
+    if (_visiblePackets.count > 0)
+        [_dataTable scrollRowToVisible:(NSInteger)_visiblePackets.count - 1];
 }
+- (void)addPacketWithTS:(NSString *)ts dir:(NSString *)dir hex:(NSString *)hex ascii:(NSString *)ascii len:(NSInteger)len {
+    NSDictionary *p = @{
+        @"ts": ts, @"dir": dir, @"hex": hex, @"ascii": ascii,
+        @"len": [NSString stringWithFormat:@"%ld B", (long)len]
+    };
+    [_packets addObject:p];
+    if (_packets.count > 10000) {
+        [_packets removeObjectsInRange:NSMakeRange(0, _packets.count - 8000)];
+    }
+    NSString *kw = [_searchField.stringValue lowercaseString];
+    NSString *dirFilt = _dirFilter ? _dirFilter.titleOfSelectedItem : @"全部";
+    BOOL passes = YES;
+    if (![dirFilt isEqualToString:@"全部"] && ![dir isEqualToString:dirFilt]) passes = NO;
+    if (passes && kw.length) {
+        if (![[hex lowercaseString] containsString:kw] && ![[ascii lowercaseString] containsString:kw]) passes = NO;
+    }
+    if (passes) {
+        [_visiblePackets addObject:p];
+        if (_visiblePackets.count > 10000)
+            [_visiblePackets removeObjectsInRange:NSMakeRange(0, _visiblePackets.count - 8000)];
+        [_dataTable reloadData];
+        [_dataTable scrollRowToVisible:(NSInteger)_visiblePackets.count - 1];
+    }
+}
+
+- (void)copyPacketHex:(id)sender {
+    NSInteger row = _dataTable.clickedRow;
+    if (row < 0 || row >= (NSInteger)_visiblePackets.count) return;
+    [[NSPasteboard generalPasteboard] clearContents];
+    [[NSPasteboard generalPasteboard] setString:_visiblePackets[row][@"hex"] forType:NSPasteboardTypeString];
+}
+
+- (void)copyPacketASCII:(id)sender {
+    NSInteger row = _dataTable.clickedRow;
+    if (row < 0 || row >= (NSInteger)_visiblePackets.count) return;
+    [[NSPasteboard generalPasteboard] clearContents];
+    [[NSPasteboard generalPasteboard] setString:_visiblePackets[row][@"ascii"] forType:NSPasteboardTypeString];
+}
+
+- (void)copyPacketAll:(id)sender {
+    NSInteger row = _dataTable.clickedRow;
+    if (row < 0 || row >= (NSInteger)_visiblePackets.count) return;
+    NSDictionary *p = _visiblePackets[row];
+    NSString *line = [NSString stringWithFormat:@"[%@ %@] %@ | %@", p[@"ts"], p[@"dir"], p[@"hex"], p[@"ascii"]];
+    [[NSPasteboard generalPasteboard] clearContents];
+    [[NSPasteboard generalPasteboard] setString:line forType:NSPasteboardTypeString];
+}
+
 - (void)alert:(NSString *)message {
     NSAlert *alert = [[[NSAlert alloc] init] autorelease];
     alert.messageText = @"CommBox"; alert.informativeText = message; [alert runModal];
@@ -887,8 +998,20 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
 
 void UIAppend(const char *text) {
     NSString *value = [[NSString alloc] initWithUTF8String:text ?: ""];
-    dispatch_async(dispatch_get_main_queue(), ^{ [(AppDelegate *)NSApp.delegate appendText:value]; });
+    dispatch_async(dispatch_get_main_queue(), ^{ [(AppDelegate *)NSApp.delegate appendLogText:value]; });
     [value release];
+}
+
+void UIAddPacket(const char *ts, const char *dir, const char *hex, const char *ascii, int len) {
+    NSString *nts    = [[NSString alloc] initWithUTF8String:ts    ?: ""];
+    NSString *ndir   = [[NSString alloc] initWithUTF8String:dir   ?: ""];
+    NSString *nhex   = [[NSString alloc] initWithUTF8String:hex   ?: ""];
+    NSString *nascii = [[NSString alloc] initWithUTF8String:ascii ?: ""];
+    NSInteger nlen = len;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [(AppDelegate *)NSApp.delegate addPacketWithTS:nts dir:ndir hex:nhex ascii:nascii len:nlen];
+        [nts release]; [ndir release]; [nhex release]; [nascii release];
+    });
 }
 
 void UIAppendLog(const char *text) {

@@ -6,6 +6,7 @@ void UIAppend(const char *text);
 void UIAppendLog(const char *text);
 void UIMonitorAppend(const char *text);
 void UIConnectionClosed(void);
+void UIAddPacket(const char *ts, const char *dir, const char *hex, const char *ascii, int len);
 
 char *GoListPorts(void);
 char *GoConnect(char *name, int baud, int dataBits, int stopBits, char *parity, int hexView);
