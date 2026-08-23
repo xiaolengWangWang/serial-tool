@@ -196,6 +196,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     Submenu(mainMenu, @"", appMenu);
 
     NSMenu *actionMenu = [[[NSMenu alloc] initWithTitle:@"操作"] autorelease];
+    Item(actionMenu, @"新建实例", @selector(newInstance:), @"n", NSEventModifierFlagCommand);
     Item(actionMenu, @"连接 / 断开", @selector(toggleConnect:), @"l", NSEventModifierFlagCommand);
     Item(actionMenu, @"发送一次", @selector(send:), @"\r", NSEventModifierFlagCommand);
     Item(actionMenu, @"定时发送开关", @selector(toggleTimer:), @"t", NSEventModifierFlagCommand);
@@ -260,6 +261,15 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _mode.enabled = YES;
     [self setStatus:@"● 未连接" color:NSColor.secondaryLabelColor];
     [self modeChanged:nil];
+}
+
+// 新建实例:用 open -n 强制再启动一个进程(多开)。
+- (void)newInstance:(id)sender {
+    NSString *path = [[NSBundle mainBundle] bundlePath];
+    NSTask *task = [[NSTask alloc] init];
+    task.launchPath = @"/usr/bin/open";
+    task.arguments = @[@"-n", path];
+    [task launch];
 }
 
 // 连接被动断开(远端关闭、串口拔出等),由 Go 引擎的 onClosed 回调触发。

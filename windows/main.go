@@ -101,6 +101,28 @@ func (a *application) createWindow() error {
 		Title:    "Go 网络与串口工具 v" + wincore.Version + " - Windows",
 		MinSize:  Size{Width: 1000, Height: 680},
 		Size:     Size{Width: 1180, Height: 760},
+		MenuItems: []MenuItem{
+			Menu{
+				Text: "操作",
+				Items: []MenuItem{
+					Action{Text:"新建实例", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyN}, OnTriggered: a.newInstance},
+					Action{Text:"连接 / 断开", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyL}, OnTriggered: a.toggleConnection},
+					Action{Text:"发送一次", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyReturn}, OnTriggered: func() { a.sendOnce(false) }},
+					Action{Text:"定时发送开关", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyT}, OnTriggered: a.toggleTimer},
+					Action{Text:"刷新串口", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyR}, OnTriggered: a.refreshPorts},
+					Action{Text:"虚拟串口映射", Shortcut: Shortcut{Modifiers: walk.ModControl | walk.ModShift, Key: walk.KeyV}, OnTriggered: a.openVSerial},
+				},
+			},
+			Menu{
+				Text: "视图",
+				Items: []MenuItem{
+					Action{Text:"清空接收区", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyK}, OnTriggered: func() { _ = a.receiveEdit.SetText("") }},
+					Action{Text:"导出接收数据", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyE}, OnTriggered: func() { a.exportText(a.receiveEdit.Text(), "serial-log", a.mw) }},
+					Action{Text:"HEX 显示开关", Shortcut: Shortcut{Modifiers: walk.ModControl | walk.ModShift, Key: walk.KeyH}, OnTriggered: a.toggleHexView},
+					Action{Text:"监控窗口", Shortcut: Shortcut{Modifiers: walk.ModControl | walk.ModShift, Key: walk.KeyM}, OnTriggered: a.openMonitor},
+				},
+			},
+		},
 		Layout:   HBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}},
 		Children: []Widget{
 			Composite{
@@ -150,6 +172,7 @@ func (a *application) createWindow() error {
 					Composite{Layout: HBox{}, Children: []Widget{
 						Label{Text: "接收数据"}, HSpacer{},
 						CheckBox{AssignTo: &a.hexView, Text: "HEX 显示", OnCheckedChanged: func() { a.hexDisplay.Store(a.hexView.Checked()) }},
+						PushButton{Text: "新建实例", OnClicked: a.newInstance},
 						PushButton{Text: "监控窗口", OnClicked: a.openMonitor},
 						PushButton{Text: "虚拟串口", OnClicked: a.openVSerial},
 						PushButton{Text: "导出", OnClicked: func() { a.exportText(a.receiveEdit.Text(), "serial-log", a.mw) }},
@@ -501,6 +524,24 @@ func (a *application) openMonitor() {
 		})
 	}
 	a.monitorWindow.Show()
+}
+
+// newInstance 启动一个新实例(多开)。
+func (a *application) newInstance() {
+	exe, err := os.Executable()
+	if err != nil {
+		a.showError(err)
+		return
+	}
+	if err := exec.Command(exe).Start(); err != nil {
+		a.showError(err)
+	}
+}
+
+func (a *application) toggleHexView() {
+	if a.hexView != nil {
+		a.hexView.SetChecked(!a.hexView.Checked())
+	}
 }
 
 // setupTray 让应用关闭窗口后仍在后台运行(托盘图标),点击图标恢复,右键可退出。
