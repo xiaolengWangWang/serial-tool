@@ -48,7 +48,14 @@ type application struct {
 	toolboxInput                          *walk.TextEdit
 	toolboxOutput                         *walk.Label
 	searchEdit                            *walk.LineEdit
-	fullLog                               string
+	dirFilter                             *walk.ComboBox
+	packetTable                           *walk.TableView
+	packetModel                           *packetTableModel
+	loopSend                              *walk.CheckBox
+	loopCount                             *walk.LineEdit
+	loopButton                            *walk.PushButton
+	loopMu                                sync.Mutex
+	loopCancel                            chan struct{}
 	vsWindow                              *walk.MainWindow
 	vsIP                                  *walk.ComboBox
 	vsPort                                *walk.LineEdit
@@ -78,6 +85,95 @@ func (m *vserialModel) Value(row, col int) interface{} {
 	return it.link
 }
 
+// Packet is a captured data frame shown in the packet table.
+type Packet struct {
+	TS        time.Time
+	Direction string // "RX" or "TX"
+	Hex       string
+	ASCII     string
+	Length    int
+}
+
+type packetTableModel struct {
+	walk.TableModelBase
+	all     []Packet
+	visible []Packet
+}
+
+func (m *packetTableModel) RowCount() int { return len(m.visible) }
+
+func (m *packetTableModel) Value(row, col int) interface{} {
+	if row >= len(m.visible) {
+		return ""
+	}
+	p := m.visible[row]
+	switch col {
+	case 0:
+		return p.TS.Format("15:04:05.000")
+	case 1:
+		return p.Direction
+	case 2:
+		return p.Hex
+	case 3:
+		return p.ASCII
+	case 4:
+		return fmt.Sprintf("%d B", p.Length)
+	}
+	return ""
+}
+
+func (m *packetTableModel) add(p Packet, kw, dir string) {
+	m.all = append(m.all, p)
+	if len(m.all) > 10000 {
+		m.all = m.all[len(m.all)-8000:]
+	}
+	if m.matches(p, kw, dir) {
+		m.visible = append(m.visible, p)
+		if len(m.visible) > 10000 {
+			m.visible = m.visible[len(m.visible)-8000:]
+		}
+		m.PublishRowsInserted(len(m.visible)-1, len(m.visible)-1)
+	}
+}
+
+func (m *packetTableModel) matches(p Packet, kw, dir string) bool {
+	if dir != "" && dir != "全部" && p.Direction != dir {
+		return false
+	}
+	if kw != "" {
+		kl := strings.ToLower(kw)
+		if !strings.Contains(strings.ToLower(p.Hex), kl) &&
+			!strings.Contains(strings.ToLower(p.ASCII), kl) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *packetTableModel) refilter(kw, dir string) {
+	m.visible = m.visible[:0]
+	for _, p := range m.all {
+		if m.matches(p, kw, dir) {
+			m.visible = append(m.visible, p)
+		}
+	}
+	m.PublishRowsReset()
+}
+
+func (m *packetTableModel) exportText() string {
+	var b strings.Builder
+	for _, p := range m.visible {
+		b.WriteString(fmt.Sprintf("[%s %s] %s\r\n", p.TS.Format("15:04:05.000"), p.Direction, p.Hex))
+	}
+	return b.String()
+}
+
+func (m *packetTableModel) clear() {
+	m.all = nil
+	m.visible = nil
+	m.PublishRowsReset()
+}
+
 func main() {
 	app := new(application)
 	configDir, err := os.UserConfigDir()
@@ -93,6 +189,7 @@ func main() {
 	}
 	app.engine.SetOnClosed(app.onClosed)
 	defer app.engine.Close()
+	app.packetModel = new(packetTableModel)
 	if err = app.createWindow(); err != nil {
 		walk.MsgBox(nil, "界面初始化失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
@@ -133,8 +230,12 @@ func (a *application) createWindow() error {
 			Menu{
 				Text: "视图",
 				Items: []MenuItem{
-					Action{Text:"清空接收区", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyK}, OnTriggered: func() { _ = a.receiveEdit.SetText("") }},
-					Action{Text:"导出接收数据", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyE}, OnTriggered: func() { a.exportText(a.receiveEdit.Text(), "serial-log", a.mw) }},
+					Action{Text:"清空接收区", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyK}, OnTriggered: func() {
+						if a.packetModel != nil { a.packetModel.clear() }
+					}},
+					Action{Text:"导出接收数据", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyE}, OnTriggered: func() {
+						if a.packetModel != nil { a.exportText(a.packetModel.exportText(), "serial-log", a.mw) }
+					}},
 					Action{Text:"HEX 显示开关", Shortcut: Shortcut{Modifiers: walk.ModControl | walk.ModShift, Key: walk.KeyH}, OnTriggered: a.toggleHexView},
 					Action{Text:"监控窗口", Shortcut: Shortcut{Modifiers: walk.ModControl | walk.ModShift, Key: walk.KeyM}, OnTriggered: a.openMonitor},
 				},
@@ -210,12 +311,23 @@ func (a *application) createWindow() error {
 						PushButton{Text: "监控窗口", OnClicked: a.openMonitor},
 						PushButton{Text: "虚拟串口", OnClicked: a.openVSerial},
 						PushButton{Text: "工具箱", OnClicked: a.openToolbox},
-						PushButton{Text: "导出", OnClicked: func() { a.exportText(a.receiveEdit.Text(), "serial-log", a.mw) }},
-						PushButton{Text: "清空", OnClicked: func() { _ = a.receiveEdit.SetText(""); a.fullLog = "" }},
+						PushButton{Text: "导出", OnClicked: func() {
+							if a.packetModel != nil { a.exportText(a.packetModel.exportText(), "serial-log", a.mw) }
+						}},
+						PushButton{Text: "清空", OnClicked: func() {
+							if a.packetModel != nil { a.packetModel.clear() }
+						}},
 					}},
 					Composite{Layout: HBox{}, Children: []Widget{
 						Label{Text: "搜索"},
 						LineEdit{AssignTo: &a.searchEdit, StretchFactor: 1},
+						ComboBox{AssignTo: &a.dirFilter, Model: []string{"全部", "RX", "TX"}, CurrentIndex: 0, MinSize: Size{Width: 72}, OnCurrentIndexChanged: func() {
+							if a.packetModel != nil {
+								kw := ""
+								if a.searchEdit != nil { kw = strings.TrimSpace(a.searchEdit.Text()) }
+								a.packetModel.refilter(kw, a.dirFilter.Text())
+							}
+						}},
 						PushButton{Text: "过滤", OnClicked: a.applyFilter},
 						PushButton{Text: "清除", OnClicked: a.clearFilter},
 					}},
@@ -223,7 +335,18 @@ func (a *application) createWindow() error {
 						StretchFactor: 6,
 						Pages: []TabPage{
 							TabPage{Title: "数据", Layout: VBox{}, Children: []Widget{
-								TextEdit{AssignTo: &a.receiveEdit, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: "Consolas", PointSize: 10}},
+								TableView{
+									AssignTo: &a.packetTable, Model: a.packetModel,
+									StretchFactor: 1, AlternatingRowBG: true, LastColumnStretched: true,
+									Font: Font{Family: "Consolas", PointSize: 9},
+									Columns: []TableViewColumn{
+										{Title: "时间", Width: 100},
+										{Title: "方向", Width: 48},
+										{Title: "HEX", Width: 300},
+										{Title: "ASCII", Width: 200},
+										{Title: "长度", Width: 70},
+									},
+								},
 							}},
 							TabPage{Title: "日志", Layout: VBox{}, Children: []Widget{
 								TextEdit{AssignTo: &a.logEdit, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: "Consolas", PointSize: 10}},
@@ -231,7 +354,10 @@ func (a *application) createWindow() error {
 						},
 					},
 					Composite{Layout: HBox{}, Children: []Widget{
-						Label{Text: "发送数据"}, HSpacer{}, CheckBox{AssignTo: &a.hexSend, Text: "HEX 发送", Checked: true},
+						Label{Text: "发送数据"}, HSpacer{},
+						CheckBox{AssignTo: &a.hexSend, Text: "HEX 发送", Checked: true},
+						CheckBox{AssignTo: &a.loopSend, Text: "循环"},
+						Label{Text: "次(0=一直)"}, LineEdit{AssignTo: &a.loopCount, Text: "0", MinSize: Size{Width: 52}, MaxSize: Size{Width: 65}},
 						Label{Text: "行尾"}, ComboBox{AssignTo: &a.eol, Model: []string{"无", "LF", "CR", "CRLF"}, CurrentIndex: 0, MinSize: Size{Width: 75}},
 						Label{Text: "间隔(ms)"}, LineEdit{AssignTo: &a.interval, Text: "1000", MinSize: Size{Width: 75}, MaxSize: Size{Width: 90}},
 					}},
@@ -245,6 +371,7 @@ func (a *application) createWindow() error {
 						TextEdit{AssignTo: &a.sendEdit, VScroll: true, HScroll: true, StretchFactor: 1, Font: Font{Family: "Consolas", PointSize: 10}},
 						Composite{MinSize: Size{Width: 100}, MaxSize: Size{Width: 110}, Layout: VBox{}, Children: []Widget{
 							PushButton{Text: "发送一次", StretchFactor: 1, OnClicked: func() { a.sendOnce(false) }},
+							PushButton{AssignTo: &a.loopButton, Text: "循环发送", StretchFactor: 1, OnClicked: a.toggleLoopSend},
 							PushButton{AssignTo: &a.timerButton, Text: "开始定时", StretchFactor: 1, OnClicked: a.toggleTimer},
 						}},
 					}},
@@ -444,19 +571,39 @@ func (a *application) sendOnce(fromTimer bool) {
 		return
 	}
 	a.refreshSendHistory()
-	// HTTP 模式的请求/响应由引擎日志与 onData 呈现,此处只记录其它模式的发送
 	if a.mode.Text() != "HTTP 客户端" {
-		var body string
-		if a.hexDisplay.Load() {
-			body = fmt.Sprintf("% X", []byte(input))
-			if data, e := wincore.ParseData(input, asHex, a.eol.Text()); e == nil {
-				body = fmt.Sprintf("% X", data)
-			}
+		var txData []byte
+		if data, e := wincore.ParseData(input, asHex, a.eol.Text()); e == nil {
+			txData = data
 		} else {
-			body = input
+			txData = []byte(input)
 		}
-		text := fmt.Sprintf("[%s 发送] %s\r\n", time.Now().Format("15:04:05.000"), body)
-		a.mw.Synchronize(func() { a.appendDisplay(a.receiveEdit, text) })
+		txHex := fmt.Sprintf("% X", txData)
+		var txASCII strings.Builder
+		for _, b := range txData {
+			if b >= 32 && b < 127 {
+				txASCII.WriteByte(b)
+			} else {
+				txASCII.WriteByte('.')
+			}
+		}
+		p := Packet{TS: time.Now(), Direction: "TX", Hex: txHex, ASCII: txASCII.String(), Length: len(txData)}
+		a.mw.Synchronize(func() {
+			if a.packetModel == nil {
+				return
+			}
+			kw, dir := "", "全部"
+			if a.searchEdit != nil {
+				kw = a.searchEdit.Text()
+			}
+			if a.dirFilter != nil {
+				dir = a.dirFilter.Text()
+			}
+			a.packetModel.add(p, kw, dir)
+			if a.packetTable != nil {
+				a.packetTable.EnsureItemVisible(a.packetModel.RowCount() - 1)
+			}
+		})
 	}
 }
 
@@ -527,18 +674,105 @@ func (a *application) stopTimer(logIt bool) {
 	}
 }
 
-func (a *application) onData(source string, data []byte) {
-	var body string
-	if a.hexDisplay.Load() {
-		body = fmt.Sprintf("% X", data)
-	} else {
-		body = strings.ReplaceAll(strings.ToValidUTF8(string(data), "�"), "\x00", "␀")
-		body = strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\n", "\r\n")
+func (a *application) toggleLoopSend() {
+	a.loopMu.Lock()
+	running := a.loopCancel != nil
+	a.loopMu.Unlock()
+	if running {
+		a.loopMu.Lock()
+		close(a.loopCancel)
+		a.loopCancel = nil
+		a.loopMu.Unlock()
+		if a.loopButton != nil {
+			a.loopButton.SetText("循环发送")
+		}
+		a.appendLog("循环发送已停止")
+		return
 	}
-	text := fmt.Sprintf("[%s 接收] %s\r\n", time.Now().Format("15:04:05.000"), body)
+	if !a.connected {
+		a.showError(fmt.Errorf("请先连接"))
+		return
+	}
+	n := 0
+	if a.loopCount != nil {
+		if v, err := strconv.Atoi(strings.TrimSpace(a.loopCount.Text())); err == nil && v >= 0 {
+			n = v
+		}
+	}
+	ms := 0
+	if v, err := strconv.Atoi(strings.TrimSpace(a.interval.Text())); err == nil && v >= 0 {
+		ms = v
+	}
+	cancel := make(chan struct{})
+	a.loopMu.Lock()
+	a.loopCancel = cancel
+	a.loopMu.Unlock()
+	if a.loopButton != nil {
+		a.loopButton.SetText("停止循环")
+	}
+	a.appendLog(fmt.Sprintf("循环发送已开始: %d 次, 间隔 %d ms", n, ms))
+	go func() {
+		count := 0
+		for {
+			select {
+			case <-cancel:
+				return
+			default:
+			}
+			if n > 0 && count >= n {
+				a.mw.Synchronize(func() {
+					a.loopMu.Lock()
+					if a.loopCancel == cancel {
+						a.loopCancel = nil
+					}
+					a.loopMu.Unlock()
+					if a.loopButton != nil {
+						a.loopButton.SetText("循环发送")
+					}
+					a.appendLog("循环发送完成")
+				})
+				return
+			}
+			a.sendOnce(true)
+			count++
+			if ms > 0 {
+				select {
+				case <-cancel:
+					return
+				case <-time.After(time.Duration(ms) * time.Millisecond):
+				}
+			}
+		}
+	}()
+}
+
+func (a *application) onData(source string, data []byte) {
+	hex := fmt.Sprintf("% X", data)
+	var asciiB strings.Builder
+	for _, b := range data {
+		if b >= 32 && b < 127 {
+			asciiB.WriteByte(b)
+		} else {
+			asciiB.WriteByte('.')
+		}
+	}
+	p := Packet{TS: time.Now(), Direction: "RX", Hex: hex, ASCII: asciiB.String(), Length: len(data)}
 	a.mw.Synchronize(func() {
-		a.appendDisplay(a.receiveEdit, text)
+		if a.packetModel != nil {
+			kw, dir := "", "全部"
+			if a.searchEdit != nil {
+				kw = a.searchEdit.Text()
+			}
+			if a.dirFilter != nil {
+				dir = a.dirFilter.Text()
+			}
+			a.packetModel.add(p, kw, dir)
+			if a.packetTable != nil {
+				a.packetTable.EnsureItemVisible(a.packetModel.RowCount() - 1)
+			}
+		}
 		if a.monitorEdit != nil {
+			text := fmt.Sprintf("[%s 接收] %s\r\n", p.TS.Format("15:04:05.000"), hex)
 			a.appendDisplay(a.monitorEdit, text)
 			if !a.monitorPaused {
 				a.monitorEdit.ScrollToCaret()
@@ -576,42 +810,32 @@ func (a *application) appendDisplay(edit *walk.TextEdit, text string) {
 	if edit == nil {
 		return
 	}
-	if edit == a.receiveEdit {
-		a.fullLog += text
-		if len(a.fullLog) > 4500000 {
-			a.fullLog = a.fullLog[len(a.fullLog)-4000000:]
-		}
-		if a.searchEdit != nil && strings.TrimSpace(a.searchEdit.Text()) != "" {
-			a.applyFilter()
-			return
-		}
-	}
 	if edit.TextLength()+len(text) > 4500000 {
 		_ = edit.SetText("[显示缓存已清理，完整数据仍保存在 SQLite]\r\n")
 	}
 	edit.AppendText(text)
 }
 
-// applyFilter 按搜索关键字过滤接收区(大小写不敏感)。
 func (a *application) applyFilter() {
-	kw := strings.ToLower(strings.TrimSpace(a.searchEdit.Text()))
-	if kw == "" {
-		_ = a.receiveEdit.SetText(a.fullLog)
+	if a.packetModel == nil {
 		return
 	}
-	var b strings.Builder
-	for _, line := range strings.Split(a.fullLog, "\n") {
-		if strings.Contains(strings.ToLower(line), kw) {
-			b.WriteString(line)
-			b.WriteString("\r\n")
-		}
+	kw := strings.TrimSpace(a.searchEdit.Text())
+	dir := "全部"
+	if a.dirFilter != nil {
+		dir = a.dirFilter.Text()
 	}
-	_ = a.receiveEdit.SetText(b.String())
+	a.packetModel.refilter(kw, dir)
 }
 
 func (a *application) clearFilter() {
 	_ = a.searchEdit.SetText("")
-	_ = a.receiveEdit.SetText(a.fullLog)
+	if a.dirFilter != nil {
+		_ = a.dirFilter.SetCurrentIndex(0)
+	}
+	if a.packetModel != nil {
+		a.packetModel.refilter("", "全部")
+	}
 }
 
 func (a *application) openMonitor() {
