@@ -684,7 +684,14 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSAlert *alert = [[[NSAlert alloc] init] autorelease];
     alert.messageText = @"网络与串口工具"; alert.informativeText = message; [alert runModal];
 }
-- (BOOL)windowShouldClose:(NSWindow *)sender { [NSApp terminate:nil]; return YES; }
+- (BOOL)windowShouldClose:(NSWindow *)sender {
+    [sender orderOut:nil];  // 关闭窗口仅隐藏,后台运行(连接/虚拟串口保持)
+    return NO;
+}
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag {
+    [_window makeKeyAndOrderFront:nil];
+    return YES;
+}
 - (void)applicationWillTerminate:(NSNotification *)note { [self stopTimer]; GoDisconnect(); }
 @end
 

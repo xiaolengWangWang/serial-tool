@@ -43,6 +43,7 @@ type application struct {
 	vsPort                                *walk.LineEdit
 	vsTable                               *walk.TableView
 	vsModel                               *vserialModel
+	notifyIcon                            *walk.NotifyIcon
 }
 
 // vserialEntry 与 vserialModel 是虚拟串口管理窗口的表格数据。
@@ -86,6 +87,7 @@ func main() {
 		walk.MsgBox(nil, "界面初始化失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
+	app.setupTray()
 	app.refreshPorts()
 	app.updateMode()
 	app.appendLog("SQLite 数据目录: " + app.engine.DataDir())
@@ -499,6 +501,46 @@ func (a *application) openMonitor() {
 		})
 	}
 	a.monitorWindow.Show()
+}
+
+// setupTray 让应用关闭窗口后仍在后台运行(托盘图标),点击图标恢复,右键可退出。
+func (a *application) setupTray() {
+	a.mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
+		*canceled = true
+		a.mw.Hide()
+	})
+	ni, err := walk.NewNotifyIcon(a.mw)
+	if err != nil {
+		return
+	}
+	a.notifyIcon = ni
+	if icon, err := walk.NewIconFromResourceId(2); err == nil {
+		_ = ni.SetIcon(icon)
+	}
+	_ = ni.SetToolTip("Go 网络与串口工具")
+	_ = ni.SetVisible(true)
+
+	ni.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
+		if button == walk.LeftButton {
+			a.mw.Show()
+		}
+	})
+
+	showAction := walk.NewAction()
+	showAction.SetText("显示主界面")
+	showAction.Triggered().Attach(func() {
+		a.mw.Show()
+	})
+	quitAction := walk.NewAction()
+	quitAction.SetText("退出")
+	quitAction.Triggered().Attach(func() {
+		a.stopTimer(false)
+		a.engine.Close()
+		walk.App().Exit(0)
+	})
+	_ = ni.ContextMenu().Actions().Add(showAction)
+	_ = ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
+	_ = ni.ContextMenu().Actions().Add(quitAction)
 }
 
 func (a *application) openVSerial() {
