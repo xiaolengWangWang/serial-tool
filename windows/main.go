@@ -18,7 +18,7 @@ import (
 	"serial-tool/internal/wincore"
 )
 
-var modes = []string{"串口", "TCP 服务端", "TCP 客户端", "UDP 服务端", "UDP 客户端", "串口服务器", "HTTP 客户端"}
+var modes = []string{"串口", "TCP", "UDP", "串口服务器", "HTTP 客户端"}
 
 type application struct {
 	mw                                    *walk.MainWindow
@@ -96,7 +96,7 @@ func main() {
 func (a *application) createWindow() error {
 	return (MainWindow{
 		AssignTo: &a.mw,
-		Title:    "Go 网络与串口工具 - Windows",
+		Title:    "Go 网络与串口工具 v" + wincore.Version + " - Windows",
 		MinSize:  Size{Width: 1000, Height: 680},
 		Size:     Size{Width: 1180, Height: 760},
 		Layout:   HBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}},
@@ -194,26 +194,19 @@ func (a *application) updateMode() {
 	if a.mode == nil || a.serialGroup == nil {
 		return
 	}
-	mode := wincore.Mode(a.mode.Text())
-	spec := wincore.SpecOf(mode)
+	spec := wincore.SpecOf(a.uiMode())
 	a.serialGroup.SetEnabled(spec.NeedsSerial && !a.connected)
 	a.networkGroup.SetEnabled(spec.NeedsNet && !a.connected)
-	if spec.NeedsProto {
-		a.protocol.SetEnabled(!a.connected)
-		a.role.SetEnabled(!a.connected)
-	} else {
-		switch mode {
-		case wincore.ModeTCPServer:
-			a.setProtocolRole(0, 0)
-		case wincore.ModeTCPClient:
-			a.setProtocolRole(0, 1)
-		case wincore.ModeUDPServer:
-			a.setProtocolRole(1, 0)
-		case wincore.ModeUDPClient:
-			a.setProtocolRole(1, 1)
+	// 协议:TCP/UDP 模式由模式决定并禁用,仅串口服务器可改;角色:TCP/UDP/串口服务器可改
+	net := a.mode.Text() == "TCP" || a.mode.Text() == "UDP"
+	a.protocol.SetEnabled(spec.NeedsProto && !a.connected)
+	a.role.SetEnabled((spec.NeedsRole || net) && !a.connected)
+	if net {
+		idx := 0
+		if a.mode.Text() == "UDP" {
+			idx = 1
 		}
-		a.protocol.SetEnabled(false)
-		a.role.SetEnabled(false)
+		_ = a.protocol.SetCurrentIndex(idx)
 	}
 	a.updateAddressDefault()
 	if !a.connected {
@@ -221,13 +214,9 @@ func (a *application) updateMode() {
 	}
 }
 
-func (a *application) setProtocolRole(protocol, role int) {
-	_ = a.protocol.SetCurrentIndex(protocol)
-	_ = a.role.SetCurrentIndex(role)
-}
-
 func (a *application) updateAddressDefault() {
-	if a.address == nil || a.mode == nil || a.connected || a.mode.Text() == string(wincore.ModeSerial) {
+	mode := a.mode.Text()
+	if a.address == nil || a.mode == nil || a.connected || mode == "串口" || mode == "HTTP 客户端" {
 		return
 	}
 	if a.isServer() {
@@ -239,7 +228,28 @@ func (a *application) updateAddressDefault() {
 
 func (a *application) isServer() bool {
 	mode := a.mode.Text()
-	return strings.HasSuffix(mode, "服务端") || (mode == string(wincore.ModeSerialServer) && a.role.Text() == "服务端")
+	if mode == "TCP" || mode == "UDP" || mode == "串口服务器" {
+		return a.role.Text() == "服务端"
+	}
+	return false
+}
+
+// uiMode 把 UI 的「5 模式 + 角色」映射到引擎的 Mode 枚举。
+func (a *application) uiMode() wincore.Mode {
+	switch a.mode.Text() {
+	case "TCP":
+		if a.isServer() {
+			return wincore.ModeTCPServer
+		}
+		return wincore.ModeTCPClient
+	case "UDP":
+		if a.isServer() {
+			return wincore.ModeUDPServer
+		}
+		return wincore.ModeUDPClient
+	default:
+		return wincore.Mode(a.mode.Text())
+	}
 }
 
 func (a *application) config() (wincore.Config, error) {
@@ -269,7 +279,7 @@ func (a *application) config() (wincore.Config, error) {
 		_ = a.address.SetText(address)
 	}
 	return wincore.BuildConfig(wincore.ConnParams{
-		Mode: wincore.Mode(a.mode.Text()), SerialName: strings.TrimSpace(a.ports.Text()), Address: address,
+		Mode: a.uiMode(), SerialName: strings.TrimSpace(a.ports.Text()), Address: address,
 		Baud: baud, DataBits: dataBits, StopBits: stopBits, Parity: a.parity.Text(),
 		Protocol: a.protocol.Text(), Role: a.role.Text(),
 	})

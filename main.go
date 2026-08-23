@@ -21,8 +21,8 @@ import (
 	"serial-tool/internal/wincore"
 )
 
-// version 为当前版本号,构建时可用 -ldflags "-X main.version=vX.Y.Z" 覆盖。
-var version = "0.3.0"
+// version 为当前版本号,默认取 wincore.Version,构建时可用 -ldflags "-X main.version=vX.Y.Z" 覆盖。
+var version = wincore.Version
 
 func main() {
 	if err := run(); err != nil {
