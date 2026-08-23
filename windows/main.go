@@ -31,7 +31,7 @@ type application struct {
 	netIP, netPort, interval             *walk.LineEdit
 	serialGroup, networkGroup             *walk.GroupBox
 	connectButton, timerButton            *walk.PushButton
-	status                                *walk.Label
+	status, statusDot                     *walk.Label
 	addressLabel, portLabel               *walk.Label
 	receiveEdit, sendEdit, logEdit        *walk.TextEdit
 	hexView, hexSend                      *walk.CheckBox
@@ -143,7 +143,7 @@ func (a *application) createWindow() error {
 		Layout:   HBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}},
 		Children: []Widget{
 			Composite{
-				MinSize: Size{Width: 300}, MaxSize: Size{Width: 330}, Layout: VBox{},
+				MinSize: Size{Width: 240}, MaxSize: Size{Width: 260}, Layout: VBox{},
 				Font: Font{PointSize: 10},
 				Children: []Widget{
 					Label{Text: "工作模式", Font: Font{PointSize: 10}},
@@ -192,7 +192,10 @@ func (a *application) createWindow() error {
 						},
 					},
 					VSpacer{},
-					Label{AssignTo: &a.status, Text: "● 未连接", Font: Font{PointSize: 11}},
+					Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{
+						Label{AssignTo: &a.statusDot, Text: "●", MinSize: Size{Width: 18}, Font: Font{PointSize: 13}},
+						Label{AssignTo: &a.status, Text: "未连接", Font: Font{PointSize: 11}},
+					}},
 					PushButton{AssignTo: &a.connectButton, Text: "连接", MinSize: Size{Height: 42}, OnClicked: a.toggleConnection, Font: Font{PointSize: 11}},
 					Label{Text: "数据库按日期和 100 MiB 自动分文件", Font: Font{PointSize: 9}},
 				},
@@ -217,7 +220,7 @@ func (a *application) createWindow() error {
 						PushButton{Text: "清除", OnClicked: a.clearFilter},
 					}},
 					TabWidget{
-						StretchFactor: 4,
+						StretchFactor: 6,
 						Pages: []TabPage{
 							TabPage{Title: "数据", Layout: VBox{}, Children: []Widget{
 								TextEdit{AssignTo: &a.receiveEdit, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: "Consolas", PointSize: 10}},
@@ -395,7 +398,7 @@ func (a *application) toggleConnection() {
 		a.engine.Disconnect()
 		a.connected = false
 		a.mode.SetEnabled(true)
-		a.status.SetText("● 未连接")
+		a.setConnStatus(colorGray, "未连接")
 		a.updateMode()
 		a.appendLog("已停止")
 		return
@@ -406,13 +409,13 @@ func (a *application) toggleConnection() {
 		return
 	}
 	a.connectButton.SetEnabled(false)
-	a.status.SetText("● 正在连接...")
+	a.setConnStatus(colorYellow, "正在连接...")
 	go func() {
 		err := a.engine.Connect(cfg)
 		a.mw.Synchronize(func() {
 			a.connectButton.SetEnabled(true)
 			if err != nil {
-				a.status.SetText("● 连接失败")
+				a.setConnStatus(colorRed, "连接失败")
 				a.showError(err)
 				return
 			}
@@ -421,7 +424,11 @@ func (a *application) toggleConnection() {
 			a.serialGroup.SetEnabled(false)
 			a.networkGroup.SetEnabled(false)
 			a.connectButton.SetText(map[bool]string{true: "停止监听", false: "断开"}[a.isServer()])
-			a.status.SetText(map[bool]string{true: "● 监听中", false: "● 已连接"}[a.isServer()])
+			if a.isServer() {
+				a.setConnStatus(colorBlue, "监听中")
+			} else {
+				a.setConnStatus(colorGreen, "已连接")
+			}
 		})
 	}()
 }
@@ -550,7 +557,7 @@ func (a *application) onClosed() {
 		a.engine.Disconnect()
 		a.connected = false
 		a.mode.SetEnabled(true)
-		a.status.SetText("● 未连接")
+		a.setConnStatus(colorGray, "未连接")
 		a.updateMode()
 		a.appendLog("连接已断开")
 	})
@@ -638,6 +645,24 @@ func (a *application) openMonitor() {
 	a.monitorWindow.Show()
 }
 
+var (
+	colorGray   = walk.RGB(140, 140, 140)
+	colorGreen  = walk.RGB(40, 180, 60)
+	colorYellow = walk.RGB(210, 150, 0)
+	colorRed    = walk.RGB(210, 50, 50)
+	colorBlue   = walk.RGB(30, 120, 220)
+)
+
+// setConnStatus 同时更新灯颜色与文字。
+func (a *application) setConnStatus(color walk.Color, text string) {
+	if a.statusDot != nil {
+		a.statusDot.SetTextColor(color)
+	}
+	if a.status != nil {
+		_ = a.status.SetText(text)
+	}
+}
+
 // statsLoop 每秒刷新一次状态栏(连接状态 + RX/TX/运行时间/重连/错误)。
 func (a *application) statsLoop() {
 	ticker := time.NewTicker(time.Second)
@@ -648,33 +673,35 @@ func (a *application) statsLoop() {
 	}
 }
 
-// updateStatus 根据统计快照刷新状态栏文本。
+// updateStatus 根据统计快照刷新状态栏文本与灯色。
 func (a *application) updateStatus(st wincore.Stats) {
 	if a.status == nil {
 		return
 	}
-	state := "● 未连接"
-	switch st.State {
-	case wincore.StateConnecting:
-		state = "● 正在连接..."
-	case wincore.StateConnected:
-		state = "● 已连接"
-	case wincore.StateReconnecting:
-		state = "● 重连中..."
-	case wincore.StateError:
-		state = "● 错误"
+	type dot struct {
+		color walk.Color
+		label string
 	}
-	if st.State == wincore.StateDisconnected {
-		a.status.SetText(state)
+	d := map[wincore.ConnState]dot{
+		wincore.StateDisconnected: {colorGray, "未连接"},
+		wincore.StateConnecting:   {colorYellow, "正在连接..."},
+		wincore.StateConnected:    {colorGreen, "已连接"},
+		wincore.StateReconnecting: {colorYellow, "重连中..."},
+		wincore.StateError:        {colorRed, "错误"},
+	}[st.State]
+	if d.label == "" {
+		d = dot{colorGray, "未连接"}
+	}
+	if st.State == wincore.StateDisconnected || st.State == wincore.StateError {
+		a.setConnStatus(d.color, d.label)
 		return
 	}
-	a.status.SetText(fmt.Sprintf("%s | RX %s | TX %s | 运行 %s | 重连 %d | 错误 %d",
-		state,
+	a.setConnStatus(d.color, fmt.Sprintf("%s  RX %s  TX %s  运行 %s  重连 %d",
+		d.label,
 		wincore.FormatBytes(st.RXBytes),
 		wincore.FormatBytes(st.TXBytes),
 		wincore.FormatDuration(time.Since(st.StartedAt)),
-		st.Reconnects,
-		st.Errors))
+		st.Reconnects))
 }
 
 func (a *application) refreshSendHistory() {
