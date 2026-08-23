@@ -80,7 +80,7 @@ GET /api/v1/health
 - 在"串口"模式点刷新,列表会包含这些虚拟串口设备,可直接打开
 - 用法:`screen /tmp/CommBox-vserial-<PID>-1 115200`,或用另一个串口工具/本工具第二实例打开
 
-> Windows 无 PTY,暂不提供虚拟串口。
+> Windows 无 PTY,虚拟串口依赖 com0com 驱动(未安装时会提示安装);macOS/Linux 用 PTY,无需额外驱动。
 
 ## 数据存储
 
