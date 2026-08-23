@@ -839,7 +839,9 @@ func (a *application) openVSerial() {
 
 func (a *application) installDriver() {
 	if err := wincore.InstallCom0comDriver(); err != nil {
-		a.showError(err)
+		// 内嵌驱动未包含安装程序时,回退到打开下载页
+		_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", "https://com0com.sourceforge.net/").Start()
+		a.showError(fmt.Errorf("%v\n\n已打开 com0com 下载页,请手动下载安装。", err))
 		return
 	}
 	a.appendLog("已请求安装 com0com 驱动,请在弹出的 UAC 窗口中确认")
