@@ -1,4 +1,4 @@
-# Go 串口 / 网络工具
+# CommBox —— 通信调试工具
 
 一个跨平台的串口与网络调试工具:命令行 + macOS / Windows 原生桌面版,共享同一套核心引擎(`internal/wincore`)。支持串口、TCP/UDP 服务端与客户端、串口↔网络透传、HTTP 客户端、虚拟串口,以及全量 SQLite 收发存档。
 
@@ -15,15 +15,15 @@
 ## 命令行
 
 ```bash
-go build -o serial-tool .
+go build -o commbox .
 
-./serial-tool -list                                             # 列出串口
-./serial-tool -version                                          # 显示版本号
-./serial-tool -port /dev/tty.usbserial-0001 -baud 115200 -eol crlf   # 文本收发
-./serial-tool -port /dev/tty.usbserial-0001 -baud 9600 -hex -hex-send # HEX 收发
-./serial-tool vserial --host 127.0.0.1 --port 7000              # 虚拟串口(桥接 TCP 到本机串口设备)
+./commbox -list                                             # 列出串口
+./commbox -version                                          # 显示版本号
+./commbox -port /dev/tty.usbserial-0001 -baud 115200 -eol crlf   # 文本收发
+./commbox -port /dev/tty.usbserial-0001 -baud 9600 -hex -hex-send # HEX 收发
+./commbox vserial --host 127.0.0.1 --port 7000              # 虚拟串口(桥接 TCP 到本机串口设备)
 ```
-Windows 串口名可写 `COM3`。`./serial-tool -h` 查看全部参数。
+Windows 串口名可写 `COM3`。`./commbox -h` 查看全部参数。
 
 ## 桌面版功能总览
 
@@ -74,11 +74,11 @@ GET /api/v1/health
 把一个 TCP 端点桥接成本机虚拟串口设备,供任意串口软件打开(内置等价于 `socat PTY,raw TCP:host:port`)。
 
 - 菜单 **操作 → 虚拟串口映射**(⌘⇧V)打开管理窗口
-- 填 IP + 端口 → **添加映射**,生成设备如 `/tmp/GoSerialTool-vserial-<PID>-1`(设备名带进程 PID,多实例不会撞名)
+- 填 IP + 端口 → **添加映射**,生成设备如 `/tmp/CommBox-vserial-<PID>-1`(设备名带进程 PID,多实例不会撞名)
 - **后台常驻,可同时多个**,与主连接互不影响
 - **自动重连**:被桥接的服务端空闲断开后,设备保留并自动重连
 - 在"串口"模式点刷新,列表会包含这些虚拟串口设备,可直接打开
-- 用法:`screen /tmp/GoSerialTool-vserial-<PID>-1 115200`,或用另一个串口工具/本工具第二实例打开
+- 用法:`screen /tmp/CommBox-vserial-<PID>-1 115200`,或用另一个串口工具/本工具第二实例打开
 
 > Windows 无 PTY,暂不提供虚拟串口。
 
@@ -92,7 +92,7 @@ GET /api/v1/health
 | `串口`/`TCP …`/`UDP …`/`HTTP …` | 收到的报文 |
 | `断开` | 被动断开事件 |
 
-`raw_data` 保存无损 BLOB,`text_data` 保存 UTF-8 文本,`received_at` 为毫秒时间戳。数据库位于 `~/Library/Application Support/GoSerialTool/data`(Windows 为对应 `%AppData%`),按日期和 100 MiB 自动滚动分文件。监控窗口可直接打开数据目录。
+`raw_data` 保存无损 BLOB,`text_data` 保存 UTF-8 文本,`received_at` 为毫秒时间戳。数据库位于 `~/Library/Application Support/CommBox/data`(Windows 为对应 `%AppData%`),按日期和 100 MiB 自动滚动分文件。监控窗口可直接打开数据目录。
 
 ## 快捷键(macOS)
 
@@ -114,17 +114,17 @@ GET /api/v1/health
 
 ```bash
 # 命令行(多平台,纯 Go)
-CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X main.version=0.3.0' -o serial-tool .
+CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X main.version=0.3.0' -o commbox .
 
 # Windows 桌面版(可交叉编译)
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath \
-  -ldflags='-s -w -H windowsgui' -o build/windows/GoSerialTool.exe ./windows
+  -ldflags='-s -w -H windowsgui' -o build/windows/CommBox.exe ./windows
 
 # macOS 桌面版(需在 macOS 上用 CGo 构建)
-mkdir -p 'build/Go 串口工具.app/Contents/MacOS'
-cp desktop/Info.plist 'build/Go 串口工具.app/Contents/Info.plist'
-go build -o 'build/Go 串口工具.app/Contents/MacOS/GoSerialTool' ./desktop
-codesign --force --deep --sign - 'build/Go 串口工具.app'
+mkdir -p 'build/CommBox.app/Contents/MacOS'
+cp desktop/Info.plist 'build/CommBox.app/Contents/Info.plist'
+go build -o 'build/CommBox.app/Contents/MacOS/CommBox' ./desktop
+codesign --force --deep --sign - 'build/CommBox.app'
 ```
 
 运行测试:`go test ./...`

@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleExecutable</key><string>GoSerialTool</string>
-  <key>CFBundleIdentifier</key><string>local.goserialtool</string>
-  <key>CFBundleName</key><string>Go 串口工具</string>
-  <key>CFBundleDisplayName</key><string>Go 串口工具</string>
+  <key>CFBundleExecutable</key><string>CommBox</string>
+  <key>CFBundleIdentifier</key><string>local.commbox</string>
+  <key>CFBundleName</key><string>CommBox</string>
+  <key>CFBundleDisplayName</key><string>CommBox</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0.0</string>
+  <key>CFBundleShortVersionString</key><string>0.3.0</string>
   <key>LSMinimumSystemVersion</key><string>10.15</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

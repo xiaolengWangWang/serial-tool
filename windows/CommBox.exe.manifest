@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity version="1.0.0.0" processorArchitecture="amd64" name="GoSerialTool" type="win32"/>
-  <description>Go 网络与串口工具</description>
+  <assemblyIdentity version="1.0.0.0" processorArchitecture="amd64" name="CommBox" type="win32"/>
+  <description>CommBox</description>
   <dependency>
     <dependentAssembly>
       <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0"

@@ -62,7 +62,7 @@ func (e *Engine) AddVirtualSerial(addr string) (VSerialInfo, error) {
 	id := e.vseq
 	e.Unlock()
 	// 设备名带进程 PID,保证多实例(多进程)不会撞名、互相覆盖软链
-	link := fmt.Sprintf("/tmp/GoSerialTool-vserial-%d-%d", os.Getpid(), id)
+	link := fmt.Sprintf("/tmp/CommBox-vserial-%d-%d", os.Getpid(), id)
 	_ = os.Remove(link)
 	if os.Symlink(tty.Name(), link) != nil {
 		link = tty.Name() // 建软链失败则用真实设备路径

@@ -63,7 +63,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     char *ver = GoVersion();
     NSString *version = [NSString stringWithUTF8String:ver ?: ""];
     free(ver);
-    _window.title = [NSString stringWithFormat:@"Go 网络与串口工具 v%@", version];
+    _window.title = [NSString stringWithFormat:@"CommBox v%@", version];
     _window.contentMinSize = NSMakeSize(900, 700);
     _window.delegate = self;
     [_window center];
@@ -692,7 +692,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 }
 - (void)alert:(NSString *)message {
     NSAlert *alert = [[[NSAlert alloc] init] autorelease];
-    alert.messageText = @"网络与串口工具"; alert.informativeText = message; [alert runModal];
+    alert.messageText = @"CommBox"; alert.informativeText = message; [alert runModal];
 }
 - (BOOL)windowShouldClose:(NSWindow *)sender {
     [sender orderOut:nil];  // 关闭窗口仅隐藏,后台运行(连接/虚拟串口保持)

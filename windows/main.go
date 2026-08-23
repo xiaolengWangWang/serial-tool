@@ -72,10 +72,10 @@ func main() {
 	app := new(application)
 	configDir, err := os.UserConfigDir()
 	if err != nil {
-		walk.MsgBox(nil, "Go 网络与串口工具", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		walk.MsgBox(nil, "CommBox", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
-	dataDir := filepath.Join(configDir, "GoSerialTool", "data")
+	dataDir := filepath.Join(configDir, "CommBox", "data")
 	app.engine, err = wincore.New(dataDir, app.onData, app.onLog)
 	if err != nil {
 		walk.MsgBox(nil, "SQLite 初始化失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
@@ -98,7 +98,7 @@ func main() {
 func (a *application) createWindow() error {
 	return (MainWindow{
 		AssignTo: &a.mw,
-		Title:    "Go 网络与串口工具 v" + wincore.Version + " - Windows",
+		Title:    "CommBox v" + wincore.Version + " - Windows",
 		MinSize:  Size{Width: 1000, Height: 680},
 		Size:     Size{Width: 1180, Height: 760},
 		MenuItems: []MenuItem{
@@ -558,7 +558,7 @@ func (a *application) setupTray() {
 	if icon, err := walk.NewIconFromResourceId(2); err == nil {
 		_ = ni.SetIcon(icon)
 	}
-	_ = ni.SetToolTip("Go 网络与串口工具")
+	_ = ni.SetToolTip("CommBox")
 	_ = ni.SetVisible(true)
 
 	ni.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
@@ -689,5 +689,5 @@ func (a *application) showError(err error) {
 	if a.mw != nil {
 		owner = a.mw
 	}
-	walk.MsgBox(owner, "Go 网络与串口工具", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+	walk.MsgBox(owner, "CommBox", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 }

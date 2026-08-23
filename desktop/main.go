@@ -29,7 +29,7 @@ func main() {
 	if err != nil {
 		return
 	}
-	engine, err = wincore.New(filepath.Join(configDir, "GoSerialTool", "data"), onData, onLog)
+	engine, err = wincore.New(filepath.Join(configDir, "CommBox", "data"), onData, onLog)
 	if err != nil {
 		return
 	}

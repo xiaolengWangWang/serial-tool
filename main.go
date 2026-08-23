@@ -118,7 +118,7 @@ func runVSerial(args []string) error {
 	}
 	addr := net.JoinHostPort(*host, strconv.Itoa(*port))
 
-	dataDir := filepath.Join(os.TempDir(), "GoSerialTool-cli")
+	dataDir := filepath.Join(os.TempDir(), "CommBox-cli")
 	engine, err := wincore.New(dataDir, nil, func(s string) {
 		fmt.Fprintln(os.Stderr, s)
 	})
