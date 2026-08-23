@@ -7,9 +7,12 @@ import (
 	"time"
 )
 
-// backoffDelay 返回第 attempt 次重连的等待时长(2/4/8/16/30s,封顶 30s)。
-func backoffDelay(attempt int) time.Duration {
-	d := time.Duration(1<<uint(attempt+1)) * time.Second
+// backoffDelay 返回第 attempt 次重连的等待时长(基于 base 指数退避,封顶 30s)。
+func backoffDelay(base time.Duration, attempt int) time.Duration {
+	if base <= 0 {
+		base = 2 * time.Second
+	}
+	d := time.Duration(1<<uint(attempt)) * base
 	if d > 30*time.Second {
 		d = 30 * time.Second
 	}
@@ -27,7 +30,7 @@ func (e *Engine) reconnectTCP() {
 		select {
 		case <-e.reconnectStop:
 			return
-		case <-time.After(backoffDelay(attempt)):
+		case <-time.After(backoffDelay(e.reconnectInterval, attempt)):
 		}
 		conn, err := net.Dial("tcp", addr)
 		if err != nil {

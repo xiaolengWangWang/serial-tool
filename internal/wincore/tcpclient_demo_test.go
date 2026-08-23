@@ -81,7 +81,7 @@ func TestTCPClientAutoReconnect(t *testing.T) {
 	}
 	defer engine.Close()
 
-	if err := engine.Connect(Config{Mode: ModeTCPClient, Address: listener.Addr().String()}); err != nil {
+	if err := engine.Connect(Config{Mode: ModeTCPClient, Address: listener.Addr().String(), AutoReconnect: true}); err != nil {
 		t.Fatal(err)
 	}
 

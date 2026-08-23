@@ -139,6 +139,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     receiveTitle.font = [NSFont boldSystemFontOfSize:14]; [view addSubview:receiveTitle];
     _hexView = [[NSButton checkboxWithTitle:@"HEX 显示" target:self action:@selector(hexViewChanged:)] retain];
     _hexView.frame = NSMakeRect(590, 653, 100, 26); _hexView.autoresizingMask = NSViewMinXMargin; [view addSubview:_hexView];
+    _hexView.state = NSControlStateValueOn;
+    GoSetHexView(1);
     NSButton *monitor = [NSButton buttonWithTitle:@"监控窗口" target:self action:@selector(openMonitor:)];
     monitor.frame = NSMakeRect(700, 652, 110, 28); monitor.autoresizingMask = NSViewMinXMargin; [view addSubview:monitor];
     NSButton *export = [NSButton buttonWithTitle:@"导出" target:self action:@selector(exportLog:)];

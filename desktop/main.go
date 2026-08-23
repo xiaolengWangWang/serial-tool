@@ -217,7 +217,7 @@ func GoListen(address *C.char, hex C.int) *C.char {
 //export GoConnectTCP
 func GoConnectTCP(address *C.char, hex C.int) *C.char {
 	hexMode.Store(hex != 0)
-	if err := engine.Connect(wincore.Config{Mode: wincore.ModeTCPClient, Address: C.GoString(address)}); err != nil {
+	if err := engine.Connect(wincore.Config{Mode: wincore.ModeTCPClient, Address: C.GoString(address), AutoReconnect: true}); err != nil {
 		return C.CString(err.Error())
 	}
 	return C.CString("")

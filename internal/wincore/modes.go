@@ -3,6 +3,7 @@ package wincore
 import (
 	"errors"
 	"strings"
+	"time"
 )
 
 // Version 是当前版本号,CLI 与两端桌面版共用(CLI 构建时可用 -ldflags "-X main.version=..." 覆盖)。
@@ -49,15 +50,17 @@ func SpecOf(m Mode) ModeSpec {
 
 // ConnParams 是一次连接所需的扁平参数(两端 UI 收集后统一构建 Config)。
 type ConnParams struct {
-	Mode       Mode
-	SerialName string
-	Address    string
-	Baud       int
-	DataBits   int
-	StopBits   int
-	Parity     string
-	Protocol   string
-	Role       string
+	Mode              Mode
+	SerialName        string
+	Address           string
+	Baud              int
+	DataBits          int
+	StopBits          int
+	Parity            string
+	Protocol          string
+	Role              string
+	AutoReconnect     bool
+	ReconnectInterval time.Duration
 }
 
 // BuildConfig 按模式校验参数并构建 Config(串口参数有效性、必填地址等)。
@@ -78,14 +81,16 @@ func BuildConfig(p ConnParams) (Config, error) {
 		return Config{}, errors.New("请输入 IP:端口")
 	}
 	return Config{
-		Mode:       p.Mode,
-		SerialName: p.SerialName,
-		Address:    p.Address,
-		Baud:       p.Baud,
-		DataBits:   p.DataBits,
-		StopBits:   p.StopBits,
-		Parity:     p.Parity,
-		Protocol:   p.Protocol,
-		Role:       p.Role,
+		Mode:              p.Mode,
+		SerialName:        p.SerialName,
+		Address:           p.Address,
+		Baud:              p.Baud,
+		DataBits:          p.DataBits,
+		StopBits:          p.StopBits,
+		Parity:            p.Parity,
+		Protocol:          p.Protocol,
+		Role:              p.Role,
+		AutoReconnect:     p.AutoReconnect,
+		ReconnectInterval: p.ReconnectInterval,
 	}, nil
 }

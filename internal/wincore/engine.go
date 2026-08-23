@@ -32,15 +32,17 @@ const (
 )
 
 type Config struct {
-	Mode       Mode
-	SerialName string
-	Baud       int
-	DataBits   int
-	StopBits   int
-	Parity     string
-	Protocol   string
-	Role       string
-	Address    string
+	Mode              Mode
+	SerialName        string
+	Baud              int
+	DataBits          int
+	StopBits          int
+	Parity            string
+	Protocol          string
+	Role              string
+	Address           string
+	AutoReconnect     bool
+	ReconnectInterval time.Duration
 }
 
 type Engine struct {
@@ -73,6 +75,7 @@ type Engine struct {
 	startedAt    int64
 	reconnectAddr string
 	reconnectStop chan struct{}
+	reconnectInterval time.Duration
 	histMu       sync.Mutex
 	favorites    map[string]string
 	sendHistory  []string
@@ -430,9 +433,10 @@ func (e *Engine) Connect(cfg Config) error {
 	e.udp, e.udpPeer, e.udpDialed = udp, peer, udpDialed
 	e.bridge = cfg.Mode == ModeSerialServer
 	e.mode = cfg.Mode
-	if cfg.Mode == ModeTCPClient {
+	if cfg.Mode == ModeTCPClient && cfg.AutoReconnect {
 		e.reconnectAddr = cfg.Address
 		e.reconnectStop = make(chan struct{})
+		e.reconnectInterval = cfg.ReconnectInterval
 	} else {
 		e.reconnectAddr = ""
 		e.reconnectStop = nil

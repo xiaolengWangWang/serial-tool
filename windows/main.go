@@ -26,6 +26,8 @@ type application struct {
 	mode, ports, baud, data, parity, stop *walk.ComboBox
 	protocol, role, eol                   *walk.ComboBox
 	sendHistory, favorites               *walk.ComboBox
+	autoReconnect                        *walk.CheckBox
+	reconnectInterval                    *walk.LineEdit
 	address, interval                     *walk.LineEdit
 	serialGroup, networkGroup             *walk.GroupBox
 	connectButton, timerButton            *walk.PushButton
@@ -98,6 +100,7 @@ func main() {
 	app.setupTray()
 	app.refreshPorts()
 	app.updateMode()
+	app.hexDisplay.Store(true)
 	app.refreshSendHistory()
 	app.refreshFavorites()
 	app.appendLog("SQLite 数据目录: " + app.engine.DataDir())
@@ -169,6 +172,11 @@ func (a *application) createWindow() error {
 								Label{Text: "协议", MinSize: Size{Width: 45}}, ComboBox{AssignTo: &a.protocol, Model: []string{"TCP", "UDP"}, CurrentIndex: 0},
 								Label{Text: "角色"}, ComboBox{AssignTo: &a.role, Model: []string{"服务端", "客户端"}, CurrentIndex: 0, OnCurrentIndexChanged: a.updateMode},
 							}},
+							Composite{Layout: HBox{}, Children: []Widget{
+								CheckBox{AssignTo: &a.autoReconnect, Text: "自动重连", Checked: true},
+								Label{Text: "重连间隔(秒)"},
+								LineEdit{AssignTo: &a.reconnectInterval, Text: "2", MinSize: Size{Width: 50}},
+							}},
 						},
 					},
 					VSpacer{},
@@ -182,7 +190,7 @@ func (a *application) createWindow() error {
 				Children: []Widget{
 					Composite{Layout: HBox{}, Children: []Widget{
 						Label{Text: "接收数据"}, HSpacer{},
-						CheckBox{AssignTo: &a.hexView, Text: "HEX 显示", OnCheckedChanged: func() { a.hexDisplay.Store(a.hexView.Checked()) }},
+						CheckBox{AssignTo: &a.hexView, Text: "HEX 显示", Checked: true, OnCheckedChanged: func() { a.hexDisplay.Store(a.hexView.Checked()) }},
 						PushButton{Text: "新建实例", OnClicked: a.newInstance},
 						PushButton{Text: "监控窗口", OnClicked: a.openMonitor},
 						PushButton{Text: "虚拟串口", OnClicked: a.openVSerial},
@@ -340,10 +348,16 @@ func (a *application) config() (wincore.Config, error) {
 		}
 		_ = a.address.SetText(address)
 	}
+	autoReconnect := a.autoReconnect.Checked()
+	interval := 2
+	if v, err := strconv.Atoi(a.reconnectInterval.Text()); err == nil && v > 0 {
+		interval = v
+	}
 	return wincore.BuildConfig(wincore.ConnParams{
 		Mode: a.uiMode(), SerialName: strings.TrimSpace(a.ports.Text()), Address: address,
 		Baud: baud, DataBits: dataBits, StopBits: stopBits, Parity: a.parity.Text(),
 		Protocol: a.protocol.Text(), Role: a.role.Text(),
+		AutoReconnect: autoReconnect, ReconnectInterval: time.Duration(interval) * time.Second,
 	})
 }
 
