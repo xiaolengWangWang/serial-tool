@@ -71,6 +71,8 @@ type Engine struct {
 	errCount     uint64
 	state        int32
 	startedAt    int64
+	reconnectAddr string
+	reconnectStop chan struct{}
 }
 
 // SetOnClosed 注册"连接被动断开"回调(远端关闭、串口拔出、监听出错等,
@@ -423,6 +425,13 @@ func (e *Engine) Connect(cfg Config) error {
 	e.udp, e.udpPeer, e.udpDialed = udp, peer, udpDialed
 	e.bridge = cfg.Mode == ModeSerialServer
 	e.mode = cfg.Mode
+	if cfg.Mode == ModeTCPClient {
+		e.reconnectAddr = cfg.Address
+		e.reconnectStop = make(chan struct{})
+	} else {
+		e.reconnectAddr = ""
+		e.reconnectStop = nil
+	}
 	e.Unlock()
 	endpoint := cfg.Address
 	if cfg.Mode == ModeSerial {
@@ -468,11 +477,17 @@ func serialMode(cfg Config) *serial.Mode {
 func (e *Engine) Disconnect() {
 	atomic.StoreInt32(&e.state, int32(StateDisconnected))
 	e.Lock()
+	stop := e.reconnectStop
+	e.reconnectStop = nil
+	e.reconnectAddr = ""
 	p, listener, clients, udp := e.port, e.listener, e.clients, e.udp
 	e.port, e.listener, e.clients, e.udp, e.udpPeer = nil, nil, nil, nil, nil
 	e.udpDialed, e.bridge = false, false
 	e.httpURL, e.httpClient = "", nil
 	e.Unlock()
+	if stop != nil {
+		close(stop)
+	}
 	e.store.EndSession()
 	if p != nil {
 		_ = p.Close()
@@ -600,7 +615,14 @@ func (e *Engine) readTCP(client net.Conn) {
 			e.emitLog(msg)
 			e.recordEvent(msg)
 			if mode == ModeTCPClient {
-				e.notifyClosed()
+				if e.reconnectAddr != "" {
+					// 被动断开,自动重连(指数退避);UI 通过状态栏观察状态
+					atomic.StoreInt32(&e.state, int32(StateReconnecting))
+					e.emitLog("TCP 连接断开,自动重连中...")
+					go e.reconnectTCP()
+				} else {
+					e.notifyClosed()
+				}
 			}
 		}
 	}()

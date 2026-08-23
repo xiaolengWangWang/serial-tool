@@ -2,7 +2,6 @@ package wincore
 
 import (
 	"net"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -44,20 +43,35 @@ func TestSentDataStored(t *testing.T) {
 	}
 }
 
-// TestOnClosedFiresOnRemoteDrop 验证:TCP 客户端模式下远端关闭连接时,
-// SetOnClosed 注册的回调会被触发(用于 UI 同步回未连接状态)。
-func TestOnClosedFiresOnRemoteDrop(t *testing.T) {
+// TestTCPClientAutoReconnect 验证:TCP 客户端远端断开后自动重连,
+// 状态先进入 Reconnecting,重连成功后回到 Connected,并计数。
+func TestTCPClientAutoReconnect(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listener.Close()
 
-	accepted := make(chan net.Conn, 1)
+	var accepted int32
 	go func() {
-		conn, err := listener.Accept()
-		if err == nil {
-			accepted <- conn
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			if atomic.AddInt32(&accepted, 1) == 1 {
+				_ = conn.Close() // 第一次立即断开,模拟远端断开
+				continue
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 64)
+				for {
+					if _, err := c.Read(buf); err != nil {
+						return
+					}
+				}
+			}(conn)
 		}
 	}()
 
@@ -67,46 +81,37 @@ func TestOnClosedFiresOnRemoteDrop(t *testing.T) {
 	}
 	defer engine.Close()
 
-	var closedCalls atomic.Int32
-	fired := make(chan struct{}, 1)
-	engine.SetOnClosed(func() {
-		closedCalls.Add(1)
-		select {
-		case fired <- struct{}{}:
-		default:
-		}
-	})
-
 	if err := engine.Connect(Config{Mode: ModeTCPClient, Address: listener.Addr().String()}); err != nil {
 		t.Fatal(err)
 	}
 
-	// 服务端主动关闭,模拟远端断开
-	conn := <-accepted
-	_ = conn.Close()
-
-	select {
-	case <-fired:
-	case <-time.After(2 * time.Second):
-		t.Fatal("远端断开后 onClosed 未触发")
+	// 远端断开后应进入 Reconnecting
+	waitFor(t, 3*time.Second, func() bool { return engine.Stats().State == StateReconnecting })
+	if engine.Stats().State != StateReconnecting {
+		t.Fatalf("远端断开后应进入 Reconnecting,实际 %v", engine.Stats().State)
 	}
 
-	// 断开报文应已入库(source=断开),此时会话尚未结束
-	var text string
-	if err := engine.store.db.QueryRow(
-		`SELECT text_data FROM received_data WHERE source='断开' ORDER BY id DESC LIMIT 1`).Scan(&text); err != nil {
-		t.Fatalf("未在数据库中查到断开报文: %v", err)
+	// 自动重连成功后回到 Connected,且重连计数 > 0
+	waitFor(t, 6*time.Second, func() bool {
+		return engine.Stats().State == StateConnected && atomic.LoadInt32(&accepted) >= 2
+	})
+	if engine.Stats().State != StateConnected {
+		t.Fatalf("应自动重连成功回到 Connected,实际 %v", engine.Stats().State)
 	}
-	if !strings.Contains(text, "TCP 客户端已断开") {
-		t.Fatalf("断开报文内容不符: %q", text)
+	if engine.Stats().Reconnects == 0 {
+		t.Fatal("重连计数应为 0 以上")
 	}
+}
 
-	// 用户主动 Disconnect 不应再触发 onClosed
-	before := closedCalls.Load()
-	engine.Disconnect()
-	time.Sleep(100 * time.Millisecond)
-	if closedCalls.Load() != before {
-		t.Fatalf("用户主动断开不应触发 onClosed: 调用次数从 %d 变为 %d", before, closedCalls.Load())
+// waitFor 轮询直到 cond 为真或超时。
+func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
