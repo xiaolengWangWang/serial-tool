@@ -911,6 +911,11 @@ void RunApp(void) {
     @autoreleasepool {
         NSApplication *app = [NSApplication sharedApplication];
         app.activationPolicy = NSApplicationActivationPolicyRegular;
+        NSString *icnsPath = [[NSBundle mainBundle] pathForResource:@"CommBox" ofType:@"icns"];
+        if (icnsPath) {
+            NSImage *icon = [[[NSImage alloc] initWithContentsOfFile:icnsPath] autorelease];
+            if (icon) { [app setApplicationIconImage:icon]; }
+        }
         AppDelegate *delegate = [[AppDelegate alloc] init];
         app.delegate = delegate;
         [app run];

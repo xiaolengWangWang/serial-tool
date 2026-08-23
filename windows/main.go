@@ -751,7 +751,7 @@ func (a *application) setupTray() {
 		return
 	}
 	a.notifyIcon = ni
-	if icon, err := walk.NewIconFromResourceId(2); err == nil {
+	if icon, err := walk.NewIconFromResourceId(1); err == nil {
 		_ = ni.SetIcon(icon)
 	}
 	_ = ni.SetToolTip("CommBox")
