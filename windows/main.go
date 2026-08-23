@@ -732,9 +732,9 @@ func (a *application) openVSerial() {
 					{Title: "虚拟串口设备", Width: 380},
 				}},
 				Composite{Layout: HBox{}, Children: []Widget{
+					PushButton{Text: "安装驱动", OnClicked: a.installDriver},
 					PushButton{Text: "停止选中", OnClicked: a.removeVSerial},
 					PushButton{Text: "复制设备路径", OnClicked: a.copyVSerialPath},
-					Label{Text: "用串口工具打开该设备"},
 				}},
 			},
 		}).Create(); err != nil {
@@ -744,6 +744,14 @@ func (a *application) openVSerial() {
 		_ = a.vsIP.SetModel(wincore.LocalIPs())
 	}
 	a.vsWindow.Show()
+}
+
+func (a *application) installDriver() {
+	if err := wincore.InstallCom0comDriver(); err != nil {
+		a.showError(err)
+		return
+	}
+	a.appendLog("已请求安装 com0com 驱动,请在弹出的 UAC 窗口中确认")
 }
 
 func (a *application) addVSerial() {
