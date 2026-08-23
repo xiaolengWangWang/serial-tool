@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 
@@ -77,8 +78,10 @@ func runCom0com(args ...string) error {
 	if setup == "" {
 		return fmt.Errorf("未找到 com0com setupc.exe，请先安装 com0com 驱动")
 	}
-	// setupc.exe 需要管理员权限，通过 PowerShell Start-Process -Verb RunAs 提权执行
-	psArgs := fmt.Sprintf(`Start-Process -Verb RunAs -Wait -FilePath '%s' -ArgumentList '%s'`,
-		setup, strings.Join(args, "','"))
+	// setupc.exe 查找 com0com.inf 按工作目录而非自身路径，必须指定 WorkingDirectory
+	workDir := filepath.Dir(setup)
+	psArgs := fmt.Sprintf(
+		`Start-Process -Verb RunAs -Wait -FilePath '%s' -WorkingDirectory '%s' -ArgumentList '%s'`,
+		setup, workDir, strings.Join(args, "','"))
 	return exec.Command("powershell", "-NoProfile", "-Command", psArgs).Run()
 }
