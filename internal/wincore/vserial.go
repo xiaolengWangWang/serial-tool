@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/creack/pty"
@@ -14,15 +15,16 @@ import (
 )
 
 type vBridge struct {
-	id   int
-	addr string
-	link string
-	ptmx *os.File
-	tty  *os.File
-	mu   sync.Mutex
-	conn net.Conn
-	stop chan struct{}
-	once sync.Once
+	id      int
+	addr    string
+	link    string
+	ptmx    *os.File
+	tty     *os.File
+	mu      sync.Mutex
+	conn    net.Conn
+	stop    chan struct{}
+	once    sync.Once
+	dropped uint64 // 断线/重连期间被丢弃的字节数(原子)
 }
 
 // VSerialInfo 描述一个后台虚拟串口桥接。
@@ -56,7 +58,8 @@ func (e *Engine) AddVirtualSerial(addr string) (VSerialInfo, error) {
 	e.vseq++
 	id := e.vseq
 	e.Unlock()
-	link := fmt.Sprintf("/tmp/GoSerialTool-vserial-%d", id)
+	// 设备名带进程 PID,保证多实例(多进程)不会撞名、互相覆盖软链
+	link := fmt.Sprintf("/tmp/GoSerialTool-vserial-%d-%d", os.Getpid(), id)
 	_ = os.Remove(link)
 	if os.Symlink(tty.Name(), link) != nil {
 		link = tty.Name() // 建软链失败则用真实设备路径
@@ -74,17 +77,31 @@ func (e *Engine) AddVirtualSerial(addr string) (VSerialInfo, error) {
 	return VSerialInfo{ID: id, Addr: addr, Link: link}, nil
 }
 
-// vPtmxReader 常驻:把虚拟串口写入的数据发往当前 TCP 连接(重连期间无连接则丢弃)。
+// vPtmxReader 常驻:把虚拟串口写入的数据发往当前 TCP 连接。
+// 断线/重连期间无连接时数据会被丢弃:本版本不缓存、不补发,但必须计数并告警,禁止静默丢失。
 func (e *Engine) vPtmxReader(b *vBridge) {
 	buf := make([]byte, 4096)
+	dropping := false
 	for {
 		n, err := b.ptmx.Read(buf)
 		if n > 0 {
 			b.mu.Lock()
 			c := b.conn
 			b.mu.Unlock()
-			if c != nil {
-				_, _ = c.Write(buf[:n])
+			lost := false
+			if c == nil {
+				lost = true // 重连中,无连接可写
+			} else if _, werr := c.Write(buf[:n]); werr != nil {
+				lost = true // 连接刚好断开,写入失败
+			}
+			if lost {
+				atomic.AddUint64(&b.dropped, uint64(n))
+				if !dropping {
+					e.emitLog(fmt.Sprintf("虚拟串口 #%d 无连接,串口数据被丢弃(累计 %d 字节)", b.id, atomic.LoadUint64(&b.dropped)))
+					dropping = true
+				}
+			} else {
+				dropping = false
 			}
 		}
 		if err != nil {

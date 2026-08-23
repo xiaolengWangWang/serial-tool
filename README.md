@@ -72,11 +72,11 @@ GET /api/v1/health
 把一个 TCP 端点桥接成本机虚拟串口设备,供任意串口软件打开(内置等价于 `socat PTY,raw TCP:host:port`)。
 
 - 菜单 **操作 → 虚拟串口映射**(⌘⇧V)打开管理窗口
-- 填 IP + 端口 → **添加映射**,生成设备如 `/tmp/GoSerialTool-vserial-1`
+- 填 IP + 端口 → **添加映射**,生成设备如 `/tmp/GoSerialTool-vserial-<PID>-1`(设备名带进程 PID,多实例不会撞名)
 - **后台常驻,可同时多个**,与主连接互不影响
 - **自动重连**:被桥接的服务端空闲断开后,设备保留并自动重连
 - 在"串口"模式点刷新,列表会包含这些虚拟串口设备,可直接打开
-- 用法:`screen /tmp/GoSerialTool-vserial-1 115200`,或用另一个串口工具/本工具第二实例打开
+- 用法:`screen /tmp/GoSerialTool-vserial-<PID>-1 115200`,或用另一个串口工具/本工具第二实例打开
 
 > Windows 无 PTY,暂不提供虚拟串口。
 
