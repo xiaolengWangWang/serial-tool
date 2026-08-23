@@ -8,12 +8,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
 	"go.bug.st/serial"
+
+	"serial-tool/internal/wincore"
 )
 
 func main() {
@@ -24,6 +29,9 @@ func main() {
 }
 
 func run() error {
+	if len(os.Args) > 1 && os.Args[1] == "vserial" {
+		return runVSerial(os.Args[2:])
+	}
 	list := flag.Bool("list", false, "列出可用串口")
 	portName := flag.String("port", "", "串口名称，如 /dev/tty.usbserial-0001 或 COM3")
 	baud := flag.Int("baud", 115200, "波特率")
@@ -50,7 +58,7 @@ func run() error {
 		return nil
 	}
 	if *portName == "" {
-		return errors.New("请用 -port 指定串口，或用 -list 查看串口")
+		return errors.New("请用 -port 指定串口,-list 查看串口,或 serial-tool vserial --host IP --port PORT 创建虚拟串口")
 	}
 
 	mode, err := makeMode(*baud, *dataBits, *stopBits, *parityName)
@@ -83,6 +91,45 @@ func run() error {
 		}
 		return err
 	}
+}
+
+// runVSerial 实现 `serial-tool vserial --host 127.0.0.1 --port 7000`:
+// 把 TCP 端点桥接成本机虚拟串口设备(复用 wincore.Engine),常驻直到 Ctrl+C。
+func runVSerial(args []string) error {
+	fs := flag.NewFlagSet("vserial", flag.ContinueOnError)
+	host := fs.String("host", "", "TCP 服务端 IP")
+	port := fs.Int("port", 0, "TCP 服务端端口")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if *host == "" || *port <= 0 || *port > 65535 {
+		return errors.New("vserial 需要 --host 和 --port(端口 1-65535)")
+	}
+	addr := net.JoinHostPort(*host, strconv.Itoa(*port))
+
+	dataDir := filepath.Join(os.TempDir(), "GoSerialTool-cli")
+	engine, err := wincore.New(dataDir, nil, func(s string) {
+		fmt.Fprintln(os.Stderr, s)
+	})
+	if err != nil {
+		return err
+	}
+	defer engine.Close()
+
+	info, err := engine.AddVirtualSerial(addr)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("虚拟串口 #%d 已创建: %s ↔ %s\n", info.ID, info.Link, info.Addr)
+	fmt.Printf("用串口工具打开设备,如: screen %s 115200\n", info.Link)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
+	return nil
 }
 
 func makeMode(baud, dataBits, stopBits int, parityName string) (*serial.Mode, error) {

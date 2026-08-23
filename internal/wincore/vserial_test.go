@@ -120,6 +120,7 @@ func TestVirtualSerialBridge(t *testing.T) {
 	if info.Link == "" {
 		t.Fatal("未创建虚拟串口设备")
 	}
+	waitVirtualConnected(t, engine, info.ID)
 
 	dev, err := os.OpenFile(info.Link, os.O_RDWR, 0)
 	if err != nil {
@@ -164,6 +165,8 @@ func TestMultipleVirtualSerials(t *testing.T) {
 	if got := engine.ListVirtualSerials(); len(got) != 2 {
 		t.Fatalf("应有 2 个映射,实际 %d", len(got))
 	}
+	waitVirtualConnected(t, engine, a.ID)
+	waitVirtualConnected(t, engine, b.ID)
 
 	// 两个设备都可独立收发
 	for _, info := range []VSerialInfo{a, b} {
@@ -305,4 +308,96 @@ func TestVirtualSerialLinkUnique(t *testing.T) {
 	if info.Link == info2.Link {
 		t.Fatalf("同一实例内设备名应唯一: %q", info.Link)
 	}
+}
+
+// TestVirtualSerialOfflineCreate 验证:TCP 服务未启动时也能创建虚拟串口,
+// 服务上线后无需重建映射即可自动连接并透传。
+func TestVirtualSerialOfflineCreate(t *testing.T) {
+	// 先拿一个空闲端口,再关闭监听,得到"无服务监听"的地址
+	tmp, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := tmp.Addr().String()
+	_ = tmp.Close()
+
+	engine, err := New(t.TempDir(), nil, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+
+	info, err := engine.AddVirtualSerial(addr)
+	if err != nil {
+		t.Skipf("虚拟串口不可用: %v", err)
+	}
+	if info.Link == "" {
+		t.Fatal("服务未启动时创建虚拟串口也应返回设备路径")
+	}
+
+	// 服务上线,等待自动连接(重连间隔 2s)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 64)
+				for {
+					n, err := c.Read(buf)
+					if n > 0 {
+						_, _ = c.Write(buf[:n])
+					}
+					if err != nil {
+						return
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	time.Sleep(4 * time.Second)
+
+	dev, err := os.OpenFile(info.Link, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("打开虚拟串口失败: %v", err)
+	}
+	defer dev.Close()
+	if _, err := dev.Write([]byte("PING")); err != nil {
+		t.Fatal(err)
+	}
+	_ = dev.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 4)
+	n, err := dev.Read(buf)
+	if err != nil || string(buf[:n]) != "PING" {
+		t.Fatalf("服务上线后应自动连接并透传: %q, %v", buf[:n], err)
+	}
+}
+
+// waitVirtualConnected 等待指定虚拟串口桥接建立 TCP 连接(异步连接建立后再收发)。
+func waitVirtualConnected(t *testing.T, e *Engine, id int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		e.Lock()
+		b := e.vbridges[id]
+		e.Unlock()
+		if b != nil {
+			b.mu.Lock()
+			c := b.conn
+			b.mu.Unlock()
+			if c != nil {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("等待虚拟串口 #%d 建立连接超时", id)
 }

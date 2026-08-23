@@ -20,6 +20,7 @@ go build -o serial-tool .
 ./serial-tool -list                                             # 列出串口
 ./serial-tool -port /dev/tty.usbserial-0001 -baud 115200 -eol crlf   # 文本收发
 ./serial-tool -port /dev/tty.usbserial-0001 -baud 9600 -hex -hex-send # HEX 收发
+./serial-tool vserial --host 127.0.0.1 --port 7000              # 虚拟串口(桥接 TCP 到本机串口设备)
 ```
 Windows 串口名可写 `COM3`。`./serial-tool -h` 查看全部参数。
 
