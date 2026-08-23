@@ -160,6 +160,29 @@ func GoRecentSends() *C.char {
 	return C.CString(strings.Join(engine.RecentSends(), "\n"))
 }
 
+//export GoChecksum
+func GoChecksum(kind, input *C.char) *C.char {
+	data, err := wincore.HexToBytes(C.GoString(input))
+	if err != nil {
+		return C.CString("输入不是有效的 HEX")
+	}
+	var result string
+	switch C.GoString(kind) {
+	case "modbus":
+		c := wincore.CRC16Modbus(data)
+		result = fmt.Sprintf("0x%04X (低字节在前: %02X %02X)", c, byte(c), byte(c>>8))
+	case "crc16":
+		result = fmt.Sprintf("0x%04X", wincore.CRC16CCITT(data))
+	case "crc32":
+		result = fmt.Sprintf("0x%08X", wincore.CRC32(data))
+	case "xor":
+		result = fmt.Sprintf("0x%02X", wincore.XORChecksum(data))
+	case "sum":
+		result = fmt.Sprintf("0x%02X", wincore.SUMChecksum(data))
+	}
+	return C.CString(result)
+}
+
 //export GoListPorts
 func GoListPorts() *C.char {
 	ports, err := wincore.ListPorts()

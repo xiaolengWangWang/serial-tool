@@ -6,13 +6,14 @@
     NSWindow *_window;
     NSWindow *_monitorWindow;
     NSWindow *_vsWindow;
+    NSWindow *_toolboxWindow;
     NSTableView *_vsTable;
     NSComboBox *_vsIP;
     NSTextField *_vsPort;
     NSMutableArray *_vsList;
     NSPopUpButton *_mode, *_bridgeProtocol, *_role, *_history, *_sendHistory, *_favorites;
     NSComboBox *_ports, *_baud, *_data, *_stop, *_parity, *_eol, *_ip;
-    NSTextField *_port, *_endpointLabel, *_roleLabel, *_ipLabel, *_portLabel, *_protocolLabel, *_status, *_interval;
+    NSTextField *_port, *_endpointLabel, *_roleLabel, *_ipLabel, *_portLabel, *_protocolLabel, *_status, *_interval, *_toolboxInput, *_toolboxOutput;
     NSArray *_serialControls;
     NSButton *_refresh, *_connect, *_hexView, *_hexSend, *_timerButton;
     NSTextView *_log, *_send, *_monitorLog;
@@ -218,6 +219,7 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
     Item(actionMenu, @"定时发送开关", @selector(toggleTimer:), @"t", NSEventModifierFlagCommand);
     Item(actionMenu, @"刷新串口", @selector(refresh:), @"r", NSEventModifierFlagCommand);
     Item(actionMenu, @"虚拟串口映射", @selector(openVSerialManager:), @"v", NSEventModifierFlagCommand | NSEventModifierFlagShift);
+    Item(actionMenu, @"工具箱", @selector(openToolbox:), @"b", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Submenu(mainMenu, @"操作", actionMenu);
 
     NSMenu *editMenu = [[[NSMenu alloc] initWithTitle:@"编辑"] autorelease];
@@ -336,6 +338,42 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
     GoDeleteFavorite((char *)name.UTF8String);
     [self refreshFavorites];
     [self appendText:[NSString stringWithFormat:@"[已删除收藏:%@]\n", name]];
+}
+
+- (void)openToolbox:(id)sender {
+    if (!_toolboxWindow) {
+        _toolboxWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 200)
+            styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+            backing:NSBackingStoreBuffered defer:NO];
+        _toolboxWindow.title = @"工具箱";
+        _toolboxWindow.releasedWhenClosed = NO;
+        NSView *v = _toolboxWindow.contentView;
+
+        [v addSubview:Label(@"HEX 输入(如 01 03 00 00 00 0A)", NSMakeRect(16, 168, 440, 20))];
+        _toolboxInput = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 136, 448, 26)];
+        [v addSubview:_toolboxInput];
+
+        NSArray *titles = @[@"CRC16 Modbus", @"CRC16", @"CRC32", @"XOR", @"SUM"];
+        for (NSUInteger i = 0; i < titles.count; i++) {
+            NSButton *b = [NSButton buttonWithTitle:titles[i] target:self action:@selector(calcChecksum:)];
+            b.frame = NSMakeRect(16 + i * 92, 100, 88, 28);
+            b.tag = (NSInteger)i;
+            [v addSubview:b];
+        }
+        _toolboxOutput = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 56, 448, 26)];
+        _toolboxOutput.editable = NO; _toolboxOutput.bordered = NO; _toolboxOutput.drawsBackground = NO;
+        [v addSubview:_toolboxOutput];
+        [_toolboxWindow center];
+    }
+    [_toolboxWindow makeKeyAndOrderFront:nil];
+}
+
+- (void)calcChecksum:(NSButton *)sender {
+    NSArray *kinds = @[@"modbus", @"crc16", @"crc32", @"xor", @"sum"];
+    NSString *kind = kinds[sender.tag];
+    char *raw = GoChecksum((char *)kind.UTF8String, (char *)_toolboxInput.stringValue.UTF8String);
+    NSString *result = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
+    _toolboxOutput.stringValue = result;
 }
 
 - (void)resetToDisconnected {

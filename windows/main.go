@@ -42,6 +42,11 @@ type application struct {
 	timerMu                               sync.Mutex
 	timerCancel                           chan struct{}
 	notifyIcon                            *walk.NotifyIcon
+	toolboxWindow                         *walk.MainWindow
+	toolboxInput                          *walk.TextEdit
+	toolboxOutput                         *walk.Label
+	searchEdit                            *walk.LineEdit
+	fullLog                               string
 	vsWindow                              *walk.MainWindow
 	vsIP                                  *walk.ComboBox
 	vsPort                                *walk.LineEdit
@@ -181,8 +186,15 @@ func (a *application) createWindow() error {
 						PushButton{Text: "新建实例", OnClicked: a.newInstance},
 						PushButton{Text: "监控窗口", OnClicked: a.openMonitor},
 						PushButton{Text: "虚拟串口", OnClicked: a.openVSerial},
+						PushButton{Text: "工具箱", OnClicked: a.openToolbox},
 						PushButton{Text: "导出", OnClicked: func() { a.exportText(a.receiveEdit.Text(), "serial-log", a.mw) }},
-						PushButton{Text: "清空", OnClicked: func() { _ = a.receiveEdit.SetText("") }},
+						PushButton{Text: "清空", OnClicked: func() { _ = a.receiveEdit.SetText(""); a.fullLog = "" }},
+					}},
+					Composite{Layout: HBox{}, Children: []Widget{
+						Label{Text: "搜索"},
+						LineEdit{AssignTo: &a.searchEdit, StretchFactor: 1},
+						PushButton{Text: "过滤", OnClicked: a.applyFilter},
+						PushButton{Text: "清除", OnClicked: a.clearFilter},
 					}},
 					TextEdit{AssignTo: &a.receiveEdit, ReadOnly: true, VScroll: true, HScroll: true, StretchFactor: 3, MaxLength: 5000000, Font: Font{Family: "Consolas", PointSize: 10}},
 					Composite{Layout: HBox{}, Children: []Widget{
@@ -515,10 +527,42 @@ func (a *application) appendDisplay(edit *walk.TextEdit, text string) {
 	if edit == nil {
 		return
 	}
+	if edit == a.receiveEdit {
+		a.fullLog += text
+		if len(a.fullLog) > 4500000 {
+			a.fullLog = a.fullLog[len(a.fullLog)-4000000:]
+		}
+		if a.searchEdit != nil && strings.TrimSpace(a.searchEdit.Text()) != "" {
+			a.applyFilter()
+			return
+		}
+	}
 	if edit.TextLength()+len(text) > 4500000 {
 		_ = edit.SetText("[显示缓存已清理，完整数据仍保存在 SQLite]\r\n")
 	}
 	edit.AppendText(text)
+}
+
+// applyFilter 按搜索关键字过滤接收区(大小写不敏感)。
+func (a *application) applyFilter() {
+	kw := strings.ToLower(strings.TrimSpace(a.searchEdit.Text()))
+	if kw == "" {
+		_ = a.receiveEdit.SetText(a.fullLog)
+		return
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(a.fullLog, "\n") {
+		if strings.Contains(strings.ToLower(line), kw) {
+			b.WriteString(line)
+			b.WriteString("\r\n")
+		}
+	}
+	_ = a.receiveEdit.SetText(b.String())
+}
+
+func (a *application) clearFilter() {
+	_ = a.searchEdit.SetText("")
+	_ = a.receiveEdit.SetText(a.fullLog)
 }
 
 func (a *application) openMonitor() {
@@ -711,6 +755,53 @@ func (a *application) setupTray() {
 	_ = ni.ContextMenu().Actions().Add(showAction)
 	_ = ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
 	_ = ni.ContextMenu().Actions().Add(quitAction)
+}
+
+func (a *application) openToolbox() {
+	if a.toolboxWindow == nil {
+		if err := (MainWindow{
+			AssignTo: &a.toolboxWindow, Title: "工具箱", MinSize: Size{Width: 480, Height: 300}, Size: Size{Width: 520, Height: 340}, Layout: VBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}},
+			Children: []Widget{
+				Label{Text: "HEX 输入(如 01 03 00 00 00 0A)"},
+				TextEdit{AssignTo: &a.toolboxInput, MinSize: Size{Height: 60}},
+				Composite{Layout: HBox{}, Children: []Widget{
+					PushButton{Text: "CRC16 Modbus", OnClicked: func() { a.showChecksum("modbus") }},
+					PushButton{Text: "CRC16", OnClicked: func() { a.showChecksum("crc16") }},
+					PushButton{Text: "CRC32", OnClicked: func() { a.showChecksum("crc32") }},
+					PushButton{Text: "XOR", OnClicked: func() { a.showChecksum("xor") }},
+					PushButton{Text: "SUM", OnClicked: func() { a.showChecksum("sum") }},
+				}},
+				Label{AssignTo: &a.toolboxOutput, Text: "结果", MinSize: Size{Height: 40}},
+			},
+		}).Create(); err != nil {
+			a.showError(err)
+			return
+		}
+	}
+	a.toolboxWindow.Show()
+}
+
+func (a *application) showChecksum(kind string) {
+	data, err := wincore.HexToBytes(a.toolboxInput.Text())
+	if err != nil {
+		a.toolboxOutput.SetText("输入不是有效的 HEX")
+		return
+	}
+	var result string
+	switch kind {
+	case "modbus":
+		c := wincore.CRC16Modbus(data)
+		result = fmt.Sprintf("0x%04X (低字节在前: %02X %02X)", c, byte(c), byte(c>>8))
+	case "crc16":
+		result = fmt.Sprintf("0x%04X", wincore.CRC16CCITT(data))
+	case "crc32":
+		result = fmt.Sprintf("0x%08X", wincore.CRC32(data))
+	case "xor":
+		result = fmt.Sprintf("0x%02X", wincore.XORChecksum(data))
+	case "sum":
+		result = fmt.Sprintf("0x%02X", wincore.SUMChecksum(data))
+	}
+	a.toolboxOutput.SetText(result)
 }
 
 func (a *application) openVSerial() {

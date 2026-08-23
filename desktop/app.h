@@ -32,6 +32,7 @@ char *GoSaveFavorite(char *name, char *value);
 void GoDeleteFavorite(char *name);
 char *GoFavorite(char *name);
 char *GoRecentSends(void);
+char *GoChecksum(char *kind, char *input);
 char *GoRecentSessions(void);
 char *GoLocalIP(void);
 char *GoLocalIPs(void);

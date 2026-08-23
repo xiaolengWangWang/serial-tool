@@ -1,6 +1,22 @@
 package wincore
 
-// 工具箱:CRC / 校验和等纯函数,供两端 UI 的「工具箱」使用。
+import (
+	"encoding/hex"
+	"strings"
+)
+
+// 工具箱:CRC / 校验和 / HEX 转换等纯函数,供两端 UI 的「工具箱」使用。
+
+// HexToBytes 把 "01 03 00" 或 "010300" 形式的 HEX 字符串解析成字节。
+func HexToBytes(s string) ([]byte, error) {
+	clean := strings.Join(strings.Fields(s), "")
+	return hex.DecodeString(clean)
+}
+
+// BytesToHex 把字节格式化成大写 HEX 字符串(每字节两位,无空格)。
+func BytesToHex(data []byte) string {
+	return strings.ToUpper(hex.EncodeToString(data))
+}
 
 // CRC16Modbus 计算 Modbus CRC16(初始 0xFFFF,多项式 0xA001,低字节在前)。
 func CRC16Modbus(data []byte) uint16 {
