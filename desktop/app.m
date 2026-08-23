@@ -13,7 +13,8 @@
     NSMutableArray *_vsList;
     NSPopUpButton *_mode, *_bridgeProtocol, *_role, *_history, *_sendHistory, *_favorites;
     NSComboBox *_ports, *_baud, *_data, *_stop, *_parity, *_eol, *_ip;
-    NSTextField *_port, *_endpointLabel, *_roleLabel, *_ipLabel, *_portLabel, *_protocolLabel, *_status, *_interval, *_toolboxInput, *_toolboxOutput;
+    NSTextField *_port, *_endpointLabel, *_roleLabel, *_ipLabel, *_portLabel, *_protocolLabel, *_status, *_interval, *_toolboxInput, *_toolboxOutput, *_searchField;
+    NSMutableString *_fullLog;
     NSArray *_serialControls;
     NSButton *_refresh, *_connect, *_hexView, *_hexSend, *_timerButton;
     NSTextView *_log, *_send, *_monitorLog;
@@ -145,7 +146,15 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSButton *clear = [NSButton buttonWithTitle:@"清空" target:self action:@selector(clear:)];
     clear.frame = NSMakeRect(930, 652, 90, 28); clear.autoresizingMask = NSViewMinXMargin; [view addSubview:clear];
 
-    NSScrollView *logScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 280, 700, 365)] autorelease];
+    [view addSubview:Label(@"搜索", NSMakeRect(320, 616, 40, 22))];
+_searchField = [[NSTextField alloc] initWithFrame:NSMakeRect(360, 612, 300, 26)];
+[view addSubview:_searchField];
+NSButton *filterBtn = [NSButton buttonWithTitle:@"过滤" target:self action:@selector(applyFilter)];
+filterBtn.frame = NSMakeRect(668, 610, 70, 28); [view addSubview:filterBtn];
+NSButton *clearFilterBtn = [NSButton buttonWithTitle:@"清除" target:self action:@selector(clearFilter)];
+clearFilterBtn.frame = NSMakeRect(742, 610, 70, 28); [view addSubview:clearFilterBtn];
+
+NSScrollView *logScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 276, 700, 334)] autorelease];
     logScroll.borderType = NSBezelBorder; logScroll.hasVerticalScroller = YES;
     logScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _log = [[NSTextView alloc] initWithFrame:logScroll.contentView.bounds];
@@ -789,7 +798,7 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
     if (!_monitorPaused) [_monitorLog scrollRangeToVisible:NSMakeRange(_monitorLog.string.length, 0)];
 }
 
-- (void)clear:(id)sender { [_log setString:@""]; }
+- (void)clear:(id)sender { [_log setString:@""]; [_fullLog setString:@""]; }
 - (void)saveText:(NSString *)text prefix:(NSString *)prefix window:(NSWindow *)window {
     NSSavePanel *panel = [NSSavePanel savePanel];
     NSDateFormatter *formatter = [[[NSDateFormatter alloc] init] autorelease];
@@ -808,8 +817,32 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
 }
 - (void)exportMonitor:(id)sender { [self saveText:_monitorLog.string prefix:@"monitor-data" window:_monitorWindow]; }
 - (void)appendText:(NSString *)text {
+    if (!_fullLog) _fullLog = [[NSMutableString alloc] init];
+    [_fullLog appendString:text];
+    if (_searchField && _searchField.stringValue.length) {
+        [self applyFilter];
+        return;
+    }
     [_log.textStorage appendAttributedString:[[[NSAttributedString alloc] initWithString:text] autorelease]];
     [_log scrollRangeToVisible:NSMakeRange(_log.string.length, 0)];
+}
+
+- (void)applyFilter {
+    NSString *kw = [_searchField.stringValue lowercaseString];
+    if (!kw.length) { [_log setString:_fullLog]; return; }
+    NSMutableString *out = [NSMutableString string];
+    for (NSString *line in [_fullLog componentsSeparatedByString:@"\n"]) {
+        if ([[line lowercaseString] containsString:kw]) {
+            [out appendString:line];
+            [out appendString:@"\n"];
+        }
+    }
+    [_log setString:out];
+}
+
+- (void)clearFilter {
+    _searchField.stringValue = @"";
+    [_log setString:_fullLog];
 }
 - (void)alert:(NSString *)message {
     NSAlert *alert = [[[NSAlert alloc] init] autorelease];
