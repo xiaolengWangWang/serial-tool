@@ -17,7 +17,7 @@
     NSMutableString *_fullLog;
     NSArray *_serialControls;
     NSButton *_refresh, *_connect, *_hexView, *_hexSend, *_timerButton;
-    NSTextView *_log, *_send, *_monitorLog;
+    NSTextView *_log, *_send, *_monitorLog, *_sysLog;
     NSTimer *_sendTimer;
     BOOL _connected;
     BOOL _monitorPaused;
@@ -156,12 +156,30 @@ filterBtn.frame = NSMakeRect(668, 610, 70, 28); [view addSubview:filterBtn];
 NSButton *clearFilterBtn = [NSButton buttonWithTitle:@"清除" target:self action:@selector(clearFilter)];
 clearFilterBtn.frame = NSMakeRect(742, 610, 70, 28); [view addSubview:clearFilterBtn];
 
-NSScrollView *logScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 276, 700, 334)] autorelease];
+NSTabView *tabView = [[NSTabView alloc] initWithFrame:NSMakeRect(320, 276, 700, 334)];
+    tabView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+
+    NSScrollView *dataScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 700, 290)] autorelease];
+    dataScroll.borderType = NSBezelBorder; dataScroll.hasVerticalScroller = YES;
+    dataScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    _log = [[NSTextView alloc] initWithFrame:dataScroll.contentView.bounds];
+    _log.editable = NO; _log.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
+    _log.autoresizingMask = NSViewWidthSizable; dataScroll.documentView = _log;
+    NSTabViewItem *dataItem = [[[NSTabViewItem alloc] initWithIdentifier:@"data"] autorelease];
+    dataItem.label = @"数据"; dataItem.view = dataScroll;
+    [tabView addTabViewItem:dataItem];
+
+    NSScrollView *logScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 700, 290)] autorelease];
     logScroll.borderType = NSBezelBorder; logScroll.hasVerticalScroller = YES;
     logScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    _log = [[NSTextView alloc] initWithFrame:logScroll.contentView.bounds];
-    _log.editable = NO; _log.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
-    _log.autoresizingMask = NSViewWidthSizable; logScroll.documentView = _log; [view addSubview:logScroll];
+    _sysLog = [[NSTextView alloc] initWithFrame:logScroll.contentView.bounds];
+    _sysLog.editable = NO; _sysLog.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
+    _sysLog.autoresizingMask = NSViewWidthSizable; logScroll.documentView = _sysLog;
+    NSTabViewItem *logItem = [[[NSTabViewItem alloc] initWithIdentifier:@"log"] autorelease];
+    logItem.label = @"日志"; logItem.view = logScroll;
+    [tabView addTabViewItem:logItem];
+
+    [view addSubview:tabView];
 
     NSTextField *sendTitle = Label(@"发送数据", NSMakeRect(320, 242, 120, 24));
     sendTitle.font = [NSFont boldSystemFontOfSize:14]; [view addSubview:sendTitle];
@@ -800,6 +818,12 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
     if (!_monitorPaused) [_monitorLog scrollRangeToVisible:NSMakeRange(_monitorLog.string.length, 0)];
 }
 
+- (void)appendLogText:(NSString *)text {
+    if (!_sysLog) return;
+    [_sysLog.textStorage appendAttributedString:[[[NSAttributedString alloc] initWithString:text] autorelease]];
+    [_sysLog scrollRangeToVisible:NSMakeRange(_sysLog.string.length, 0)];
+}
+
 - (void)clear:(id)sender { [_log setString:@""]; [_fullLog setString:@""]; }
 - (void)saveText:(NSString *)text prefix:(NSString *)prefix window:(NSWindow *)window {
     NSSavePanel *panel = [NSSavePanel savePanel];
@@ -864,6 +888,12 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
 void UIAppend(const char *text) {
     NSString *value = [[NSString alloc] initWithUTF8String:text ?: ""];
     dispatch_async(dispatch_get_main_queue(), ^{ [(AppDelegate *)NSApp.delegate appendText:value]; });
+    [value release];
+}
+
+void UIAppendLog(const char *text) {
+    NSString *value = [[NSString alloc] initWithUTF8String:text ?: ""];
+    dispatch_async(dispatch_get_main_queue(), ^{ [(AppDelegate *)NSApp.delegate appendLogText:value]; });
     [value release];
 }
 

@@ -72,7 +72,7 @@ func onClosed() { C.UIConnectionClosed() }
 
 func onLog(text string) {
 	s := C.CString("\n[" + text + "]\n")
-	C.UIAppend(s)
+	C.UIAppendLog(s)
 	C.free(unsafe.Pointer(s))
 }
 

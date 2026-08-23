@@ -33,7 +33,7 @@ type application struct {
 	connectButton, timerButton            *walk.PushButton
 	status                                *walk.Label
 	addressLabel                          *walk.Label
-	receiveEdit, sendEdit                 *walk.TextEdit
+	receiveEdit, sendEdit, logEdit        *walk.TextEdit
 	hexView, hexSend                      *walk.CheckBox
 	monitorWindow                         *walk.MainWindow
 	monitorEdit                           *walk.TextEdit
@@ -204,7 +204,16 @@ func (a *application) createWindow() error {
 						PushButton{Text: "过滤", OnClicked: a.applyFilter},
 						PushButton{Text: "清除", OnClicked: a.clearFilter},
 					}},
-					TextEdit{AssignTo: &a.receiveEdit, ReadOnly: true, VScroll: true, HScroll: true, StretchFactor: 3, MaxLength: 5000000, Font: Font{Family: "Consolas", PointSize: 10}},
+					TabWidget{
+						Pages: []TabPage{
+							TabPage{Title: "数据", Layout: VBox{}, Children: []Widget{
+								TextEdit{AssignTo: &a.receiveEdit, ReadOnly: true, VScroll: true, HScroll: true, StretchFactor: 3, MaxLength: 5000000, Font: Font{Family: "Consolas", PointSize: 10}},
+							}},
+							TabPage{Title: "日志", Layout: VBox{}, Children: []Widget{
+								TextEdit{AssignTo: &a.logEdit, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: "Consolas", PointSize: 10}},
+							}},
+						},
+					},
 					Composite{Layout: HBox{}, Children: []Widget{
 						Label{Text: "发送数据"}, HSpacer{}, CheckBox{AssignTo: &a.hexSend, Text: "HEX 发送", Checked: true},
 						Label{Text: "行尾"}, ComboBox{AssignTo: &a.eol, Model: []string{"无", "LF", "CR", "CRLF"}, CurrentIndex: 0, MinSize: Size{Width: 75}},
@@ -534,7 +543,7 @@ func (a *application) appendLog(text string) {
 	if a.mw == nil {
 		return
 	}
-	a.mw.Synchronize(func() { a.appendDisplay(a.receiveEdit, "\r\n["+text+"]\r\n") })
+	a.mw.Synchronize(func() { a.appendDisplay(a.logEdit, "\r\n["+text+"]\r\n") })
 }
 
 func (a *application) appendDisplay(edit *walk.TextEdit, text string) {

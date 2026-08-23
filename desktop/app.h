@@ -3,6 +3,7 @@
 
 void RunApp(void);
 void UIAppend(const char *text);
+void UIAppendLog(const char *text);
 void UIMonitorAppend(const char *text);
 void UIConnectionClosed(void);
 
