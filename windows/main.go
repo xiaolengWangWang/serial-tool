@@ -38,34 +38,7 @@ type application struct {
 	hexDisplay                            atomic.Bool
 	timerMu                               sync.Mutex
 	timerCancel                           chan struct{}
-	vsWindow                              *walk.MainWindow
-	vsIP                                  *walk.ComboBox
-	vsPort                                *walk.LineEdit
-	vsTable                               *walk.TableView
-	vsModel                               *vserialModel
 	notifyIcon                            *walk.NotifyIcon
-}
-
-// vserialEntry 与 vserialModel 是虚拟串口管理窗口的表格数据。
-type vserialEntry struct {
-	id   int
-	addr string
-	link string
-}
-
-type vserialModel struct {
-	walk.TableModelBase
-	items []vserialEntry
-}
-
-func (m *vserialModel) RowCount() int { return len(m.items) }
-
-func (m *vserialModel) Value(row, col int) interface{} {
-	it := m.items[row]
-	if col == 0 {
-		return it.addr
-	}
-	return it.link
 }
 
 func main() {
@@ -110,7 +83,6 @@ func (a *application) createWindow() error {
 					Action{Text:"发送一次", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyReturn}, OnTriggered: func() { a.sendOnce(false) }},
 					Action{Text:"定时发送开关", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyT}, OnTriggered: a.toggleTimer},
 					Action{Text:"刷新串口", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyR}, OnTriggered: a.refreshPorts},
-					Action{Text:"虚拟串口映射", Shortcut: Shortcut{Modifiers: walk.ModControl | walk.ModShift, Key: walk.KeyV}, OnTriggered: a.openVSerial},
 				},
 			},
 			Menu{
@@ -174,7 +146,6 @@ func (a *application) createWindow() error {
 						CheckBox{AssignTo: &a.hexView, Text: "HEX 显示", OnCheckedChanged: func() { a.hexDisplay.Store(a.hexView.Checked()) }},
 						PushButton{Text: "新建实例", OnClicked: a.newInstance},
 						PushButton{Text: "监控窗口", OnClicked: a.openMonitor},
-						PushButton{Text: "虚拟串口", OnClicked: a.openVSerial},
 						PushButton{Text: "导出", OnClicked: func() { a.exportText(a.receiveEdit.Text(), "serial-log", a.mw) }},
 						PushButton{Text: "清空", OnClicked: func() { _ = a.receiveEdit.SetText("") }},
 					}},
@@ -582,83 +553,6 @@ func (a *application) setupTray() {
 	_ = ni.ContextMenu().Actions().Add(showAction)
 	_ = ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
 	_ = ni.ContextMenu().Actions().Add(quitAction)
-}
-
-func (a *application) openVSerial() {
-	if a.vsWindow == nil {
-		a.vsModel = new(vserialModel)
-		if err := (MainWindow{
-			AssignTo: &a.vsWindow, Title: "虚拟串口映射(后台运行,可多个)", MinSize: Size{Width: 640, Height: 420}, Size: Size{Width: 680, Height: 480}, Layout: VBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}},
-			Children: []Widget{
-				Label{Text: "TCP 端点 → 本机虚拟串口。添加后在后台持续运行,断开主连接也不受影响。"},
-				Composite{Layout: HBox{}, Children: []Widget{
-					Label{Text: "IP"},
-					ComboBox{AssignTo: &a.vsIP, Editable: true, MinSize: Size{Width: 180}},
-					Label{Text: "端口"},
-					LineEdit{AssignTo: &a.vsPort, Text: "1502", MinSize: Size{Width: 80}},
-					PushButton{Text: "添加映射", OnClicked: a.addVSerial},
-				}},
-				TableView{AssignTo: &a.vsTable, Model: a.vsModel, StretchFactor: 1, Columns: []TableViewColumn{
-					{Title: "TCP 端点", Width: 200},
-					{Title: "虚拟串口设备", Width: 380},
-				}},
-				Composite{Layout: HBox{}, Children: []Widget{
-					PushButton{Text: "停止选中", OnClicked: a.removeVSerial},
-					PushButton{Text: "复制设备路径", OnClicked: a.copyVSerialPath},
-					Label{Text: "用 screen 或另一个串口工具打开该设备"},
-				}},
-			},
-		}).Create(); err != nil {
-			a.showError(err)
-			return
-		}
-		_ = a.vsIP.SetModel(wincore.LocalIPs())
-	}
-	a.vsWindow.Show()
-}
-
-func (a *application) addVSerial() {
-	ip := strings.TrimSpace(a.vsIP.Text())
-	port := strings.TrimSpace(a.vsPort.Text())
-	if ip == "" || port == "" {
-		a.showError(fmt.Errorf("请输入 IP 和端口"))
-		return
-	}
-	p, err := strconv.Atoi(port)
-	if err != nil || p <= 0 {
-		a.showError(fmt.Errorf("端口无效"))
-		return
-	}
-	info, err := a.engine.AddVirtualSerial(fmt.Sprintf("%s:%d", ip, p))
-	if err != nil {
-		a.showError(err)
-		return
-	}
-	a.vsModel.items = append(a.vsModel.items, vserialEntry{id: info.ID, addr: info.Addr, link: info.Link})
-	a.vsModel.PublishRowsReset()
-	a.appendLog(fmt.Sprintf("虚拟串口 #%d 已创建: %s → %s", info.ID, info.Addr, info.Link))
-}
-
-func (a *application) removeVSerial() {
-	idx := a.vsTable.CurrentIndex()
-	if idx < 0 || idx >= len(a.vsModel.items) {
-		a.showError(fmt.Errorf("请先选中一行"))
-		return
-	}
-	it := a.vsModel.items[idx]
-	a.engine.RemoveVirtualSerial(it.id)
-	a.vsModel.items = append(a.vsModel.items[:idx], a.vsModel.items[idx+1:]...)
-	a.vsModel.PublishRowsReset()
-	a.appendLog(fmt.Sprintf("虚拟串口 #%d 已停止", it.id))
-}
-
-func (a *application) copyVSerialPath() {
-	idx := a.vsTable.CurrentIndex()
-	if idx < 0 || idx >= len(a.vsModel.items) {
-		a.showError(fmt.Errorf("请先选中一行"))
-		return
-	}
-	_ = walk.Clipboard().SetText(a.vsModel.items[idx].link)
 }
 
 func (a *application) exportText(text, prefix string, owner walk.Form) {
