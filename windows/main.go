@@ -28,6 +28,7 @@ type application struct {
 	serialGroup, networkGroup             *walk.GroupBox
 	connectButton, timerButton            *walk.PushButton
 	status                                *walk.Label
+	addressLabel                          *walk.Label
 	receiveEdit, sendEdit                 *walk.TextEdit
 	hexView, hexSend                      *walk.CheckBox
 	monitorWindow                         *walk.MainWindow
@@ -124,11 +125,11 @@ func (a *application) createWindow() error {
 					GroupBox{
 						AssignTo: &a.networkGroup, Title: "网络参数", Layout: VBox{},
 						Children: []Widget{
-							Label{Text: "监听地址 / 远程 IP:端口"},
+							Label{AssignTo: &a.addressLabel, Text: "远程地址"},
 							LineEdit{AssignTo: &a.address, Text: ":9000", CueBanner: "例如 192.168.1.100:9000"},
 							Composite{Layout: HBox{}, Children: []Widget{
 								Label{Text: "协议", MinSize: Size{Width: 45}}, ComboBox{AssignTo: &a.protocol, Model: []string{"TCP", "UDP"}, CurrentIndex: 0},
-								Label{Text: "角色"}, ComboBox{AssignTo: &a.role, Model: []string{"服务端", "客户端"}, CurrentIndex: 0, OnCurrentIndexChanged: a.updateAddressDefault},
+								Label{Text: "角色"}, ComboBox{AssignTo: &a.role, Model: []string{"服务端", "客户端"}, CurrentIndex: 0, OnCurrentIndexChanged: a.updateMode},
 							}},
 						},
 					},
@@ -191,8 +192,21 @@ func (a *application) updateMode() {
 		return
 	}
 	spec := wincore.SpecOf(a.uiMode())
-	a.serialGroup.SetEnabled(spec.NeedsSerial && !a.connected)
-	a.networkGroup.SetEnabled(spec.NeedsNet && !a.connected)
+	// 按模式只显示需要的参数组(隐藏不相关的)
+	a.serialGroup.SetVisible(spec.NeedsSerial)
+	a.networkGroup.SetVisible(spec.NeedsNet)
+	a.serialGroup.SetEnabled(!a.connected)
+	a.networkGroup.SetEnabled(!a.connected)
+	// 网络标签随模式变化
+	if a.addressLabel != nil {
+		if a.mode.Text() == "HTTP 客户端" {
+			a.addressLabel.SetText("URL")
+		} else if a.isServer() {
+			a.addressLabel.SetText("监听地址")
+		} else {
+			a.addressLabel.SetText("服务器地址")
+		}
+	}
 	// 协议:TCP/UDP 模式由模式决定并禁用,仅串口服务器可改;角色:TCP/UDP/串口服务器可改
 	net := a.mode.Text() == "TCP" || a.mode.Text() == "UDP"
 	a.protocol.SetEnabled(spec.NeedsProto && !a.connected)
