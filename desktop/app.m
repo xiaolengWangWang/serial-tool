@@ -336,15 +336,10 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 }
 
 - (NSString *)sendCurrentData {
-    NSString *mode = [self modeName];
     BOOL hex = _hexSend.state == NSControlStateValueOn;
     char *err;
-    if ([mode isEqualToString:@"HTTP 客户端"])
+    if ([self isHTTPMode])
         err = GoHTTPRequest((char *)_send.string.UTF8String);
-    else if ([mode hasPrefix:@"TCP"])
-        err = GoNetworkSend((char *)_send.string.UTF8String, hex, (char *)_eol.stringValue.UTF8String);
-    else if ([mode hasPrefix:@"UDP"])
-        err = GoUDPSend((char *)_send.string.UTF8String, hex, (char *)_eol.stringValue.UTF8String);
     else
         err = GoSend((char *)_send.string.UTF8String, hex, (char *)_eol.stringValue.UTF8String);
     NSString *message = [NSString stringWithUTF8String:err ?: ""]; free(err);
