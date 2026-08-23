@@ -62,9 +62,9 @@ func com0comInstalled() bool {
 	return false
 }
 
-// runCom0com 调用 com0com 的 setup 工具执行命令。
+// runCom0com 调用 com0com 的 setup 工具执行命令，通过 PowerShell UAC 提权。
 func runCom0com(args ...string) error {
-	setup := "setupc.exe"
+	setup := ""
 	for _, p := range []string{
 		`C:\Program Files\com0com\setupc.exe`,
 		`C:\Program Files (x86)\com0com\setupc.exe`,
@@ -74,5 +74,11 @@ func runCom0com(args ...string) error {
 			break
 		}
 	}
-	return exec.Command(setup, args...).Run()
+	if setup == "" {
+		return fmt.Errorf("未找到 com0com setupc.exe，请先安装 com0com 驱动")
+	}
+	// setupc.exe 需要管理员权限，通过 PowerShell Start-Process -Verb RunAs 提权执行
+	psArgs := fmt.Sprintf(`Start-Process -Verb RunAs -Wait -FilePath '%s' -ArgumentList '%s'`,
+		setup, strings.Join(args, "','"))
+	return exec.Command("powershell", "-NoProfile", "-Command", psArgs).Run()
 }
