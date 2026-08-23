@@ -167,11 +167,13 @@ func (a *application) updateMode() {
 		return
 	}
 	mode := wincore.Mode(a.mode.Text())
-	serialEnabled := mode == wincore.ModeSerial || mode == wincore.ModeSerialServer
-	networkEnabled := mode != wincore.ModeSerial
-	a.serialGroup.SetEnabled(serialEnabled && !a.connected)
-	a.networkGroup.SetEnabled(networkEnabled && !a.connected)
-	if mode != wincore.ModeSerialServer {
+	spec := wincore.SpecOf(mode)
+	a.serialGroup.SetEnabled(spec.NeedsSerial && !a.connected)
+	a.networkGroup.SetEnabled(spec.NeedsNet && !a.connected)
+	if spec.NeedsProto {
+		a.protocol.SetEnabled(!a.connected)
+		a.role.SetEnabled(!a.connected)
+	} else {
 		switch mode {
 		case wincore.ModeTCPServer:
 			a.setProtocolRole(0, 0)
@@ -184,9 +186,6 @@ func (a *application) updateMode() {
 		}
 		a.protocol.SetEnabled(false)
 		a.role.SetEnabled(false)
-	} else {
-		a.protocol.SetEnabled(!a.connected)
-		a.role.SetEnabled(!a.connected)
 	}
 	a.updateAddressDefault()
 	if !a.connected {
@@ -241,11 +240,11 @@ func (a *application) config() (wincore.Config, error) {
 		}
 		_ = a.address.SetText(address)
 	}
-	return wincore.Config{
-		Mode: wincore.Mode(a.mode.Text()), SerialName: strings.TrimSpace(a.ports.Text()), Baud: baud,
-		DataBits: dataBits, StopBits: stopBits, Parity: a.parity.Text(), Protocol: a.protocol.Text(),
-		Role: a.role.Text(), Address: address,
-	}, nil
+	return wincore.BuildConfig(wincore.ConnParams{
+		Mode: wincore.Mode(a.mode.Text()), SerialName: strings.TrimSpace(a.ports.Text()), Address: address,
+		Baud: baud, DataBits: dataBits, StopBits: stopBits, Parity: a.parity.Text(),
+		Protocol: a.protocol.Text(), Role: a.role.Text(),
+	})
 }
 
 func (a *application) toggleConnection() {

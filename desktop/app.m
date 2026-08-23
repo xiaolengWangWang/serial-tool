@@ -74,7 +74,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSTextField *modeLabel = Label(@"工作模式", NSMakeRect(40, 620, 100, 22));
     [view addSubview:modeLabel];
     _mode = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(40, 586, 240, 30) pullsDown:NO];
-    [_mode addItemsWithTitles:@[@"串口", @"TCP", @"UDP", @"串口服务器", @"HTTP 客户端"]];
+    [_mode addItemsWithTitles:@[@"串口", @"TCP 服务端", @"TCP 客户端", @"UDP 服务端", @"UDP 客户端", @"串口服务器", @"HTTP 客户端"]];
     _mode.target = self; _mode.action = @selector(modeChanged:);
     [view addSubview:_mode];
 
@@ -226,9 +226,11 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 - (BOOL)isSerialMode { return [[self modeName] isEqualToString:@"串口"]; }
 - (BOOL)isBridgeMode { return [[self modeName] isEqualToString:@"串口服务器"]; }
 - (BOOL)isHTTPMode { return [[self modeName] isEqualToString:@"HTTP 客户端"]; }
-- (BOOL)isNetworkMode { NSString *m = [self modeName]; return [m isEqualToString:@"TCP"] || [m isEqualToString:@"UDP"]; }
+- (BOOL)isNetworkMode { NSString *m = [self modeName]; return [m hasPrefix:@"TCP"] || [m hasPrefix:@"UDP"]; }
 - (BOOL)isServerMode {
-    if ([self isNetworkMode] || [self isBridgeMode]) return [_role.titleOfSelectedItem isEqualToString:@"服务端"];
+    NSString *m = [self modeName];
+    if ([m isEqualToString:@"TCP 服务端"] || [m isEqualToString:@"UDP 服务端"]) return YES;
+    if ([self isBridgeMode]) return [_role.titleOfSelectedItem isEqualToString:@"服务端"];
     return NO;
 }
 
@@ -301,10 +303,10 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
                                            (char *)_bridgeProtocol.titleOfSelectedItem.UTF8String,
                                            (char *)_role.titleOfSelectedItem.UTF8String,
                                            (char *)endpoint.UTF8String, hex);
-    else if ([mode isEqualToString:@"TCP"]) err = server ? GoListen((char *)endpoint.UTF8String, hex)
-                                                         : GoConnectTCP((char *)endpoint.UTF8String, hex);
-    else if ([mode isEqualToString:@"UDP"]) err = server ? GoListenUDP((char *)endpoint.UTF8String, hex)
-                                                         : GoConnectUDP((char *)endpoint.UTF8String, hex);
+    else if ([mode isEqualToString:@"TCP 服务端"]) err = GoListen((char *)endpoint.UTF8String, hex);
+    else if ([mode isEqualToString:@"TCP 客户端"]) err = GoConnectTCP((char *)endpoint.UTF8String, hex);
+    else if ([mode isEqualToString:@"UDP 服务端"]) err = GoListenUDP((char *)endpoint.UTF8String, hex);
+    else if ([mode isEqualToString:@"UDP 客户端"]) err = GoConnectUDP((char *)endpoint.UTF8String, hex);
     else if (http) err = GoConnectHTTP((char *)endpoint.UTF8String);
     else err = GoConnect((char *)endpoint.UTF8String, _baud.intValue, _data.intValue, _stop.intValue,
                          (char *)_parity.stringValue.UTF8String, hex);
@@ -398,7 +400,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _ports.hidden = !usesSerialName; _refresh.hidden = !usesSerialName;
     for (NSView *c in _serialControls) c.hidden = !usesSerialName;
     _protocolLabel.hidden = !bridge; _bridgeProtocol.hidden = !bridge;
-    _roleLabel.hidden = !usesNet; _role.hidden = !usesNet;
+    _roleLabel.hidden = !bridge; _role.hidden = !bridge;   // 角色仅串口服务器
     _ipLabel.hidden = !(usesNet || http); _ip.hidden = !(usesNet || http);
     _ipLabel.stringValue = net ? (server ? @"监听网卡" : @"服务器 IP") : @"IP 地址";
     _portLabel.hidden = !usesNet; _port.hidden = !usesNet;
@@ -411,7 +413,6 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     } else if (http) {
         _ipLabel.frame = NSMakeRect(40, 548, 150, 22);     _ip.frame = NSMakeRect(40, 514, 240, 30);
     } else { // TCP / UDP
-        _roleLabel.frame = NSMakeRect(40, 548, 100, 22);   _role.frame = NSMakeRect(40, 514, 150, 30);
         _ipLabel.frame = NSMakeRect(40, 466, 100, 22);     _ip.frame = NSMakeRect(40, 432, 150, 30);
         _portLabel.frame = NSMakeRect(196, 466, 84, 22);   _port.frame = NSMakeRect(196, 432, 84, 30);
     }
@@ -501,11 +502,9 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSString *storedMode = info[@"mode"], *endpoint = info[@"endpoint"];
     NSDictionary *p = [self parseParameters:info[@"parameters"]];
 
-    // 存储的是细分模式(如 TCP 客户端),映射到新 UI 的"模式 + 角色"
+    // 存储模式与 UI 7 模式一致,仅串口服务器需要补角色
     NSString *uiMode = storedMode, *role = nil;
-    if ([storedMode hasPrefix:@"TCP"]) { uiMode = @"TCP"; role = [storedMode hasSuffix:@"服务端"] ? @"服务端" : @"客户端"; }
-    else if ([storedMode hasPrefix:@"UDP"]) { uiMode = @"UDP"; role = [storedMode hasSuffix:@"服务端"] ? @"服务端" : @"客户端"; }
-    else if ([storedMode isEqualToString:@"串口服务器"]) { role = [p[@"role"] length] ? p[@"role"] : @"服务端"; }
+    if ([storedMode isEqualToString:@"串口服务器"]) { role = [p[@"role"] length] ? p[@"role"] : @"服务端"; }
 
     [_mode selectItemWithTitle:uiMode];
     if (role) [_role selectItemWithTitle:role];
