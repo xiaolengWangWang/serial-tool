@@ -132,6 +132,34 @@ func GoStats() *C.char {
 		wincore.FormatDuration(time.Since(st.StartedAt)), st.Reconnects, st.Errors))
 }
 
+//export GoFavoriteNames
+func GoFavoriteNames() *C.char {
+	return C.CString(strings.Join(engine.FavoriteNames(), "\n"))
+}
+
+//export GoSaveFavorite
+func GoSaveFavorite(name, value *C.char) *C.char {
+	if err := engine.SaveFavorite(C.GoString(name), C.GoString(value)); err != nil {
+		return C.CString("错误:" + err.Error())
+	}
+	return C.CString("")
+}
+
+//export GoDeleteFavorite
+func GoDeleteFavorite(name *C.char) {
+	_ = engine.DeleteFavorite(C.GoString(name))
+}
+
+//export GoFavorite
+func GoFavorite(name *C.char) *C.char {
+	return C.CString(engine.Favorite(C.GoString(name)))
+}
+
+//export GoRecentSends
+func GoRecentSends() *C.char {
+	return C.CString(strings.Join(engine.RecentSends(), "\n"))
+}
+
 //export GoListPorts
 func GoListPorts() *C.char {
 	ports, err := wincore.ListPorts()

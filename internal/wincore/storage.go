@@ -17,7 +17,7 @@ import (
 
 var (
 	databaseSizeLimit int64 = 100 << 20
-	retentionDays           = 7
+	retentionDays           = 30
 	maxStoreSize     int64  = 1 << 30 // 1 GB
 )
 

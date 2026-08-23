@@ -73,6 +73,9 @@ type Engine struct {
 	startedAt    int64
 	reconnectAddr string
 	reconnectStop chan struct{}
+	histMu       sync.Mutex
+	favorites    map[string]string
+	sendHistory  []string
 }
 
 // SetOnClosed 注册"连接被动断开"回调(远端关闭、串口拔出、监听出错等,
@@ -107,7 +110,9 @@ func New(dataDir string, onData func(string, []byte), onLog func(string)) (*Engi
 	if err != nil {
 		return nil, err
 	}
-	return &Engine{store: store, onData: onData, onLog: onLog, vbridges: map[int]*vBridge{}}, nil
+	e := &Engine{store: store, onData: onData, onLog: onLog, vbridges: map[int]*vBridge{}, favorites: map[string]string{}}
+	e.LoadFavorites()
+	return e, nil
 }
 
 func ListPorts() ([]string, error) { return serial.GetPortsList() }
@@ -545,6 +550,7 @@ func (e *Engine) Send(input string, asHex bool, eol string) error {
 		return errors.New("尚未连接")
 	}
 	if err == nil {
+		e.rememberSend(input)
 		e.storeSent(data)
 	}
 	return err
@@ -558,6 +564,7 @@ func (e *Engine) SendNetwork(input string, asHex bool, eol string) error {
 	if err = e.broadcast(data, true); err != nil {
 		return err
 	}
+	e.rememberSend(input)
 	e.storeSent(data)
 	return nil
 }
@@ -570,6 +577,7 @@ func (e *Engine) SendUDP(input string, asHex bool, eol string) error {
 	if err = e.sendUDP(data, true); err != nil {
 		return err
 	}
+	e.rememberSend(input)
 	e.storeSent(data)
 	return nil
 }

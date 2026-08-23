@@ -25,6 +25,7 @@ type application struct {
 	mw                                    *walk.MainWindow
 	mode, ports, baud, data, parity, stop *walk.ComboBox
 	protocol, role, eol                   *walk.ComboBox
+	sendHistory, favorites               *walk.ComboBox
 	address, interval                     *walk.LineEdit
 	serialGroup, networkGroup             *walk.GroupBox
 	connectButton, timerButton            *walk.PushButton
@@ -92,6 +93,8 @@ func main() {
 	app.setupTray()
 	app.refreshPorts()
 	app.updateMode()
+	app.refreshSendHistory()
+	app.refreshFavorites()
 	app.appendLog("SQLite 数据目录: " + app.engine.DataDir())
 	go app.statsLoop()
 	app.mw.Run()
@@ -186,6 +189,12 @@ func (a *application) createWindow() error {
 						Label{Text: "发送数据"}, HSpacer{}, CheckBox{AssignTo: &a.hexSend, Text: "HEX 发送", Checked: true},
 						Label{Text: "行尾"}, ComboBox{AssignTo: &a.eol, Model: []string{"无", "LF", "CR", "CRLF"}, CurrentIndex: 0, MinSize: Size{Width: 75}},
 						Label{Text: "间隔(ms)"}, LineEdit{AssignTo: &a.interval, Text: "1000", MinSize: Size{Width: 75}, MaxSize: Size{Width: 90}},
+					}},
+					Composite{Layout: HBox{}, Children: []Widget{
+						Label{Text: "历史"}, ComboBox{AssignTo: &a.sendHistory, Editable: true, MinSize: Size{Width: 150}, OnCurrentIndexChanged: a.onSendHistorySelected},
+						Label{Text: "收藏"}, ComboBox{AssignTo: &a.favorites, Editable: true, MinSize: Size{Width: 150}, OnCurrentIndexChanged: a.onFavoriteSelected},
+						PushButton{Text: "收藏当前", OnClicked: a.saveFavorite},
+						PushButton{Text: "删除收藏", OnClicked: a.deleteFavorite},
 					}},
 					Composite{Layout: HBox{}, StretchFactor: 1, Children: []Widget{
 						TextEdit{AssignTo: &a.sendEdit, VScroll: true, HScroll: true, StretchFactor: 1, Font: Font{Family: "Consolas", PointSize: 10}},
@@ -373,6 +382,7 @@ func (a *application) sendOnce(fromTimer bool) {
 		a.showError(err)
 		return
 	}
+	a.refreshSendHistory()
 	// HTTP 模式的请求/响应由引擎日志与 onData 呈现,此处只记录其它模式的发送
 	if a.mode.Text() != "HTTP 客户端" {
 		var body string
@@ -579,6 +589,70 @@ func (a *application) updateStatus(st wincore.Stats) {
 		wincore.FormatDuration(time.Since(st.StartedAt)),
 		st.Reconnects,
 		st.Errors))
+}
+
+func (a *application) refreshSendHistory() {
+	if a.sendHistory == nil {
+		return
+	}
+	cur := a.sendHistory.Text()
+	_ = a.sendHistory.SetModel(a.engine.RecentSends())
+	if cur != "" {
+		_ = a.sendHistory.SetText(cur)
+	}
+}
+
+func (a *application) refreshFavorites() {
+	if a.favorites == nil {
+		return
+	}
+	cur := a.favorites.Text()
+	_ = a.favorites.SetModel(a.engine.FavoriteNames())
+	if cur != "" {
+		_ = a.favorites.SetText(cur)
+	}
+}
+
+func (a *application) onSendHistorySelected() {
+	if txt := a.sendHistory.Text(); txt != "" {
+		_ = a.sendEdit.SetText(txt)
+	}
+}
+
+func (a *application) onFavoriteSelected() {
+	if name := a.favorites.Text(); name != "" {
+		if v := a.engine.Favorite(name); v != "" {
+			_ = a.sendEdit.SetText(v)
+		}
+	}
+}
+
+func (a *application) saveFavorite() {
+	name := strings.TrimSpace(a.favorites.Text())
+	if name == "" {
+		a.showError(fmt.Errorf("请先在收藏框输入名称"))
+		return
+	}
+	if err := a.engine.SaveFavorite(name, a.sendEdit.Text()); err != nil {
+		a.showError(err)
+		return
+	}
+	a.refreshFavorites()
+	a.appendLog(fmt.Sprintf("已收藏报文: %s", name))
+}
+
+func (a *application) deleteFavorite() {
+	name := a.favorites.Text()
+	if name == "" {
+		a.showError(fmt.Errorf("请先选择要删除的收藏"))
+		return
+	}
+	if err := a.engine.DeleteFavorite(name); err != nil {
+		a.showError(err)
+		return
+	}
+	a.refreshFavorites()
+	a.appendLog(fmt.Sprintf("已删除收藏: %s", name))
 }
 
 // newInstance 启动一个新实例(多开)。

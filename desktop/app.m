@@ -10,7 +10,7 @@
     NSComboBox *_vsIP;
     NSTextField *_vsPort;
     NSMutableArray *_vsList;
-    NSPopUpButton *_mode, *_bridgeProtocol, *_role, *_history;
+    NSPopUpButton *_mode, *_bridgeProtocol, *_role, *_history, *_sendHistory, *_favorites;
     NSComboBox *_ports, *_baud, *_data, *_stop, *_parity, *_eol, *_ip;
     NSTextField *_port, *_endpointLabel, *_roleLabel, *_ipLabel, *_portLabel, *_protocolLabel, *_status, *_interval;
     NSArray *_serialControls;
@@ -164,7 +164,20 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _interval.stringValue = @"1000"; _interval.alignment = NSTextAlignmentRight;
     _interval.autoresizingMask = NSViewMinXMargin; [view addSubview:_interval];
 
-    NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 58, 590, 172)] autorelease];
+    [view addSubview:Label(@"历史", NSMakeRect(320, 188, 40, 24))];
+_sendHistory = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(360, 184, 140, 26) pullsDown:NO];
+_sendHistory.target = self; _sendHistory.action = @selector(sendHistorySelected:);
+[view addSubview:_sendHistory];
+[view addSubview:Label(@"收藏", NSMakeRect(508, 188, 40, 24))];
+_favorites = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(548, 184, 140, 26) pullsDown:NO];
+_favorites.target = self; _favorites.action = @selector(favoriteSelected:);
+[view addSubview:_favorites];
+NSButton *favBtn = [NSButton buttonWithTitle:@"收藏当前" target:self action:@selector(saveFavorite:)];
+favBtn.frame = NSMakeRect(696, 182, 90, 28); [view addSubview:favBtn];
+NSButton *delBtn = [NSButton buttonWithTitle:@"删除" target:self action:@selector(deleteFavorite:)];
+delBtn.frame = NSMakeRect(790, 182, 70, 28); [view addSubview:delBtn];
+
+NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 44, 590, 142)] autorelease];
     sendScroll.borderType = NSBezelBorder; sendScroll.hasVerticalScroller = YES; sendScroll.autoresizingMask = NSViewWidthSizable;
     _send = [[NSTextView alloc] initWithFrame:sendScroll.contentView.bounds];
     _send.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
@@ -181,6 +194,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [self modeChanged:nil];
     [self startStatsTimer];
     [self reloadHistory];
+    [self refreshSendHistory];
+    [self refreshFavorites];
     char *database = GoDatabaseInfo();
     NSString *databaseInfo = [NSString stringWithUTF8String:database ?: ""]; free(database);
     if ([databaseInfo hasPrefix:@"错误:"]) [self alert:databaseInfo];
@@ -266,6 +281,61 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSString *text = [NSString stringWithUTF8String:raw ?: ""];
     free(raw);
     if (text.length) _status.stringValue = text;
+}
+
+- (void)refreshSendHistory {
+    [_sendHistory removeAllItems];
+    char *raw = GoRecentSends();
+    NSString *v = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
+    if (v.length) [_sendHistory addItemsWithTitles:[v componentsSeparatedByString:@"\n"]];
+}
+
+- (void)refreshFavorites {
+    [_favorites removeAllItems];
+    char *raw = GoFavoriteNames();
+    NSString *v = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
+    if (v.length) [_favorites addItemsWithTitles:[v componentsSeparatedByString:@"\n"]];
+}
+
+- (void)sendHistorySelected:(id)sender {
+    NSString *txt = _sendHistory.titleOfSelectedItem;
+    if (txt.length) _send.string = txt;
+}
+
+- (void)favoriteSelected:(id)sender {
+    NSString *name = _favorites.titleOfSelectedItem;
+    if (!name.length) return;
+    char *raw = GoFavorite((char *)name.UTF8String);
+    NSString *v = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
+    if (v.length) _send.string = v;
+}
+
+- (void)saveFavorite:(id)sender {
+    NSString *content = _send.string;
+    if (!content.length) { [self alert:@"请先输入要收藏的报文"]; return; }
+    NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+    alert.messageText = @"收藏当前报文";
+    alert.informativeText = @"输入收藏名称:";
+    [alert addButtonWithTitle:@"保存"];
+    [alert addButtonWithTitle:@"取消"];
+    NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 260, 24)];
+    alert.accessoryView = field;
+    if ([alert runModal] != NSAlertFirstButtonReturn) return;
+    NSString *name = [field.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    if (!name.length) return;
+    char *err = GoSaveFavorite((char *)name.UTF8String, (char *)content.UTF8String);
+    NSString *msg = [NSString stringWithUTF8String:err ?: ""]; free(err);
+    if (msg.length) { [self alert:msg]; return; }
+    [self refreshFavorites];
+    [self appendText:[NSString stringWithFormat:@"[已收藏报文:%@]\n", name]];
+}
+
+- (void)deleteFavorite:(id)sender {
+    NSString *name = _favorites.titleOfSelectedItem;
+    if (!name.length) { [self alert:@"请先选择要删除的收藏"]; return; }
+    GoDeleteFavorite((char *)name.UTF8String);
+    [self refreshFavorites];
+    [self appendText:[NSString stringWithFormat:@"[已删除收藏:%@]\n", name]];
 }
 
 - (void)resetToDisconnected {
