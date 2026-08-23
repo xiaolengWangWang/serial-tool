@@ -1,27 +1,27 @@
 package wincore
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"net"
-	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/creack/pty"
 	"golang.org/x/term"
 )
 
 type vBridge struct {
-	id      int
-	addr    string
-	link    string
-	ptmx    *os.File
-	tty     *os.File
-	mu      sync.Mutex
-	conn    net.Conn
-	stop    chan struct{}
+	id        int
+	addr      string
+	link      string
+	master    io.ReadWriteCloser // 应用读写端
+	close     func()              // 关闭并清理设备
+	mu        sync.Mutex
+	conn      net.Conn
+	stop      chan struct{}
 	once      sync.Once
 	dropped   uint64 // 断线/重连期间被丢弃的字节数(原子)
 	sessionID int64  // 该桥接的 SQLite 会话 ID(0 表示不记录)
@@ -34,6 +34,16 @@ type VSerialInfo struct {
 	Link string
 }
 
+// vserialDevice 是一个虚拟串口设备:master 为应用读写端,link 为用户可见的设备路径/名称。
+type vserialDevice struct {
+	master io.ReadWriteCloser
+	link   string
+	close  func()
+}
+
+// ErrVSerialNeedsDriver 表示平台需要安装额外的虚拟串口驱动(如 Windows 的 com0com)。
+var ErrVSerialNeedsDriver = errors.New("需要安装虚拟串口驱动")
+
 // makeRaw 便于测试注入 term.MakeRaw 的失败路径,默认即 term.MakeRaw。
 var makeRaw = term.MakeRaw
 
@@ -43,35 +53,20 @@ func (e *Engine) AddVirtualSerial(addr string) (VSerialInfo, error) {
 	if addr == "" {
 		return VSerialInfo{}, fmt.Errorf("请输入要桥接的 IP:端口")
 	}
-	ptmx, tty, err := pty.Open()
+	dev, err := newVserialDevice()
 	if err != nil {
-		return VSerialInfo{}, fmt.Errorf("创建虚拟串口失败(该平台可能不支持): %w", err)
-	}
-	// raw 模式:关回显与行规程,避免二进制数据被改写或形成回显环路。
-	// 失败即终止创建并清理资源,不允许降级运行(二进制透明传输依赖 raw 模式)。
-	if _, err := makeRaw(int(tty.Fd())); err != nil {
-		name := tty.Name()
-		_ = ptmx.Close()
-		_ = tty.Close()
-		e.emitLog(fmt.Sprintf("虚拟串口创建失败: raw 模式设置失败(%s): %v", name, err))
-		return VSerialInfo{}, fmt.Errorf("虚拟串口 raw 模式设置失败(%s): %w", name, err)
+		return VSerialInfo{}, err
 	}
 
 	e.Lock()
 	e.vseq++
 	id := e.vseq
 	e.Unlock()
-	// 设备名带进程 PID,保证多实例(多进程)不会撞名、互相覆盖软链
-	link := fmt.Sprintf("/tmp/CommBox-vserial-%d-%d", os.Getpid(), id)
-	_ = os.Remove(link)
-	if os.Symlink(tty.Name(), link) != nil {
-		link = tty.Name() // 建软链失败则用真实设备路径
-	}
 
 	// TCP 连接放到后台:服务端未启动时也允许先创建虚拟串口,
 	// 由 vDialLoop 统一负责首次连接与断线重连(conn 初始为 nil)。
 	sessionID, _ := e.store.NewSession("虚拟串口", addr, "") // 失败则 sessionID=0,不记录数据
-	b := &vBridge{id: id, addr: addr, link: link, ptmx: ptmx, tty: tty, stop: make(chan struct{}), sessionID: sessionID}
+	b := &vBridge{id: id, addr: addr, link: dev.link, master: dev.master, close: dev.close, stop: make(chan struct{}), sessionID: sessionID}
 	e.Lock()
 	e.vbridges[id] = b
 	e.Unlock()
@@ -79,8 +74,8 @@ func (e *Engine) AddVirtualSerial(addr string) (VSerialInfo, error) {
 	go e.vPtmxReader(b) // 虚拟串口 → 当前网络连接(常驻)
 	go e.vDialLoop(b)   // 网络 → 虚拟串口,首次连接与断线重连走同一套机制
 
-	e.emitLog(fmt.Sprintf("虚拟串口 #%d 已创建: %s ↔ %s(后台自动连接)", id, link, addr))
-	return VSerialInfo{ID: id, Addr: addr, Link: link}, nil
+	e.emitLog(fmt.Sprintf("虚拟串口 #%d 已创建: %s ↔ %s(后台自动连接)", id, dev.link, addr))
+	return VSerialInfo{ID: id, Addr: addr, Link: dev.link}, nil
 }
 
 // vPtmxReader 常驻:把虚拟串口写入的数据发往当前 TCP 连接。
@@ -89,7 +84,7 @@ func (e *Engine) vPtmxReader(b *vBridge) {
 	buf := make([]byte, 4096)
 	dropping := false
 	for {
-		n, err := b.ptmx.Read(buf)
+		n, err := b.master.Read(buf)
 		if n > 0 {
 			if b.sessionID != 0 {
 				_ = e.store.ReceivedForSession(b.sessionID, fmt.Sprintf("虚拟串口 #%d 发送", b.id), append([]byte(nil), buf[:n]...))
@@ -137,7 +132,7 @@ func (e *Engine) vDialLoop(b *vBridge) {
 		for {
 			n, rerr := conn.Read(rbuf)
 			if n > 0 {
-				_, _ = b.ptmx.Write(rbuf[:n])
+				_, _ = b.master.Write(rbuf[:n])
 				if b.sessionID != 0 {
 					_ = e.store.ReceivedForSession(b.sessionID, fmt.Sprintf("虚拟串口 #%d 接收", b.id), append([]byte(nil), rbuf[:n]...))
 				}
@@ -196,14 +191,8 @@ func (e *Engine) RemoveVirtualSerial(id int) {
 	if c != nil {
 		_ = c.Close()
 	}
-	if b.ptmx != nil {
-		_ = b.ptmx.Close()
-	}
-	if b.tty != nil {
-		_ = b.tty.Close()
-	}
-	if b.link != "" {
-		_ = os.Remove(b.link)
+	if b.close != nil {
+		b.close()
 	}
 	if b.sessionID != 0 {
 		e.store.EndSessionID(b.sessionID)
