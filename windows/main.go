@@ -93,6 +93,7 @@ func main() {
 	app.refreshPorts()
 	app.updateMode()
 	app.appendLog("SQLite 数据目录: " + app.engine.DataDir())
+	go app.statsLoop()
 	app.mw.Run()
 	app.stopTimer(false)
 }
@@ -539,6 +540,45 @@ func (a *application) openMonitor() {
 		})
 	}
 	a.monitorWindow.Show()
+}
+
+// statsLoop 每秒刷新一次状态栏(连接状态 + RX/TX/运行时间/重连/错误)。
+func (a *application) statsLoop() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		st := a.engine.Stats()
+		a.mw.Synchronize(func() { a.updateStatus(st) })
+	}
+}
+
+// updateStatus 根据统计快照刷新状态栏文本。
+func (a *application) updateStatus(st wincore.Stats) {
+	if a.status == nil {
+		return
+	}
+	state := "● 未连接"
+	switch st.State {
+	case wincore.StateConnecting:
+		state = "● 正在连接..."
+	case wincore.StateConnected:
+		state = "● 已连接"
+	case wincore.StateReconnecting:
+		state = "● 重连中..."
+	case wincore.StateError:
+		state = "● 错误"
+	}
+	if st.State == wincore.StateDisconnected {
+		a.status.SetText(state)
+		return
+	}
+	a.status.SetText(fmt.Sprintf("%s | RX %s | TX %s | 运行 %s | 重连 %d | 错误 %d",
+		state,
+		wincore.FormatBytes(st.RXBytes),
+		wincore.FormatBytes(st.TXBytes),
+		wincore.FormatDuration(time.Since(st.StartedAt)),
+		st.Reconnects,
+		st.Errors))
 }
 
 // newInstance 启动一个新实例(多开)。

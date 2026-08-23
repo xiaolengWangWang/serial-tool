@@ -179,6 +179,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [_window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
     [self modeChanged:nil];
+    [self startStatsTimer];
     [self reloadHistory];
     char *database = GoDatabaseInfo();
     NSString *databaseInfo = [NSString stringWithUTF8String:database ?: ""]; free(database);
@@ -253,6 +254,18 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSString *vlinks = [NSString stringWithUTF8String:vraw ?: ""]; free(vraw);
     if (vlinks.length) [_ports addItemsWithObjectValues:[vlinks componentsSeparatedByString:@"\n"]];
     if (_ports.numberOfItems) [_ports selectItemAtIndex:0];
+}
+
+// 每秒刷新状态栏(连接状态 + RX/TX/运行时间/重连/错误)。
+- (void)startStatsTimer {
+    [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(refreshStats:) userInfo:nil repeats:YES];
+}
+
+- (void)refreshStats:(NSTimer *)timer {
+    char *raw = GoStats();
+    NSString *text = [NSString stringWithUTF8String:raw ?: ""];
+    free(raw);
+    if (text.length) _status.stringValue = text;
 }
 
 - (void)resetToDisconnected {

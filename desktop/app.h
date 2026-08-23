@@ -26,6 +26,7 @@ char *GoUDPSend(char *text, int hexMode, char *eol);
 void GoSetHexView(int enabled);
 char *GoDatabaseInfo(void);
 char *GoVersion(void);
+char *GoStats(void);
 char *GoRecentSessions(void);
 char *GoLocalIP(void);
 char *GoLocalIPs(void);

@@ -1,9 +1,36 @@
 package wincore
 
 import (
+	"fmt"
 	"sync/atomic"
 	"time"
 )
+
+// FormatBytes 把字节数格式化为人类可读的 KB/MB/GB。
+func FormatBytes(n uint64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.2f GB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.2f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+// FormatDuration 把时长格式化为 HH:MM:SS。
+func FormatDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	d = d.Round(time.Second)
+	h := d / time.Hour
+	m := (d % time.Hour) / time.Minute
+	s := (d % time.Minute) / time.Second
+	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+}
 
 // ConnState 连接状态。UI 不自行推断连接状态,统一由核心引擎提供。
 type ConnState int32

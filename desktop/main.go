@@ -110,6 +110,28 @@ func GoVersion() *C.char {
 	return C.CString(wincore.Version)
 }
 
+//export GoStats
+func GoStats() *C.char {
+	st := engine.Stats()
+	state := "● 未连接"
+	switch st.State {
+	case wincore.StateConnecting:
+		state = "● 正在连接..."
+	case wincore.StateConnected:
+		state = "● 已连接"
+	case wincore.StateReconnecting:
+		state = "● 重连中..."
+	case wincore.StateError:
+		state = "● 错误"
+	}
+	if st.State == wincore.StateDisconnected {
+		return C.CString(state)
+	}
+	return C.CString(fmt.Sprintf("%s | RX %s | TX %s | 运行 %s | 重连 %d | 错误 %d",
+		state, wincore.FormatBytes(st.RXBytes), wincore.FormatBytes(st.TXBytes),
+		wincore.FormatDuration(time.Since(st.StartedAt)), st.Reconnects, st.Errors))
+}
+
 //export GoListPorts
 func GoListPorts() *C.char {
 	ports, err := wincore.ListPorts()
