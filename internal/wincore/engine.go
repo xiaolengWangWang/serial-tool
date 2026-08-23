@@ -13,6 +13,7 @@ import (
 	neturl "net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.bug.st/serial"
@@ -62,6 +63,14 @@ type Engine struct {
 	httpClient   *http.Client
 	vbridges     map[int]*vBridge // 后台运行的多个虚拟串口桥接
 	vseq         int
+	rxBytes      uint64
+	txBytes      uint64
+	rxCount      uint64
+	txCount      uint64
+	reconnects   uint64
+	errCount     uint64
+	state        int32
+	startedAt    int64
 }
 
 // SetOnClosed 注册"连接被动断开"回调(远端关闭、串口拔出、监听出错等,
@@ -84,6 +93,8 @@ func (e *Engine) recordEvent(message string) {
 
 // storeSent 把一条成功发送的报文入库(source=发送),一条报文一条记录。
 func (e *Engine) storeSent(data []byte) {
+	atomic.AddUint64(&e.txCount, 1)
+	atomic.AddUint64(&e.txBytes, uint64(len(data)))
 	if err := e.store.Received("发送", data); err != nil {
 		e.emitLog("SQLite 发送记录写入失败: " + err.Error())
 	}
@@ -176,6 +187,8 @@ func (e *Engine) connectHTTP(cfg Config) error {
 	if err := e.store.StartSession(string(cfg.Mode), url, ""); err != nil {
 		e.emitLog("SQLite 会话写入失败: " + err.Error())
 	}
+	atomic.StoreInt64(&e.startedAt, time.Now().UnixNano())
+	atomic.StoreInt32(&e.state, int32(StateConnected))
 	e.emitLog("HTTP 就绪: " + url + "(发送框:第一行\"[方法] 路径\",可跟请求头行,空行后为 body)")
 	return nil
 }
@@ -330,6 +343,7 @@ func (e *Engine) HTTPRequest(spec string) error {
 
 func (e *Engine) Connect(cfg Config) error {
 	e.Disconnect()
+	atomic.StoreInt32(&e.state, int32(StateConnecting))
 	if cfg.Mode == ModeHTTPClient {
 		return e.connectHTTP(cfg)
 	}
@@ -431,6 +445,8 @@ func (e *Engine) Connect(cfg Config) error {
 	if udp != nil {
 		go e.readUDP(udp)
 	}
+	atomic.StoreInt64(&e.startedAt, time.Now().UnixNano())
+	atomic.StoreInt32(&e.state, int32(StateConnected))
 	e.emitLog(fmt.Sprintf("已启动 %s %s", cfg.Mode, endpoint))
 	return nil
 }
@@ -450,6 +466,7 @@ func serialMode(cfg Config) *serial.Mode {
 }
 
 func (e *Engine) Disconnect() {
+	atomic.StoreInt32(&e.state, int32(StateDisconnected))
 	e.Lock()
 	p, listener, clients, udp := e.port, e.listener, e.clients, e.udp
 	e.port, e.listener, e.clients, e.udp, e.udpPeer = nil, nil, nil, nil, nil
@@ -675,6 +692,8 @@ func (e *Engine) readSerial(p serial.Port) {
 }
 
 func (e *Engine) receive(source string, data []byte) {
+	atomic.AddUint64(&e.rxCount, 1)
+	atomic.AddUint64(&e.rxBytes, uint64(len(data)))
 	copyOfData := append([]byte(nil), data...)
 	if err := e.store.Received(source, copyOfData); err != nil {
 		e.emitLog("SQLite 写入失败: " + err.Error())
