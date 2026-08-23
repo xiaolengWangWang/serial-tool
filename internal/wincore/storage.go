@@ -15,7 +15,11 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var databaseSizeLimit int64 = 100 << 20
+var (
+	databaseSizeLimit int64 = 100 << 20
+	retentionDays           = 7
+	maxStoreSize     int64  = 1 << 30 // 1 GB
+)
 
 type Store struct {
 	sync.Mutex
@@ -38,6 +42,7 @@ func OpenStore(dir string) (*Store, error) {
 	if err := s.openFileLocked(time.Now(), false); err != nil {
 		return nil, err
 	}
+	s.cleanupOldFiles()
 	return s, nil
 }
 
@@ -268,4 +273,46 @@ func databaseFamilySize(path string) int64 {
 		}
 	}
 	return total
+}
+
+// cleanupOldFiles 清理过期数据:删除超过 retentionDays 天的数据文件,
+// 若总大小仍超过 maxStoreSize,再删除最旧文件直到不超限。
+func (s *Store) cleanupOldFiles() {
+	files, _ := filepath.Glob(filepath.Join(s.dir, "serial-data-*.sqlite3"))
+	if len(files) == 0 {
+		return
+	}
+	sort.Strings(files)
+	cutoff := time.Now().AddDate(0, 0, -retentionDays).Format("20060102")
+
+	var total int64
+	keep := make([]string, 0, len(files))
+	for _, f := range files {
+		if date := fileDate(f); date != "" && date < cutoff {
+			removeDBFile(f)
+			continue
+		}
+		keep = append(keep, f)
+		total += databaseFamilySize(f)
+	}
+	for i := 0; total > maxStoreSize && i < len(keep); i++ {
+		total -= databaseFamilySize(keep[i])
+		removeDBFile(keep[i])
+	}
+}
+
+// fileDate 从文件名 serial-data-YYYYMMDD-NNN.sqlite3 提取日期 YYYYMMDD。
+func fileDate(path string) string {
+	rest := strings.TrimPrefix(filepath.Base(path), "serial-data-")
+	if i := strings.IndexByte(rest, '-'); i >= 0 {
+		return rest[:i]
+	}
+	return ""
+}
+
+// removeDBFile 删除数据文件及其 -wal/-shm 附属文件。
+func removeDBFile(path string) {
+	_ = os.Remove(path)
+	_ = os.Remove(path + "-wal")
+	_ = os.Remove(path + "-shm")
 }
