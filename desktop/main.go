@@ -185,14 +185,18 @@ func GoConnectHTTP(url *C.char) *C.char {
 	return C.CString("")
 }
 
+// vserialInfoString 把虚拟串口信息序列化成返回给 Objective-C 的 "id\x1f端点\x1f设备路径" 字符串。
+func vserialInfoString(info wincore.VSerialInfo) string {
+	return fmt.Sprintf("%d\x1f%s\x1f%s", info.ID, info.Addr, info.Link)
+}
+
 //export GoAddVSerial
 func GoAddVSerial(address *C.char) *C.char {
 	info, err := engine.AddVirtualSerial(C.GoString(address))
 	if err != nil {
 		return C.CString("错误:" + err.Error())
 	}
-	// 返回 "id\x1f端点\x1f设备路径"
-	return C.CString(fmt.Sprintf("%d\x1f%s\x1f%s", info.ID, info.Addr, info.Link))
+	return C.CString(vserialInfoString(info))
 }
 
 //export GoRemoveVSerial

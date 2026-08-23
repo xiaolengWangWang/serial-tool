@@ -18,8 +18,10 @@
 go build -o serial-tool .
 
 ./serial-tool -list                                             # 列出串口
+./serial-tool -version                                          # 显示版本号
 ./serial-tool -port /dev/tty.usbserial-0001 -baud 115200 -eol crlf   # 文本收发
 ./serial-tool -port /dev/tty.usbserial-0001 -baud 9600 -hex -hex-send # HEX 收发
+./serial-tool vserial --host 127.0.0.1 --port 7000              # 虚拟串口(桥接 TCP 到本机串口设备)
 ```
 Windows 串口名可写 `COM3`。`./serial-tool -h` 查看全部参数。
 
@@ -72,11 +74,11 @@ GET /api/v1/health
 把一个 TCP 端点桥接成本机虚拟串口设备,供任意串口软件打开(内置等价于 `socat PTY,raw TCP:host:port`)。
 
 - 菜单 **操作 → 虚拟串口映射**(⌘⇧V)打开管理窗口
-- 填 IP + 端口 → **添加映射**,生成设备如 `/tmp/GoSerialTool-vserial-1`
+- 填 IP + 端口 → **添加映射**,生成设备如 `/tmp/GoSerialTool-vserial-<PID>-1`(设备名带进程 PID,多实例不会撞名)
 - **后台常驻,可同时多个**,与主连接互不影响
 - **自动重连**:被桥接的服务端空闲断开后,设备保留并自动重连
 - 在"串口"模式点刷新,列表会包含这些虚拟串口设备,可直接打开
-- 用法:`screen /tmp/GoSerialTool-vserial-1 115200`,或用另一个串口工具/本工具第二实例打开
+- 用法:`screen /tmp/GoSerialTool-vserial-<PID>-1 115200`,或用另一个串口工具/本工具第二实例打开
 
 > Windows 无 PTY,暂不提供虚拟串口。
 
@@ -112,7 +114,7 @@ GET /api/v1/health
 
 ```bash
 # 命令行(多平台,纯 Go)
-CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o serial-tool .
+CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X main.version=0.3.0' -o serial-tool .
 
 # Windows 桌面版(可交叉编译)
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath \

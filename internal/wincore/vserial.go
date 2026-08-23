@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/creack/pty"
@@ -14,15 +15,16 @@ import (
 )
 
 type vBridge struct {
-	id   int
-	addr string
-	link string
-	ptmx *os.File
-	tty  *os.File
-	mu   sync.Mutex
-	conn net.Conn
-	stop chan struct{}
-	once sync.Once
+	id      int
+	addr    string
+	link    string
+	ptmx    *os.File
+	tty     *os.File
+	mu      sync.Mutex
+	conn    net.Conn
+	stop    chan struct{}
+	once    sync.Once
+	dropped uint64 // 断线/重连期间被丢弃的字节数(原子)
 }
 
 // VSerialInfo 描述一个后台虚拟串口桥接。
@@ -32,59 +34,79 @@ type VSerialInfo struct {
 	Link string
 }
 
+// makeRaw 便于测试注入 term.MakeRaw 的失败路径,默认即 term.MakeRaw。
+var makeRaw = term.MakeRaw
+
 // AddVirtualSerial 连接一个 TCP 端点并新建一个后台虚拟串口桥接,
 // 与主连接及其它桥接互不影响,可同时存在多个。设备常驻:TCP 断开会自动重连。
 func (e *Engine) AddVirtualSerial(addr string) (VSerialInfo, error) {
 	if addr == "" {
 		return VSerialInfo{}, fmt.Errorf("请输入要桥接的 IP:端口")
 	}
-	conn, err := net.Dial("tcp", addr) // 首次连接,验证地址可达
-	if err != nil {
-		return VSerialInfo{}, err
-	}
 	ptmx, tty, err := pty.Open()
 	if err != nil {
-		_ = conn.Close()
 		return VSerialInfo{}, fmt.Errorf("创建虚拟串口失败(该平台可能不支持): %w", err)
 	}
-	// raw 模式:关回显与行规程,避免二进制数据被改写或形成回显环路
-	if _, err := term.MakeRaw(int(tty.Fd())); err != nil {
-		e.emitLog("虚拟串口 raw 模式设置失败: " + err.Error())
+	// raw 模式:关回显与行规程,避免二进制数据被改写或形成回显环路。
+	// 失败即终止创建并清理资源,不允许降级运行(二进制透明传输依赖 raw 模式)。
+	if _, err := makeRaw(int(tty.Fd())); err != nil {
+		name := tty.Name()
+		_ = ptmx.Close()
+		_ = tty.Close()
+		e.emitLog(fmt.Sprintf("虚拟串口创建失败: raw 模式设置失败(%s): %v", name, err))
+		return VSerialInfo{}, fmt.Errorf("虚拟串口 raw 模式设置失败(%s): %w", name, err)
 	}
 
 	e.Lock()
 	e.vseq++
 	id := e.vseq
 	e.Unlock()
-	link := fmt.Sprintf("/tmp/GoSerialTool-vserial-%d", id)
+	// 设备名带进程 PID,保证多实例(多进程)不会撞名、互相覆盖软链
+	link := fmt.Sprintf("/tmp/GoSerialTool-vserial-%d-%d", os.Getpid(), id)
 	_ = os.Remove(link)
 	if os.Symlink(tty.Name(), link) != nil {
 		link = tty.Name() // 建软链失败则用真实设备路径
 	}
 
-	b := &vBridge{id: id, addr: addr, link: link, ptmx: ptmx, tty: tty, conn: conn, stop: make(chan struct{})}
+	// TCP 连接放到后台:服务端未启动时也允许先创建虚拟串口,
+	// 由 vDialLoop 统一负责首次连接与断线重连(conn 初始为 nil)。
+	b := &vBridge{id: id, addr: addr, link: link, ptmx: ptmx, tty: tty, stop: make(chan struct{})}
 	e.Lock()
 	e.vbridges[id] = b
 	e.Unlock()
 
-	go e.vPtmxReader(b)     // 虚拟串口 → 当前网络连接(常驻)
-	go e.vDialLoop(b, conn) // 网络 → 虚拟串口,断线自动重连
+	go e.vPtmxReader(b) // 虚拟串口 → 当前网络连接(常驻)
+	go e.vDialLoop(b)   // 网络 → 虚拟串口,首次连接与断线重连走同一套机制
 
-	e.emitLog(fmt.Sprintf("虚拟串口 #%d 已创建: %s ↔ %s", id, link, addr))
+	e.emitLog(fmt.Sprintf("虚拟串口 #%d 已创建: %s ↔ %s(后台自动连接)", id, link, addr))
 	return VSerialInfo{ID: id, Addr: addr, Link: link}, nil
 }
 
-// vPtmxReader 常驻:把虚拟串口写入的数据发往当前 TCP 连接(重连期间无连接则丢弃)。
+// vPtmxReader 常驻:把虚拟串口写入的数据发往当前 TCP 连接。
+// 断线/重连期间无连接时数据会被丢弃:本版本不缓存、不补发,但必须计数并告警,禁止静默丢失。
 func (e *Engine) vPtmxReader(b *vBridge) {
 	buf := make([]byte, 4096)
+	dropping := false
 	for {
 		n, err := b.ptmx.Read(buf)
 		if n > 0 {
 			b.mu.Lock()
 			c := b.conn
 			b.mu.Unlock()
-			if c != nil {
-				_, _ = c.Write(buf[:n])
+			lost := false
+			if c == nil {
+				lost = true // 重连中,无连接可写
+			} else if _, werr := c.Write(buf[:n]); werr != nil {
+				lost = true // 连接刚好断开,写入失败
+			}
+			if lost {
+				atomic.AddUint64(&b.dropped, uint64(n))
+				if !dropping {
+					e.emitLog(fmt.Sprintf("虚拟串口 #%d 无连接,串口数据被丢弃(累计 %d 字节)", b.id, atomic.LoadUint64(&b.dropped)))
+					dropping = true
+				}
+			} else {
+				dropping = false
 			}
 		}
 		if err != nil {
@@ -93,10 +115,21 @@ func (e *Engine) vPtmxReader(b *vBridge) {
 	}
 }
 
-// vDialLoop 把 TCP 数据泵入虚拟串口;连接断开后自动重连,直到桥接被移除。
-func (e *Engine) vDialLoop(b *vBridge, conn net.Conn) {
+// vDialLoop 把 TCP 数据泵入虚拟串口;首次连接与断线重连走同一套机制,
+// 连不上则每 2s 重试,直到桥接被移除。
+func (e *Engine) vDialLoop(b *vBridge) {
 	for {
+		conn := e.vConnect(b)
+		if conn == nil {
+			return // stop 已关闭,桥接被移除
+		}
+		b.mu.Lock()
+		b.conn = conn
+		b.mu.Unlock()
+		e.emitLog(fmt.Sprintf("虚拟串口 #%d 已连接 %s", b.id, b.addr))
+
 		_, _ = io.Copy(b.ptmx, conn) // 阻塞直到该连接断开
+
 		b.mu.Lock()
 		if b.conn == conn {
 			b.conn = nil
@@ -110,26 +143,22 @@ func (e *Engine) vDialLoop(b *vBridge, conn net.Conn) {
 		default:
 		}
 		e.emitLog(fmt.Sprintf("虚拟串口 #%d 到 %s 的连接断开,重连中...", b.id, b.addr))
+	}
+}
 
-		var next net.Conn
-		for next == nil {
-			select {
-			case <-b.stop:
-				return
-			case <-time.After(2 * time.Second):
-			}
-			c, err := net.Dial("tcp", b.addr)
-			if err != nil {
-				e.emitLog(fmt.Sprintf("虚拟串口 #%d 重连 %s 失败: %v", b.id, b.addr, err))
-				continue
-			}
-			next = c
+// vConnect 建立到 b.addr 的 TCP 连接;失败则每 2s 重试。返回 nil 表示桥接已被移除。
+func (e *Engine) vConnect(b *vBridge) net.Conn {
+	for {
+		c, err := net.Dial("tcp", b.addr)
+		if err == nil {
+			return c
 		}
-		b.mu.Lock()
-		b.conn = next
-		b.mu.Unlock()
-		conn = next
-		e.emitLog(fmt.Sprintf("虚拟串口 #%d 已重连 %s", b.id, b.addr))
+		e.emitLog(fmt.Sprintf("虚拟串口 #%d 连接 %s 失败: %v", b.id, b.addr, err))
+		select {
+		case <-b.stop:
+			return nil
+		case <-time.After(2 * time.Second):
+		}
 	}
 }
 
