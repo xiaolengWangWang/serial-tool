@@ -1,0 +1,5 @@
+/build/
+/dist/
+/serial-tool
+.DS_Store
+/commbox
