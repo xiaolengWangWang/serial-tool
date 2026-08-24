@@ -20,7 +20,8 @@
     NSComboBox *_ports, *_baud, *_data, *_stop, *_parity, *_eol, *_ip;
     NSTextField *_port, *_endpointLabel, *_roleLabel, *_ipLabel, *_portLabel, *_protocolLabel, *_status, *_interval, *_toolboxInput, *_toolboxOutput, *_searchField;
     NSArray *_serialControls;
-    NSButton *_refresh, *_connect, *_hexView, *_hexSend, *_timerButton;
+    NSButton *_refresh, *_connect, *_hexView, *_hexSend, *_timerButton, *_loopButton, *_loopSend;
+    NSTextField *_loopCount;
     NSTextView *_send, *_monitorLog, *_sysLog;
     NSTimer *_sendTimer;
     BOOL _connected;
@@ -31,6 +32,7 @@
 - (NSString *)sendCurrentData;
 - (void)stopTimer;
 - (void)addPacketWithTS:(NSString *)ts dir:(NSString *)dir hex:(NSString *)hex ascii:(NSString *)ascii len:(NSInteger)len;
+- (void)loopDone;
 @end
 
 static NSTextField *Label(NSString *text, NSRect frame) {
@@ -214,13 +216,18 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSTextField *sendTitle = Label(@"发送数据", NSMakeRect(320, 242, 120, 24));
     sendTitle.font = [NSFont boldSystemFontOfSize:14]; [view addSubview:sendTitle];
     _hexSend = [[NSButton checkboxWithTitle:@"HEX 发送" target:nil action:nil] retain];
-    _hexSend.state = NSControlStateValueOn; // 默认使用 HEX 发送
-    _hexSend.frame = NSMakeRect(590, 240, 100, 26); _hexSend.autoresizingMask = NSViewMinXMargin; [view addSubview:_hexSend];
-    [view addSubview:Label(@"行尾", NSMakeRect(700, 242, 36, 24))];
-    _eol = [Combo(NSMakeRect(740, 238, 90, 30), @[@"无",@"LF",@"CR",@"CRLF"], @"无") retain];
+    _hexSend.state = NSControlStateValueOn;
+    _hexSend.frame = NSMakeRect(460, 240, 100, 26); _hexSend.autoresizingMask = NSViewMinXMargin; [view addSubview:_hexSend];
+    _loopSend = [[NSButton checkboxWithTitle:@"循环" target:nil action:nil] retain];
+    _loopSend.frame = NSMakeRect(570, 240, 52, 26); _loopSend.autoresizingMask = NSViewMinXMargin; [view addSubview:_loopSend];
+    _loopCount = [[NSTextField alloc] initWithFrame:NSMakeRect(626, 238, 52, 28)];
+    _loopCount.placeholderString = @"0=∞"; _loopCount.stringValue = @"0";
+    _loopCount.autoresizingMask = NSViewMinXMargin; [view addSubview:_loopCount];
+    [view addSubview:Label(@"行尾", NSMakeRect(688, 242, 36, 24))];
+    _eol = [Combo(NSMakeRect(726, 238, 80, 30), @[@"无",@"LF",@"CR",@"CRLF"], @"无") retain];
     _eol.autoresizingMask = NSViewMinXMargin; [view addSubview:_eol];
-    [view addSubview:Label(@"间隔(ms)", NSMakeRect(842, 242, 64, 24))];
-    _interval = [[NSTextField alloc] initWithFrame:NSMakeRect(912, 238, 108, 30)];
+    [view addSubview:Label(@"间隔(ms)", NSMakeRect(816, 242, 64, 24))];
+    _interval = [[NSTextField alloc] initWithFrame:NSMakeRect(882, 238, 98, 30)];
     _interval.stringValue = @"1000"; _interval.alignment = NSTextAlignmentRight;
     _interval.autoresizingMask = NSViewMinXMargin; [view addSubview:_interval];
 
@@ -243,9 +250,11 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
     _send.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
     _send.autoresizingMask = NSViewWidthSizable; sendScroll.documentView = _send; [view addSubview:sendScroll];
     NSButton *sendButton = [NSButton buttonWithTitle:@"发送一次" target:self action:@selector(send:)];
-    sendButton.frame = NSMakeRect(925, 147, 95, 83); sendButton.autoresizingMask = NSViewMinXMargin; [view addSubview:sendButton];
+    sendButton.frame = NSMakeRect(925, 176, 95, 54); sendButton.autoresizingMask = NSViewMinXMargin; [view addSubview:sendButton];
+    _loopButton = [[NSButton buttonWithTitle:@"循环发送" target:self action:@selector(toggleLoop:)] retain];
+    _loopButton.frame = NSMakeRect(925, 116, 95, 54); _loopButton.autoresizingMask = NSViewMinXMargin; [view addSubview:_loopButton];
     _timerButton = [[NSButton buttonWithTitle:@"开始定时" target:self action:@selector(toggleTimer:)] retain];
-    _timerButton.frame = NSMakeRect(925, 58, 95, 83); _timerButton.autoresizingMask = NSViewMinXMargin; [view addSubview:_timerButton];
+    _timerButton.frame = NSMakeRect(925, 56, 95, 54); _timerButton.autoresizingMask = NSViewMinXMargin; [view addSubview:_timerButton];
     NSTextField *hint = Label(@"HEX 示例：01 03 00 00 00 02", NSMakeRect(320, 24, 360, 24));
     hint.textColor = NSColor.secondaryLabelColor; [view addSubview:hint];
 
@@ -586,6 +595,26 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
     _interval.enabled = YES; _timerButton.title = @"开始定时";
     [self appendText:@"\n[已停止定时发送]\n"];
 }
+
+- (void)toggleLoop:(id)sender {
+    BOOL loopEnabled = _loopSend.state == NSControlStateValueOn;
+    NSString *input = _send.string;
+    BOOL hex = _hexSend.state == NSControlStateValueOn;
+    NSString *eol = _eol.stringValue;
+    int count = loopEnabled ? (int)_loopCount.integerValue : 1;
+    int ms = (int)_interval.integerValue;
+    char *raw = GoToggleLoop((char *)input.UTF8String, hex ? 1 : 0, (char *)eol.UTF8String, count, ms);
+    NSString *result = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
+    if ([result isEqualToString:@"started"]) {
+        _loopButton.title = @"停止循环";
+    } else if ([result isEqualToString:@"stopped"]) {
+        _loopButton.title = @"循环发送";
+    } else if ([result hasPrefix:@"error:"]) {
+        [self alert:[result substringFromIndex:6]];
+    }
+}
+
+- (void)loopDone { _loopButton.title = @"循环发送"; }
 
 - (void)hexViewChanged:(id)sender { GoSetHexView(_hexView.state == NSControlStateValueOn); }
 - (void)roleChanged:(id)sender { [self modeChanged:sender]; }
@@ -1028,6 +1057,10 @@ void UIMonitorAppend(const char *text) {
 
 void UIConnectionClosed(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ [(AppDelegate *)NSApp.delegate connectionClosed]; });
+}
+
+void UILoopDone(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [(AppDelegate *)NSApp.delegate loopDone]; });
 }
 
 void RunApp(void) {

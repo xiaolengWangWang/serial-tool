@@ -56,6 +56,9 @@ type application struct {
 	loopButton                            *walk.PushButton
 	loopMu                                sync.Mutex
 	loopCancel                            chan struct{}
+	statsLabel                            *walk.Label
+	recentConn                            *walk.ComboBox
+	recentSessions                        []wincore.SessionInfo
 	vsWindow                              *walk.MainWindow
 	vsIP                                  *walk.ComboBox
 	vsPort                                *walk.LineEdit
@@ -203,6 +206,7 @@ func main() {
 	app.hexDisplay.Store(true)
 	app.refreshSendHistory()
 	app.refreshFavorites()
+	app.refreshRecentConn()
 	app.appendLog("SQLite 数据目录: " + app.engine.DataDir())
 	go app.statsLoop()
 	app.mw.Run()
@@ -231,7 +235,7 @@ func (a *application) createWindow() error {
 				Text: "视图",
 				Items: []MenuItem{
 					Action{Text:"清空接收区", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyK}, OnTriggered: func() {
-						if a.packetModel != nil { a.packetModel.clear() }
+						if a.packetModel != nil { a.packetModel.clear(); a.updatePacketStats() }
 					}},
 					Action{Text:"导出接收数据", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyE}, OnTriggered: func() {
 						if a.packetModel != nil { a.exportText(a.packetModel.exportText(), "serial-log", a.mw) }
@@ -294,6 +298,11 @@ func (a *application) createWindow() error {
 					},
 					VSpacer{},
 					Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{
+						Label{Text: "最近", Font: Font{PointSize: 9}, MinSize: Size{Width: 30}},
+						ComboBox{AssignTo: &a.recentConn, StretchFactor: 1, Font: Font{PointSize: 9},
+							OnCurrentIndexChanged: a.onRecentConnSelected},
+					}},
+					Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{
 						Label{AssignTo: &a.statusDot, Text: "●", MinSize: Size{Width: 18}, Font: Font{PointSize: 13}},
 						Label{AssignTo: &a.status, Text: "未连接", Font: Font{PointSize: 11}},
 					}},
@@ -306,6 +315,7 @@ func (a *application) createWindow() error {
 				Children: []Widget{
 					Composite{Layout: HBox{}, Children: []Widget{
 						Label{Text: "接收数据"}, HSpacer{},
+						Label{AssignTo: &a.statsLabel, Text: "", Font: Font{PointSize: 9}},
 						CheckBox{AssignTo: &a.hexView, Text: "HEX 显示", Checked: true, OnCheckedChanged: func() { a.hexDisplay.Store(a.hexView.Checked()) }},
 						PushButton{Text: "新建实例", OnClicked: a.newInstance},
 						PushButton{Text: "监控窗口", OnClicked: a.openMonitor},
@@ -315,7 +325,7 @@ func (a *application) createWindow() error {
 							if a.packetModel != nil { a.exportText(a.packetModel.exportText(), "serial-log", a.mw) }
 						}},
 						PushButton{Text: "清空", OnClicked: func() {
-							if a.packetModel != nil { a.packetModel.clear() }
+							if a.packetModel != nil { a.packetModel.clear(); a.updatePacketStats() }
 						}},
 					}},
 					Composite{Layout: HBox{}, Children: []Widget{
@@ -561,6 +571,7 @@ func (a *application) toggleConnection() {
 			} else {
 				a.setConnStatus(colorGreen, "已连接")
 			}
+				a.refreshRecentConn()
 		})
 	}()
 }
@@ -608,6 +619,7 @@ func (a *application) sendOnce(fromTimer bool) {
 			if a.packetTable != nil {
 				a.packetTable.EnsureItemVisible(a.packetModel.RowCount() - 1)
 			}
+			a.updatePacketStats()
 		})
 	}
 }
@@ -775,6 +787,7 @@ func (a *application) onData(source string, data []byte) {
 			if a.packetTable != nil {
 				a.packetTable.EnsureItemVisible(a.packetModel.RowCount() - 1)
 			}
+			a.updatePacketStats()
 		}
 		if a.monitorEdit != nil {
 			text := fmt.Sprintf("[%s 接收] %s\r\n", p.TS.Format("15:04:05.000"), hex)
@@ -953,6 +966,109 @@ func (a *application) refreshFavorites() {
 	if cur != "" {
 		_ = a.favorites.SetText(cur)
 	}
+}
+
+func (a *application) refreshRecentConn() {
+	if a.recentConn == nil {
+		return
+	}
+	sessions, _ := a.engine.RecentSessions(5)
+	a.recentSessions = sessions
+	items := make([]string, len(sessions))
+	for i, s := range sessions {
+		ep := s.Endpoint
+		if len(ep) > 24 {
+			ep = ep[:21] + "..."
+		}
+		items[i] = fmt.Sprintf("%s %s", s.Mode, ep)
+	}
+	_ = a.recentConn.SetModel(items)
+	_ = a.recentConn.SetCurrentIndex(-1)
+}
+
+func parseKV(s string) map[string]string {
+	m := make(map[string]string)
+	for _, pair := range strings.Split(s, ",") {
+		if i := strings.IndexByte(pair, '='); i >= 0 {
+			m[pair[:i]] = pair[i+1:]
+		}
+	}
+	return m
+}
+
+func setIPPort(endpoint string, ipEdit, portEdit *walk.LineEdit) {
+	if i := strings.LastIndex(endpoint, ":"); i >= 0 {
+		_ = ipEdit.SetText(endpoint[:i])
+		_ = portEdit.SetText(endpoint[i+1:])
+	} else {
+		_ = ipEdit.SetText(endpoint)
+	}
+}
+
+func (a *application) onRecentConnSelected() {
+	if a.connected || a.recentConn == nil {
+		return
+	}
+	idx := a.recentConn.CurrentIndex()
+	if idx < 0 || idx >= len(a.recentSessions) {
+		return
+	}
+	s := a.recentSessions[idx]
+	p := parseKV(s.Parameters)
+	switch wincore.Mode(s.Mode) {
+	case wincore.ModeSerial:
+		_ = a.mode.SetCurrentIndex(0)
+		_ = a.ports.SetText(p["serial"])
+		_ = a.baud.SetText(p["baud"])
+		_ = a.data.SetText(p["data"])
+		_ = a.parity.SetText(p["parity"])
+		_ = a.stop.SetText(p["stop"])
+	case wincore.ModeTCPServer:
+		_ = a.mode.SetCurrentIndex(1)
+		_ = a.role.SetCurrentIndex(0)
+		setIPPort(s.Endpoint, a.netIP, a.netPort)
+	case wincore.ModeTCPClient:
+		_ = a.mode.SetCurrentIndex(1)
+		_ = a.role.SetCurrentIndex(1)
+		setIPPort(s.Endpoint, a.netIP, a.netPort)
+	case wincore.ModeUDPServer:
+		_ = a.mode.SetCurrentIndex(2)
+		_ = a.role.SetCurrentIndex(0)
+		setIPPort(s.Endpoint, a.netIP, a.netPort)
+	case wincore.ModeUDPClient:
+		_ = a.mode.SetCurrentIndex(2)
+		_ = a.role.SetCurrentIndex(1)
+		setIPPort(s.Endpoint, a.netIP, a.netPort)
+	case wincore.ModeSerialServer:
+		_ = a.mode.SetCurrentIndex(3)
+		_ = a.ports.SetText(p["serial"])
+		_ = a.protocol.SetText(p["protocol"])
+		_ = a.role.SetText(p["role"])
+		setIPPort(s.Endpoint, a.netIP, a.netPort)
+	case wincore.ModeHTTPClient:
+		_ = a.mode.SetCurrentIndex(4)
+		_ = a.netIP.SetText(s.Endpoint)
+	}
+	a.updateMode()
+}
+
+func (a *application) updatePacketStats() {
+	if a.statsLabel == nil || a.packetModel == nil {
+		return
+	}
+	var rxCnt, txCnt, rxB, txB int
+	for _, p := range a.packetModel.all {
+		if p.Direction == "RX" {
+			rxCnt++
+			rxB += p.Length
+		} else {
+			txCnt++
+			txB += p.Length
+		}
+	}
+	_ = a.statsLabel.SetText(fmt.Sprintf("RX %d/%s  TX %d/%s",
+		rxCnt, wincore.FormatBytes(uint64(rxB)),
+		txCnt, wincore.FormatBytes(uint64(txB))))
 }
 
 func (a *application) onSendHistorySelected() {

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -22,6 +23,9 @@ import (
 
 var engine *wincore.Engine
 var hexMode atomic.Bool
+
+var loopCancel chan struct{}
+var loopMu sync.Mutex
 
 func main() {
 	runtime.LockOSThread()
@@ -299,6 +303,67 @@ func GoDisconnect() { engine.Disconnect() }
 
 //export GoSetHexView
 func GoSetHexView(enabled C.int) { hexMode.Store(enabled != 0) }
+
+//export GoToggleLoop
+func GoToggleLoop(input *C.char, asHex C.int, eol *C.char, count C.int, intervalMs C.int) *C.char {
+	loopMu.Lock()
+	if loopCancel != nil {
+		close(loopCancel)
+		loopCancel = nil
+		loopMu.Unlock()
+		return C.CString("stopped")
+	}
+	if engine == nil {
+		loopMu.Unlock()
+		return C.CString("error:未连接")
+	}
+	cancel := make(chan struct{})
+	loopCancel = cancel
+	loopMu.Unlock()
+	inp := C.GoString(input)
+	hex := asHex != 0
+	e := C.GoString(eol)
+	n := int(count)
+	ms := int(intervalMs)
+	go func() {
+		cnt := 0
+		for {
+			select {
+			case <-cancel:
+				return
+			default:
+			}
+			if n > 0 && cnt >= n {
+				loopMu.Lock()
+				if loopCancel == cancel {
+					loopCancel = nil
+				}
+				loopMu.Unlock()
+				C.UILoopDone()
+				return
+			}
+			if err := engine.Send(inp, hex, e); err != nil {
+				loopMu.Lock()
+				if loopCancel == cancel {
+					loopCancel = nil
+				}
+				loopMu.Unlock()
+				C.UILoopDone()
+				return
+			}
+			logSent(inp, hex, e)
+			cnt++
+			if ms > 0 {
+				select {
+				case <-cancel:
+					return
+				case <-time.After(time.Duration(ms) * time.Millisecond):
+				}
+			}
+		}
+	}()
+	return C.CString("started")
+}
 
 //export GoSend
 func GoSend(text *C.char, hex C.int, eol *C.char) *C.char {
