@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include "app.h"
 
-@interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource> {
+@interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate> {
     NSWindow *_window;
     NSWindow *_monitorWindow;
     NSWindow *_vsWindow;
@@ -26,6 +26,7 @@
     NSTimer *_sendTimer;
     NSPopUpButton *_timeFilter;
     NSTextField *_statsLabel;
+    NSTextView *_detailView;
     NSInteger _rxCount, _txCount;
     BOOL _connected;
     BOOL _monitorPaused;
@@ -77,10 +78,25 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSString *version = [NSString stringWithUTF8String:ver ?: ""];
     free(ver);
     _window.title = [NSString stringWithFormat:@"CommBox v%@", version];
-    _window.contentMinSize = NSMakeSize(900, 700);
+    _window.contentMinSize = NSMakeSize(1040, 700);
     _window.delegate = self;
     [_window center];
     NSView *view = _window.contentView;
+
+    // 发送区底色（比窗口背景略深，区分数据区）
+    NSView *sendBg = [[[NSView alloc] initWithFrame:NSMakeRect(310, 0, 730, 272)] autorelease];
+    sendBg.wantsLayer = YES;
+    sendBg.layer.backgroundColor = [[NSColor colorWithWhite:0.94 alpha:1.0] CGColor];
+    sendBg.autoresizingMask = NSViewWidthSizable;
+    [view addSubview:sendBg];
+    // 竖分隔线：左面板 | 右内容
+    NSBox *vSep = [[[NSBox alloc] initWithFrame:NSMakeRect(309, 0, 2, 700)] autorelease];
+    vSep.boxType = NSBoxSeparator; vSep.autoresizingMask = NSViewHeightSizable;
+    [view addSubview:vSep];
+    // 横分隔线：数据区 | 发送区
+    NSBox *hSep = [[[NSBox alloc] initWithFrame:NSMakeRect(310, 272, 730, 1)] autorelease];
+    hSep.boxType = NSBoxSeparator; hSep.autoresizingMask = NSViewWidthSizable;
+    [view addSubview:hSep];
 
     NSBox *config = [[[NSBox alloc] initWithFrame:NSMakeRect(20, 20, 280, 660)] autorelease];
     config.title = @"连接配置";
@@ -147,36 +163,56 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     addressHint.alignment = NSTextAlignmentCenter; [view addSubview:addressHint];
 
     NSTextField *receiveTitle = Label(@"接收数据", NSMakeRect(320, 655, 120, 24));
-    receiveTitle.font = [NSFont boldSystemFontOfSize:14]; [view addSubview:receiveTitle];
+    receiveTitle.font = [NSFont boldSystemFontOfSize:14];
+    receiveTitle.autoresizingMask = NSViewMinYMargin;
+    [view addSubview:receiveTitle];
     _statsLabel = [Label(@"", NSMakeRect(444, 655, 140, 22)) retain];
     _statsLabel.font = [NSFont systemFontOfSize:11];
     _statsLabel.textColor = NSColor.secondaryLabelColor;
+    _statsLabel.autoresizingMask = NSViewMinYMargin;
     [view addSubview:_statsLabel];
     _hexView = [[NSButton checkboxWithTitle:@"ASCII 列" target:self action:@selector(hexViewChanged:)] retain];
-    _hexView.frame = NSMakeRect(590, 653, 90, 26); _hexView.autoresizingMask = NSViewMinXMargin; [view addSubview:_hexView];
+    _hexView.frame = NSMakeRect(590, 653, 90, 26);
+    _hexView.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin;
+    [view addSubview:_hexView];
     _hexView.state = NSControlStateValueOn;
     GoSetHexView(1);
     NSButton *monitor = [NSButton buttonWithTitle:@"监控窗口" target:self action:@selector(openMonitor:)];
-    monitor.frame = NSMakeRect(700, 652, 110, 28); monitor.autoresizingMask = NSViewMinXMargin; [view addSubview:monitor];
+    monitor.frame = NSMakeRect(700, 652, 110, 28);
+    monitor.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin;
+    [view addSubview:monitor];
     NSButton *export = [NSButton buttonWithTitle:@"导出" target:self action:@selector(exportLog:)];
-    export.frame = NSMakeRect(820, 652, 90, 28); export.autoresizingMask = NSViewMinXMargin; [view addSubview:export];
+    export.frame = NSMakeRect(820, 652, 90, 28);
+    export.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin;
+    [view addSubview:export];
     NSButton *clear = [NSButton buttonWithTitle:@"清空" target:self action:@selector(clear:)];
-    clear.frame = NSMakeRect(930, 652, 90, 28); clear.autoresizingMask = NSViewMinXMargin; [view addSubview:clear];
+    clear.frame = NSMakeRect(930, 652, 90, 28);
+    clear.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin;
+    [view addSubview:clear];
 
-    [view addSubview:Label(@"搜索", NSMakeRect(320, 616, 40, 22))];
+    NSTextField *searchLabel = Label(@"搜索", NSMakeRect(320, 616, 40, 22));
+    searchLabel.autoresizingMask = NSViewMinYMargin;
+    [view addSubview:searchLabel];
     _searchField = [[NSTextField alloc] initWithFrame:NSMakeRect(360, 612, 220, 26)];
+    _searchField.autoresizingMask = NSViewMinYMargin;
     [view addSubview:_searchField];
     _dirFilter = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(588, 610, 80, 28) pullsDown:NO];
     [_dirFilter addItemsWithTitles:@[@"全部", @"RX", @"TX"]];
     _dirFilter.target = self; _dirFilter.action = @selector(applyFilter);
+    _dirFilter.autoresizingMask = NSViewMinYMargin;
     [view addSubview:_dirFilter];
     NSButton *filterBtn = [NSButton buttonWithTitle:@"过滤" target:self action:@selector(applyFilter)];
-    filterBtn.frame = NSMakeRect(676, 610, 60, 28); [view addSubview:filterBtn];
+    filterBtn.frame = NSMakeRect(676, 610, 60, 28);
+    filterBtn.autoresizingMask = NSViewMinYMargin;
+    [view addSubview:filterBtn];
     NSButton *clearFilterBtn = [NSButton buttonWithTitle:@"清除" target:self action:@selector(clearFilter)];
-    clearFilterBtn.frame = NSMakeRect(742, 610, 60, 28); [view addSubview:clearFilterBtn];
+    clearFilterBtn.frame = NSMakeRect(742, 610, 60, 28);
+    clearFilterBtn.autoresizingMask = NSViewMinYMargin;
+    [view addSubview:clearFilterBtn];
     _timeFilter = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(808, 610, 110, 28) pullsDown:NO];
     [_timeFilter addItemsWithTitles:@[@"全部", @"1分钟", @"5分钟", @"30分钟"]];
     _timeFilter.target = self; _timeFilter.action = @selector(applyFilter);
+    _timeFilter.autoresizingMask = NSViewMinYMargin;
     [view addSubview:_timeFilter];
 
     NSTabView *tabView = [[NSTabView alloc] initWithFrame:NSMakeRect(320, 276, 700, 334)];
@@ -185,13 +221,33 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     // 数据 Tab — NSTableView 结构化报文表格
     _packets = [[NSMutableArray alloc] init];
     _visiblePackets = [[NSMutableArray alloc] init];
-    NSScrollView *dataScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 700, 290)] autorelease];
+    // 数据 tab 容器：表格(上，可伸缩) + 详情(下，固定 90px)
+    NSView *dataContainer = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 700, 334)] autorelease];
+    dataContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+
+    // 详情区（底部固定 90px）
+    NSScrollView *detailScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 700, 90)] autorelease];
+    detailScroll.borderType = NSBezelBorder; detailScroll.hasVerticalScroller = YES;
+    detailScroll.autoresizingMask = NSViewWidthSizable;
+    _detailView = [[NSTextView alloc] initWithFrame:detailScroll.contentView.bounds];
+    _detailView.editable = NO;
+    _detailView.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+    _detailView.autoresizingMask = NSViewWidthSizable;
+    detailScroll.documentView = _detailView;
+    [dataContainer addSubview:detailScroll];
+
+    NSBox *detailSep = [[[NSBox alloc] initWithFrame:NSMakeRect(0, 90, 700, 1)] autorelease];
+    detailSep.boxType = NSBoxSeparator; detailSep.autoresizingMask = NSViewWidthSizable;
+    [dataContainer addSubview:detailSep];
+
+    // 数据表格（91px 以上，随窗口伸缩）
+    NSScrollView *dataScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 91, 700, 243)] autorelease];
     dataScroll.borderType = NSBezelBorder; dataScroll.hasVerticalScroller = YES; dataScroll.hasHorizontalScroller = YES;
     dataScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _dataTable = [[NSTableView alloc] initWithFrame:dataScroll.contentView.bounds];
     _dataTable.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
     _dataTable.usesAlternatingRowBackgroundColors = YES;
-    _dataTable.dataSource = self;
+    _dataTable.dataSource = self; _dataTable.delegate = self;
     NSTableColumn *tc0 = [[[NSTableColumn alloc] initWithIdentifier:@"ts"] autorelease];
     tc0.title = @"时间"; tc0.width = 100; [_dataTable addTableColumn:tc0];
     NSTableColumn *tc1 = [[[NSTableColumn alloc] initWithIdentifier:@"dir"] autorelease];
@@ -203,14 +259,15 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSTableColumn *tc4 = [[[NSTableColumn alloc] initWithIdentifier:@"len"] autorelease];
     tc4.title = @"长度"; tc4.width = 65; [_dataTable addTableColumn:tc4];
     dataScroll.documentView = _dataTable;
-    // 右键菜单
     NSMenu *tableMenu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
     [tableMenu addItemWithTitle:@"复制 HEX" action:@selector(copyPacketHex:) keyEquivalent:@""];
     [tableMenu addItemWithTitle:@"复制 ASCII" action:@selector(copyPacketASCII:) keyEquivalent:@""];
     [tableMenu addItemWithTitle:@"复制整行" action:@selector(copyPacketAll:) keyEquivalent:@""];
     _dataTable.menu = tableMenu;
+    [dataContainer addSubview:dataScroll];
+
     NSTabViewItem *dataItem = [[[NSTabViewItem alloc] initWithIdentifier:@"data"] autorelease];
-    dataItem.label = @"数据"; dataItem.view = dataScroll;
+    dataItem.label = @"数据"; dataItem.view = dataContainer;
     [tabView addTabViewItem:dataItem];
 
     NSScrollView *logScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 700, 290)] autorelease];
@@ -229,19 +286,19 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     sendTitle.font = [NSFont boldSystemFontOfSize:14]; [view addSubview:sendTitle];
     _hexSend = [[NSButton checkboxWithTitle:@"HEX 发送" target:nil action:nil] retain];
     _hexSend.state = NSControlStateValueOn;
-    _hexSend.frame = NSMakeRect(460, 240, 100, 26); _hexSend.autoresizingMask = NSViewMinXMargin; [view addSubview:_hexSend];
+    _hexSend.frame = NSMakeRect(460, 240, 100, 26); [view addSubview:_hexSend];
     _loopSend = [[NSButton checkboxWithTitle:@"循环" target:nil action:nil] retain];
-    _loopSend.frame = NSMakeRect(570, 240, 52, 26); _loopSend.autoresizingMask = NSViewMinXMargin; [view addSubview:_loopSend];
+    _loopSend.frame = NSMakeRect(570, 240, 52, 26); [view addSubview:_loopSend];
     _loopCount = [[NSTextField alloc] initWithFrame:NSMakeRect(626, 238, 52, 28)];
     _loopCount.placeholderString = @"0=∞"; _loopCount.stringValue = @"0";
-    _loopCount.autoresizingMask = NSViewMinXMargin; [view addSubview:_loopCount];
+    [view addSubview:_loopCount];
     [view addSubview:Label(@"行尾", NSMakeRect(688, 242, 36, 24))];
     _eol = [Combo(NSMakeRect(726, 238, 80, 30), @[@"无",@"LF",@"CR",@"CRLF"], @"无") retain];
-    _eol.autoresizingMask = NSViewMinXMargin; [view addSubview:_eol];
+    [view addSubview:_eol];
     [view addSubview:Label(@"间隔(ms)", NSMakeRect(816, 242, 64, 24))];
     _interval = [[NSTextField alloc] initWithFrame:NSMakeRect(882, 238, 98, 30)];
     _interval.stringValue = @"1000"; _interval.alignment = NSTextAlignmentRight;
-    _interval.autoresizingMask = NSViewMinXMargin; [view addSubview:_interval];
+    [view addSubview:_interval];
 
     [view addSubview:Label(@"历史", NSMakeRect(320, 188, 40, 24))];
 _sendHistory = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(360, 184, 140, 26) pullsDown:NO];
@@ -863,6 +920,16 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
     if (tableView == _vsTable) return _vsList[row][col.identifier];
     if (tableView == _dataTable) return _visiblePackets[row][col.identifier];
     return nil;
+}
+- (void)tableViewSelectionDidChange:(NSNotification *)notification {
+    if ([notification object] != _dataTable || !_detailView) return;
+    NSInteger row = _dataTable.selectedRow;
+    if (row < 0 || row >= (NSInteger)_visiblePackets.count) { _detailView.string = @""; return; }
+    NSDictionary *p = _visiblePackets[row];
+    NSString *detail = [NSString stringWithFormat:@"[%@] %@  %@\nHEX:   %@\nASCII: %@",
+        p[@"ts"] ?: @"", p[@"dir"] ?: @"", p[@"len"] ?: @"",
+        p[@"hex"] ?: @"", p[@"ascii"] ?: @""];
+    _detailView.string = detail;
 }
 
 - (void)openMonitor:(id)sender {
