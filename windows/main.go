@@ -244,7 +244,7 @@ func (a *application) createWindow() error {
 					Action{Text:"导出接收数据", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyE}, OnTriggered: func() {
 						if a.packetModel != nil { a.exportText(a.packetModel.exportText(), "serial-log", a.mw) }
 					}},
-					Action{Text:"HEX 显示开关", Shortcut: Shortcut{Modifiers: walk.ModControl | walk.ModShift, Key: walk.KeyH}, OnTriggered: a.toggleHexView},
+					Action{Text:"ASCII 列开关", Shortcut: Shortcut{Modifiers: walk.ModControl | walk.ModShift, Key: walk.KeyH}, OnTriggered: a.toggleHexView},
 					Action{Text:"监控窗口", Shortcut: Shortcut{Modifiers: walk.ModControl | walk.ModShift, Key: walk.KeyM}, OnTriggered: a.openMonitor},
 				},
 			},
@@ -320,7 +320,16 @@ func (a *application) createWindow() error {
 					Composite{Layout: HBox{}, Children: []Widget{
 						Label{Text: "接收数据"}, HSpacer{},
 						Label{AssignTo: &a.statsLabel, Text: "", Font: Font{PointSize: 9}},
-						CheckBox{AssignTo: &a.hexView, Text: "HEX 显示", Checked: true, OnCheckedChanged: func() { a.hexDisplay.Store(a.hexView.Checked()) }},
+						CheckBox{AssignTo: &a.hexView, Text: "ASCII 列", Checked: true, OnCheckedChanged: func() {
+							if a.packetTable != nil {
+								col := a.packetTable.Columns().At(3)
+								if a.hexView.Checked() {
+									_ = col.SetWidth(200)
+								} else {
+									_ = col.SetWidth(0)
+								}
+							}
+						}},
 						PushButton{Text: "新建实例", OnClicked: a.newInstance},
 						PushButton{Text: "监控窗口", OnClicked: a.openMonitor},
 						PushButton{Text: "虚拟串口", OnClicked: a.openVSerial},

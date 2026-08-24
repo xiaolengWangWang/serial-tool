@@ -152,8 +152,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _statsLabel.font = [NSFont systemFontOfSize:11];
     _statsLabel.textColor = NSColor.secondaryLabelColor;
     [view addSubview:_statsLabel];
-    _hexView = [[NSButton checkboxWithTitle:@"HEX 显示" target:self action:@selector(hexViewChanged:)] retain];
-    _hexView.frame = NSMakeRect(590, 653, 100, 26); _hexView.autoresizingMask = NSViewMinXMargin; [view addSubview:_hexView];
+    _hexView = [[NSButton checkboxWithTitle:@"ASCII 列" target:self action:@selector(hexViewChanged:)] retain];
+    _hexView.frame = NSMakeRect(590, 653, 90, 26); _hexView.autoresizingMask = NSViewMinXMargin; [view addSubview:_hexView];
     _hexView.state = NSControlStateValueOn;
     GoSetHexView(1);
     NSButton *monitor = [NSButton buttonWithTitle:@"监控窗口" target:self action:@selector(openMonitor:)];
@@ -312,7 +312,7 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
     NSMenu *viewMenu = [[[NSMenu alloc] initWithTitle:@"视图"] autorelease];
     Item(viewMenu, @"清空接收区", @selector(clear:), @"k", NSEventModifierFlagCommand);
     Item(viewMenu, @"导出接收数据", @selector(exportLog:), @"e", NSEventModifierFlagCommand);
-    Item(viewMenu, @"HEX 显示开关", @selector(toggleHexView:), @"h", NSEventModifierFlagCommand | NSEventModifierFlagShift);
+    Item(viewMenu, @"ASCII 列开关", @selector(toggleHexView:), @"h", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Item(viewMenu, @"监控窗口", @selector(openMonitor:), @"m", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Submenu(mainMenu, @"视图", viewMenu);
 
@@ -628,7 +628,10 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
 
 - (void)loopDone { _loopButton.title = @"循环发送"; }
 
-- (void)hexViewChanged:(id)sender { GoSetHexView(_hexView.state == NSControlStateValueOn); }
+- (void)hexViewChanged:(id)sender {
+    NSTableColumn *col = [_dataTable tableColumnWithIdentifier:@"ascii"];
+    if (col) col.hidden = (_hexView.state != NSControlStateValueOn);
+}
 - (void)roleChanged:(id)sender { [self modeChanged:sender]; }
 - (void)modeChanged:(id)sender {
     BOOL serial = [self isSerialMode], bridge = [self isBridgeMode];
