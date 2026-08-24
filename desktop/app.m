@@ -24,6 +24,9 @@
     NSTextField *_loopCount;
     NSTextView *_send, *_monitorLog, *_sysLog;
     NSTimer *_sendTimer;
+    NSPopUpButton *_timeFilter;
+    NSTextField *_statsLabel;
+    NSInteger _rxCount, _txCount;
     BOOL _connected;
     BOOL _monitorPaused;
 }
@@ -32,6 +35,7 @@
 - (NSString *)sendCurrentData;
 - (void)stopTimer;
 - (void)addPacketWithTS:(NSString *)ts dir:(NSString *)dir hex:(NSString *)hex ascii:(NSString *)ascii len:(NSInteger)len;
+- (void)updatePacketStats;
 - (void)loopDone;
 @end
 
@@ -144,6 +148,10 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 
     NSTextField *receiveTitle = Label(@"接收数据", NSMakeRect(320, 655, 120, 24));
     receiveTitle.font = [NSFont boldSystemFontOfSize:14]; [view addSubview:receiveTitle];
+    _statsLabel = [Label(@"", NSMakeRect(444, 655, 140, 22)) retain];
+    _statsLabel.font = [NSFont systemFontOfSize:11];
+    _statsLabel.textColor = NSColor.secondaryLabelColor;
+    [view addSubview:_statsLabel];
     _hexView = [[NSButton checkboxWithTitle:@"HEX 显示" target:self action:@selector(hexViewChanged:)] retain];
     _hexView.frame = NSMakeRect(590, 653, 100, 26); _hexView.autoresizingMask = NSViewMinXMargin; [view addSubview:_hexView];
     _hexView.state = NSControlStateValueOn;
@@ -166,6 +174,10 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     filterBtn.frame = NSMakeRect(676, 610, 60, 28); [view addSubview:filterBtn];
     NSButton *clearFilterBtn = [NSButton buttonWithTitle:@"清除" target:self action:@selector(clearFilter)];
     clearFilterBtn.frame = NSMakeRect(742, 610, 60, 28); [view addSubview:clearFilterBtn];
+    _timeFilter = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(808, 610, 110, 28) pullsDown:NO];
+    [_timeFilter addItemsWithTitles:@[@"全部", @"1分钟", @"5分钟", @"30分钟"]];
+    _timeFilter.target = self; _timeFilter.action = @selector(applyFilter);
+    [view addSubview:_timeFilter];
 
     NSTabView *tabView = [[NSTabView alloc] initWithFrame:NSMakeRect(320, 276, 700, 334)];
     tabView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
@@ -909,6 +921,8 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
     [_packets removeAllObjects];
     [_visiblePackets removeAllObjects];
     [_dataTable reloadData];
+    _rxCount = 0; _txCount = 0;
+    [self updatePacketStats];
 }
 - (void)saveText:(NSString *)text prefix:(NSString *)prefix window:(NSWindow *)window {
     NSSavePanel *panel = [NSSavePanel savePanel];
@@ -939,8 +953,14 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
 - (void)applyFilter {
     NSString *kw = [_searchField.stringValue lowercaseString];
     NSString *dir = _dirFilter ? _dirFilter.titleOfSelectedItem : @"全部";
+    NSString *timeRange = _timeFilter ? _timeFilter.titleOfSelectedItem : @"全部";
+    NSTimeInterval since = 0;
+    if ([timeRange isEqualToString:@"1分钟"])       since = [NSDate date].timeIntervalSince1970 - 60;
+    else if ([timeRange isEqualToString:@"5分钟"])   since = [NSDate date].timeIntervalSince1970 - 300;
+    else if ([timeRange isEqualToString:@"30分钟"])  since = [NSDate date].timeIntervalSince1970 - 1800;
     [_visiblePackets removeAllObjects];
     for (NSDictionary *p in _packets) {
+        if (since > 0 && [p[@"epoch"] doubleValue] < since) continue;
         if (![dir isEqualToString:@"全部"] && ![p[@"dir"] isEqualToString:dir]) continue;
         if (kw.length) {
             if (![[p[@"hex"] lowercaseString] containsString:kw] &&
@@ -956,17 +976,27 @@ NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 
 - (void)clearFilter {
     _searchField.stringValue = @"";
     if (_dirFilter) [_dirFilter selectItemWithTitle:@"全部"];
+    if (_timeFilter) [_timeFilter selectItemAtIndex:0];
     [_visiblePackets removeAllObjects];
     [_visiblePackets addObjectsFromArray:_packets];
     [_dataTable reloadData];
     if (_visiblePackets.count > 0)
         [_dataTable scrollRowToVisible:(NSInteger)_visiblePackets.count - 1];
 }
+- (void)updatePacketStats {
+    if (!_statsLabel) return;
+    _statsLabel.stringValue = [NSString stringWithFormat:@"RX %ld包  TX %ld包", (long)_rxCount, (long)_txCount];
+}
+
 - (void)addPacketWithTS:(NSString *)ts dir:(NSString *)dir hex:(NSString *)hex ascii:(NSString *)ascii len:(NSInteger)len {
     NSDictionary *p = @{
         @"ts": ts, @"dir": dir, @"hex": hex, @"ascii": ascii,
-        @"len": [NSString stringWithFormat:@"%ld B", (long)len]
+        @"len": [NSString stringWithFormat:@"%ld B", (long)len],
+        @"epoch": @([NSDate date].timeIntervalSince1970)
     };
+    if ([dir isEqualToString:@"RX"]) _rxCount++;
+    else if ([dir isEqualToString:@"TX"]) _txCount++;
+    [self updatePacketStats];
     [_packets addObject:p];
     if (_packets.count > 10000) {
         [_packets removeObjectsInRange:NSMakeRange(0, _packets.count - 8000)];

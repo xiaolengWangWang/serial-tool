@@ -59,6 +59,7 @@ type application struct {
 	statsLabel                            *walk.Label
 	recentConn                            *walk.ComboBox
 	recentSessions                        []wincore.SessionInfo
+	timeFilter                            *walk.ComboBox
 	vsWindow                              *walk.MainWindow
 	vsIP                                  *walk.ComboBox
 	vsPort                                *walk.LineEdit
@@ -130,7 +131,7 @@ func (m *packetTableModel) add(p Packet, kw, dir string) {
 	if len(m.all) > 10000 {
 		m.all = m.all[len(m.all)-8000:]
 	}
-	if m.matches(p, kw, dir) {
+	if m.matches(p, kw, dir, time.Time{}) {
 		m.visible = append(m.visible, p)
 		if len(m.visible) > 10000 {
 			m.visible = m.visible[len(m.visible)-8000:]
@@ -139,7 +140,10 @@ func (m *packetTableModel) add(p Packet, kw, dir string) {
 	}
 }
 
-func (m *packetTableModel) matches(p Packet, kw, dir string) bool {
+func (m *packetTableModel) matches(p Packet, kw, dir string, since time.Time) bool {
+	if !since.IsZero() && p.TS.Before(since) {
+		return false
+	}
 	if dir != "" && dir != "全部" && p.Direction != dir {
 		return false
 	}
@@ -153,10 +157,10 @@ func (m *packetTableModel) matches(p Packet, kw, dir string) bool {
 	return true
 }
 
-func (m *packetTableModel) refilter(kw, dir string) {
+func (m *packetTableModel) refilter(kw, dir string, since time.Time) {
 	m.visible = m.visible[:0]
 	for _, p := range m.all {
-		if m.matches(p, kw, dir) {
+		if m.matches(p, kw, dir, since) {
 			m.visible = append(m.visible, p)
 		}
 	}
@@ -331,13 +335,8 @@ func (a *application) createWindow() error {
 					Composite{Layout: HBox{}, Children: []Widget{
 						Label{Text: "搜索"},
 						LineEdit{AssignTo: &a.searchEdit, StretchFactor: 1},
-						ComboBox{AssignTo: &a.dirFilter, Model: []string{"全部", "RX", "TX"}, CurrentIndex: 0, MinSize: Size{Width: 72}, OnCurrentIndexChanged: func() {
-							if a.packetModel != nil {
-								kw := ""
-								if a.searchEdit != nil { kw = strings.TrimSpace(a.searchEdit.Text()) }
-								a.packetModel.refilter(kw, a.dirFilter.Text())
-							}
-						}},
+						ComboBox{AssignTo: &a.dirFilter, Model: []string{"全部", "RX", "TX"}, CurrentIndex: 0, MinSize: Size{Width: 72}, OnCurrentIndexChanged: a.applyFilter},
+						ComboBox{AssignTo: &a.timeFilter, Model: []string{"全部", "1分钟", "5分钟", "30分钟"}, CurrentIndex: 0, MinSize: Size{Width: 88}, OnCurrentIndexChanged: a.applyFilter},
 						PushButton{Text: "过滤", OnClicked: a.applyFilter},
 						PushButton{Text: "清除", OnClicked: a.clearFilter},
 					}},
@@ -834,6 +833,21 @@ func (a *application) appendDisplay(edit *walk.TextEdit, text string) {
 	edit.AppendText(text)
 }
 
+func (a *application) sinceTime() time.Time {
+	if a.timeFilter == nil {
+		return time.Time{}
+	}
+	switch a.timeFilter.Text() {
+	case "1分钟":
+		return time.Now().Add(-time.Minute)
+	case "5分钟":
+		return time.Now().Add(-5 * time.Minute)
+	case "30分钟":
+		return time.Now().Add(-30 * time.Minute)
+	}
+	return time.Time{}
+}
+
 func (a *application) applyFilter() {
 	if a.packetModel == nil {
 		return
@@ -843,7 +857,7 @@ func (a *application) applyFilter() {
 	if a.dirFilter != nil {
 		dir = a.dirFilter.Text()
 	}
-	a.packetModel.refilter(kw, dir)
+	a.packetModel.refilter(kw, dir, a.sinceTime())
 }
 
 func (a *application) clearFilter() {
@@ -851,8 +865,11 @@ func (a *application) clearFilter() {
 	if a.dirFilter != nil {
 		_ = a.dirFilter.SetCurrentIndex(0)
 	}
+	if a.timeFilter != nil {
+		_ = a.timeFilter.SetCurrentIndex(0)
+	}
 	if a.packetModel != nil {
-		a.packetModel.refilter("", "全部")
+		a.packetModel.refilter("", "全部", time.Time{})
 	}
 }
 

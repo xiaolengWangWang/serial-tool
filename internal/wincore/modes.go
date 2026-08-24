@@ -7,7 +7,7 @@ import (
 )
 
 // Version 是当前版本号,CLI 与两端桌面版共用(CLI 构建时可用 -ldflags "-X main.version=..." 覆盖)。
-const Version = "0.6.2"
+const Version = "0.6.3"
 
 // ModeSpec 描述某工作模式的参数需求,供两端 UI 统一决定控件显隐/启用,
 // 替代 Mac(app.m)与 Windows(windows/main.go)各自维护的 if/else 映射。
