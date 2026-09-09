@@ -21,7 +21,7 @@
     NSComboBox *_ports, *_baud, *_data, *_stop, *_parity, *_eol, *_ip;
     NSTextField *_port, *_endpointLabel, *_roleLabel, *_ipLabel, *_portLabel, *_protocolLabel, *_status, *_interval, *_toolboxInput, *_toolboxOutput, *_searchField;
     NSArray *_serialControls;
-    NSButton *_refresh, *_connect, *_hexView, *_hexSend, *_timerButton, *_loopButton, *_loopSend;
+    NSButton *_refresh, *_connect, *_hexView, *_hexSend, *_timerButton, *_quickTimerButton, *_loopButton, *_loopSend;
     NSTextField *_loopCount;
     NSTextView *_send, *_monitorLog, *_sysLog;
     NSTimer *_sendTimer;
@@ -326,7 +326,9 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _send.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
     _send.autoresizingMask = NSViewWidthSizable; sendScroll.documentView = _send; [sendDataContainer addSubview:sendScroll];
     NSButton *sendButton = [NSButton buttonWithTitle:@"发送一次" target:self action:@selector(send:)];
-    sendButton.frame = NSMakeRect(605, 8, 95, 114); sendButton.autoresizingMask = NSViewMinXMargin; [sendDataContainer addSubview:sendButton];
+    sendButton.frame = NSMakeRect(605, 68, 95, 54); sendButton.autoresizingMask = NSViewMinXMargin; [sendDataContainer addSubview:sendButton];
+    _quickTimerButton = [[NSButton buttonWithTitle:@"开始定时" target:self action:@selector(toggleTimer:)] retain];
+    _quickTimerButton.frame = NSMakeRect(605, 8, 95, 54); _quickTimerButton.autoresizingMask = NSViewMinXMargin; [sendDataContainer addSubview:_quickTimerButton];
 
     NSTabViewItem *sendDataItem = [[[NSTabViewItem alloc] initWithIdentifier:@"send"] autorelease];
     sendDataItem.label = @"发送数据"; sendDataItem.view = sendDataContainer;
@@ -691,7 +693,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _sendTimer = [NSTimer scheduledTimerWithTimeInterval:milliseconds / 1000.0 target:self
         selector:@selector(timerFired:) userInfo:nil repeats:YES];
     _interval.enabled = NO; _loopCount.enabled = NO; _loopSend.enabled = NO;
-    _timerButton.title = @"停止定时"; _loopButton.enabled = NO;
+    _timerButton.title = @"停止定时"; _quickTimerButton.title = @"停止定时"; _loopButton.enabled = NO;
     [self appendText:[NSString stringWithFormat:@"\n[已开始定时发送：%ld ms]\n", (long)milliseconds]];
 }
 
@@ -699,7 +701,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     if (!_sendTimer) return;
     [_sendTimer invalidate]; _sendTimer = nil;
     _interval.enabled = YES; _loopCount.enabled = YES; _loopSend.enabled = YES;
-    _timerButton.title = @"开始定时"; _loopButton.enabled = YES;
+    _timerButton.title = @"开始定时"; _quickTimerButton.title = @"开始定时"; _loopButton.enabled = YES;
     [self appendText:@"\n[已停止定时发送]\n"];
 }
 
@@ -720,10 +722,10 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSString *result = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
     if ([result isEqualToString:@"started"]) {
         _loopButton.title = @"停止循环";
-        _interval.enabled = NO; _loopCount.enabled = NO; _loopSend.enabled = NO; _timerButton.enabled = NO;
+        _interval.enabled = NO; _loopCount.enabled = NO; _loopSend.enabled = NO; _timerButton.enabled = NO; _quickTimerButton.enabled = NO;
     } else if ([result isEqualToString:@"stopped"]) {
         _loopButton.title = @"循环发送";
-        _interval.enabled = YES; _loopCount.enabled = YES; _loopSend.enabled = YES; _timerButton.enabled = YES;
+        _interval.enabled = YES; _loopCount.enabled = YES; _loopSend.enabled = YES; _timerButton.enabled = YES; _quickTimerButton.enabled = YES;
     } else if ([result hasPrefix:@"error:"]) {
         [self alert:[result substringFromIndex:6]];
     }
@@ -731,7 +733,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 
 - (void)loopDone {
     _loopButton.title = @"循环发送";
-    _interval.enabled = YES; _loopCount.enabled = YES; _loopSend.enabled = YES; _timerButton.enabled = YES;
+    _interval.enabled = YES; _loopCount.enabled = YES; _loopSend.enabled = YES; _timerButton.enabled = YES; _quickTimerButton.enabled = YES;
 }
 
 - (void)hexViewChanged:(id)sender {
