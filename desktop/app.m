@@ -13,6 +13,7 @@
     NSMutableArray *_packets;
     NSMutableArray *_visiblePackets;
     NSPopUpButton *_dirFilter;
+    NSPopUpButton *_typeFilter, *_lengthFilter;
     NSComboBox *_vsIP;
     NSTextField *_vsPort;
     NSMutableArray *_vsList;
@@ -35,7 +36,7 @@
 - (void)appendMonitorText:(NSString *)text;
 - (NSString *)sendCurrentData;
 - (void)stopTimer;
-- (void)addPacketWithTS:(NSString *)ts dir:(NSString *)dir hex:(NSString *)hex ascii:(NSString *)ascii len:(NSInteger)len;
+- (void)addPacketWithTS:(NSString *)ts dir:(NSString *)dir hex:(NSString *)hex ascii:(NSString *)ascii kind:(NSString *)kind len:(NSInteger)len;
 - (void)updatePacketStats;
 - (void)loopDone;
 @end
@@ -193,23 +194,33 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSTextField *searchLabel = Label(@"搜索", NSMakeRect(320, 616, 40, 22));
     searchLabel.autoresizingMask = NSViewMinYMargin;
     [view addSubview:searchLabel];
-    _searchField = [[NSTextField alloc] initWithFrame:NSMakeRect(360, 612, 220, 26)];
+    _searchField = [[NSTextField alloc] initWithFrame:NSMakeRect(360, 612, 190, 26)];
     _searchField.autoresizingMask = NSViewMinYMargin;
     [view addSubview:_searchField];
-    _dirFilter = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(588, 610, 80, 28) pullsDown:NO];
+    _dirFilter = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(558, 610, 70, 28) pullsDown:NO];
     [_dirFilter addItemsWithTitles:@[@"全部", @"RX", @"TX"]];
     _dirFilter.target = self; _dirFilter.action = @selector(applyFilter);
     _dirFilter.autoresizingMask = NSViewMinYMargin;
     [view addSubview:_dirFilter];
+    _typeFilter = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(634, 610, 70, 28) pullsDown:NO];
+    [_typeFilter addItemsWithTitles:@[@"全部", @"ASCII", @"HEX"]];
+    _typeFilter.target = self; _typeFilter.action = @selector(applyFilter);
+    _typeFilter.autoresizingMask = NSViewMinYMargin;
+    [view addSubview:_typeFilter];
+    _lengthFilter = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(710, 610, 70, 28) pullsDown:NO];
+    [_lengthFilter addItemsWithTitles:@[@"全部", @"1-8", @"9-64", @"65+"]];
+    _lengthFilter.target = self; _lengthFilter.action = @selector(applyFilter);
+    _lengthFilter.autoresizingMask = NSViewMinYMargin;
+    [view addSubview:_lengthFilter];
     NSButton *filterBtn = [NSButton buttonWithTitle:@"过滤" target:self action:@selector(applyFilter)];
-    filterBtn.frame = NSMakeRect(676, 610, 60, 28);
+    filterBtn.frame = NSMakeRect(892, 610, 56, 28);
     filterBtn.autoresizingMask = NSViewMinYMargin;
     [view addSubview:filterBtn];
     NSButton *clearFilterBtn = [NSButton buttonWithTitle:@"清除" target:self action:@selector(clearFilter)];
-    clearFilterBtn.frame = NSMakeRect(742, 610, 60, 28);
+    clearFilterBtn.frame = NSMakeRect(954, 610, 60, 28);
     clearFilterBtn.autoresizingMask = NSViewMinYMargin;
     [view addSubview:clearFilterBtn];
-    _timeFilter = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(808, 610, 110, 28) pullsDown:NO];
+    _timeFilter = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(786, 610, 100, 28) pullsDown:NO];
     [_timeFilter addItemsWithTitles:@[@"全部", @"1分钟", @"5分钟", @"30分钟"]];
     _timeFilter.target = self; _timeFilter.action = @selector(applyFilter);
     _timeFilter.autoresizingMask = NSViewMinYMargin;
@@ -285,55 +296,55 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSTabView *sendTabView = [[[NSTabView alloc] initWithFrame:NSMakeRect(320, 8, 700, 258)] autorelease];
     sendTabView.autoresizingMask = NSViewWidthSizable;
 
-    NSView *sendDataContainer = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 700, 230)] autorelease];
+    NSView *sendDataContainer = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 700, 212)] autorelease];
     sendDataContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _hexSend = [[NSButton checkboxWithTitle:@"HEX 发送" target:nil action:nil] retain];
     _hexSend.state = NSControlStateValueOn;
-    _hexSend.frame = NSMakeRect(0, 184, 100, 26); _hexSend.autoresizingMask = NSViewMinYMargin; [sendDataContainer addSubview:_hexSend];
-    [sendDataContainer addSubview:Label(@"行尾", NSMakeRect(110, 186, 36, 24))];
-    _eol = [Combo(NSMakeRect(148, 182, 80, 30), @[@"无",@"LF",@"CR",@"CRLF"], @"无") retain];
+    _hexSend.frame = NSMakeRect(0, 166, 100, 26); _hexSend.autoresizingMask = NSViewMinYMargin; [sendDataContainer addSubview:_hexSend];
+    [sendDataContainer addSubview:Label(@"行尾", NSMakeRect(110, 168, 36, 24))];
+    _eol = [Combo(NSMakeRect(148, 164, 80, 30), @[@"无",@"LF",@"CR",@"CRLF"], @"无") retain];
     _eol.autoresizingMask = NSViewMinYMargin; [sendDataContainer addSubview:_eol];
-    NSTextField *hint = Label(@"HEX 示例：01 03 00 00 00 02", NSMakeRect(246, 186, 280, 24));
+    NSTextField *hint = Label(@"HEX 示例：01 03 00 00 00 02", NSMakeRect(246, 168, 280, 24));
     hint.textColor = NSColor.secondaryLabelColor; hint.autoresizingMask = NSViewMinYMargin; [sendDataContainer addSubview:hint];
 
-    [sendDataContainer addSubview:Label(@"历史", NSMakeRect(0, 150, 40, 24))];
-    _sendHistory = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(40, 146, 140, 26) pullsDown:NO];
+    [sendDataContainer addSubview:Label(@"历史", NSMakeRect(0, 132, 40, 24))];
+    _sendHistory = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(40, 128, 140, 26) pullsDown:NO];
     _sendHistory.target = self; _sendHistory.action = @selector(sendHistorySelected:);
     [sendDataContainer addSubview:_sendHistory];
-    [sendDataContainer addSubview:Label(@"收藏", NSMakeRect(188, 150, 40, 24))];
-    _favorites = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(228, 146, 140, 26) pullsDown:NO];
+    [sendDataContainer addSubview:Label(@"收藏", NSMakeRect(188, 132, 40, 24))];
+    _favorites = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(228, 128, 140, 26) pullsDown:NO];
     _favorites.target = self; _favorites.action = @selector(favoriteSelected:);
     [sendDataContainer addSubview:_favorites];
     NSButton *favBtn = [NSButton buttonWithTitle:@"收藏当前" target:self action:@selector(saveFavorite:)];
-    favBtn.frame = NSMakeRect(376, 144, 90, 28); [sendDataContainer addSubview:favBtn];
+    favBtn.frame = NSMakeRect(376, 126, 90, 28); [sendDataContainer addSubview:favBtn];
     NSButton *delBtn = [NSButton buttonWithTitle:@"删除" target:self action:@selector(deleteFavorite:)];
-    delBtn.frame = NSMakeRect(470, 144, 70, 28); [sendDataContainer addSubview:delBtn];
+    delBtn.frame = NSMakeRect(470, 126, 70, 28); [sendDataContainer addSubview:delBtn];
 
-    NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 8, 590, 132)] autorelease];
+    NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 8, 590, 114)] autorelease];
     sendScroll.borderType = NSBezelBorder; sendScroll.hasVerticalScroller = YES; sendScroll.autoresizingMask = NSViewWidthSizable;
     _send = [[NSTextView alloc] initWithFrame:sendScroll.contentView.bounds];
     _send.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
     _send.autoresizingMask = NSViewWidthSizable; sendScroll.documentView = _send; [sendDataContainer addSubview:sendScroll];
     NSButton *sendButton = [NSButton buttonWithTitle:@"发送一次" target:self action:@selector(send:)];
-    sendButton.frame = NSMakeRect(605, 8, 95, 132); sendButton.autoresizingMask = NSViewMinXMargin; [sendDataContainer addSubview:sendButton];
+    sendButton.frame = NSMakeRect(605, 8, 95, 114); sendButton.autoresizingMask = NSViewMinXMargin; [sendDataContainer addSubview:sendButton];
 
     NSTabViewItem *sendDataItem = [[[NSTabViewItem alloc] initWithIdentifier:@"send"] autorelease];
     sendDataItem.label = @"发送数据"; sendDataItem.view = sendDataContainer;
     [sendTabView addTabViewItem:sendDataItem];
 
-    NSView *timerContainer = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 700, 230)] autorelease];
+    NSView *timerContainer = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 700, 212)] autorelease];
     timerContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _loopSend = [[NSButton checkboxWithTitle:@"循环" target:nil action:nil] retain];
-    _loopSend.frame = NSMakeRect(0, 184, 52, 26); _loopSend.autoresizingMask = NSViewMinYMargin; [timerContainer addSubview:_loopSend];
-    [timerContainer addSubview:Label(@"次数(0=一直)", NSMakeRect(58, 186, 92, 24))];
-    _loopCount = [[NSTextField alloc] initWithFrame:NSMakeRect(152, 182, 60, 28)];
+    _loopSend.frame = NSMakeRect(0, 166, 52, 26); _loopSend.autoresizingMask = NSViewMinYMargin; [timerContainer addSubview:_loopSend];
+    [timerContainer addSubview:Label(@"次数(0=一直)", NSMakeRect(58, 168, 92, 24))];
+    _loopCount = [[NSTextField alloc] initWithFrame:NSMakeRect(152, 164, 60, 28)];
     _loopCount.placeholderString = @"0=∞"; _loopCount.stringValue = @"0";
     _loopCount.autoresizingMask = NSViewMinYMargin; [timerContainer addSubview:_loopCount];
-    [timerContainer addSubview:Label(@"间隔(ms)", NSMakeRect(230, 186, 64, 24))];
-    _interval = [[NSTextField alloc] initWithFrame:NSMakeRect(296, 182, 98, 30)];
+    [timerContainer addSubview:Label(@"间隔(ms)", NSMakeRect(230, 168, 64, 24))];
+    _interval = [[NSTextField alloc] initWithFrame:NSMakeRect(296, 164, 98, 30)];
     _interval.stringValue = @"1000"; _interval.alignment = NSTextAlignmentRight;
     _interval.autoresizingMask = NSViewMinYMargin; [timerContainer addSubview:_interval];
-    NSTextField *timerHint = Label(@"定时与循环发送使用“发送数据”页中的内容和格式", NSMakeRect(0, 146, 420, 24));
+    NSTextField *timerHint = Label(@"定时与循环发送使用“发送数据”页中的内容和格式", NSMakeRect(0, 128, 420, 24));
     timerHint.textColor = NSColor.secondaryLabelColor; [timerContainer addSubview:timerHint];
     _loopButton = [[NSButton buttonWithTitle:@"循环发送" target:self action:@selector(toggleLoop:)] retain];
     _loopButton.frame = NSMakeRect(0, 82, 150, 54); [timerContainer addSubview:_loopButton];
@@ -1045,6 +1056,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 - (void)applyFilter {
     NSString *kw = [_searchField.stringValue lowercaseString];
     NSString *dir = _dirFilter ? _dirFilter.titleOfSelectedItem : @"全部";
+    NSString *type = _typeFilter ? _typeFilter.titleOfSelectedItem : @"全部";
+    NSString *length = _lengthFilter ? _lengthFilter.titleOfSelectedItem : @"全部";
     NSString *timeRange = _timeFilter ? _timeFilter.titleOfSelectedItem : @"全部";
     NSTimeInterval since = 0;
     if ([timeRange isEqualToString:@"1分钟"])       since = [NSDate date].timeIntervalSince1970 - 60;
@@ -1054,6 +1067,11 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     for (NSDictionary *p in _packets) {
         if (since > 0 && [p[@"epoch"] doubleValue] < since) continue;
         if (![dir isEqualToString:@"全部"] && ![p[@"dir"] isEqualToString:dir]) continue;
+        if (![type isEqualToString:@"全部"] && ![p[@"kind"] isEqualToString:type]) continue;
+        NSInteger bytes = [p[@"rawLen"] integerValue];
+        if ([length isEqualToString:@"1-8"] && (bytes < 1 || bytes > 8)) continue;
+        if ([length isEqualToString:@"9-64"] && (bytes < 9 || bytes > 64)) continue;
+        if ([length isEqualToString:@"65+"] && bytes < 65) continue;
         if (kw.length) {
             if (![[p[@"hex"] lowercaseString] containsString:kw] &&
                 ![[p[@"ascii"] lowercaseString] containsString:kw]) continue;
@@ -1068,6 +1086,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 - (void)clearFilter {
     _searchField.stringValue = @"";
     if (_dirFilter) [_dirFilter selectItemWithTitle:@"全部"];
+    if (_typeFilter) [_typeFilter selectItemWithTitle:@"全部"];
+    if (_lengthFilter) [_lengthFilter selectItemWithTitle:@"全部"];
     if (_timeFilter) [_timeFilter selectItemAtIndex:0];
     [_visiblePackets removeAllObjects];
     [_visiblePackets addObjectsFromArray:_packets];
@@ -1080,9 +1100,10 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _statsLabel.stringValue = [NSString stringWithFormat:@"RX %ld包  TX %ld包", (long)_rxCount, (long)_txCount];
 }
 
-- (void)addPacketWithTS:(NSString *)ts dir:(NSString *)dir hex:(NSString *)hex ascii:(NSString *)ascii len:(NSInteger)len {
+- (void)addPacketWithTS:(NSString *)ts dir:(NSString *)dir hex:(NSString *)hex ascii:(NSString *)ascii kind:(NSString *)kind len:(NSInteger)len {
     NSDictionary *p = @{
         @"ts": ts, @"dir": dir, @"hex": hex, @"ascii": ascii,
+        @"kind": kind, @"rawLen": @(len),
         @"len": [NSString stringWithFormat:@"%ld B", (long)len],
         @"epoch": @([NSDate date].timeIntervalSince1970)
     };
@@ -1093,20 +1114,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     if (_packets.count > 10000) {
         [_packets removeObjectsInRange:NSMakeRange(0, _packets.count - 8000)];
     }
-    NSString *kw = [_searchField.stringValue lowercaseString];
-    NSString *dirFilt = _dirFilter ? _dirFilter.titleOfSelectedItem : @"全部";
-    BOOL passes = YES;
-    if (![dirFilt isEqualToString:@"全部"] && ![dir isEqualToString:dirFilt]) passes = NO;
-    if (passes && kw.length) {
-        if (![[hex lowercaseString] containsString:kw] && ![[ascii lowercaseString] containsString:kw]) passes = NO;
-    }
-    if (passes) {
-        [_visiblePackets addObject:p];
-        if (_visiblePackets.count > 10000)
-            [_visiblePackets removeObjectsInRange:NSMakeRange(0, _visiblePackets.count - 8000)];
-        [_dataTable reloadData];
-        [_dataTable scrollRowToVisible:(NSInteger)_visiblePackets.count - 1];
-    }
+    [self applyFilter];
 }
 
 - (void)copyPacketHex:(id)sender {
@@ -1153,15 +1161,16 @@ void UIAppend(const char *text) {
     [value release];
 }
 
-void UIAddPacket(const char *ts, const char *dir, const char *hex, const char *ascii, int len) {
+void UIAddPacket(const char *ts, const char *dir, const char *hex, const char *ascii, const char *kind, int len) {
     NSString *nts    = [[NSString alloc] initWithUTF8String:ts    ?: ""];
     NSString *ndir   = [[NSString alloc] initWithUTF8String:dir   ?: ""];
     NSString *nhex   = [[NSString alloc] initWithUTF8String:hex   ?: ""];
     NSString *nascii = [[NSString alloc] initWithUTF8String:ascii ?: ""];
+    NSString *nkind  = [[NSString alloc] initWithUTF8String:kind  ?: ""];
     NSInteger nlen = len;
     dispatch_async(dispatch_get_main_queue(), ^{
-        [(AppDelegate *)NSApp.delegate addPacketWithTS:nts dir:ndir hex:nhex ascii:nascii len:nlen];
-        [nts release]; [ndir release]; [nhex release]; [nascii release];
+        [(AppDelegate *)NSApp.delegate addPacketWithTS:nts dir:ndir hex:nhex ascii:nascii kind:nkind len:nlen];
+        [nts release]; [ndir release]; [nhex release]; [nascii release]; [nkind release];
     });
 }
 

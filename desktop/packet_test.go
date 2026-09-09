@@ -9,6 +9,7 @@ func TestPacketDisplayFields(t *testing.T) {
 		dir:   "RX",
 		hex:   "41 00 FF 20",
 		ascii: "A.. ",
+		kind:  "HEX",
 		len:   4,
 	}
 	if got != want {
