@@ -274,6 +274,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [tableMenu addItemWithTitle:@"复制 HEX" action:@selector(copyPacketHex:) keyEquivalent:@""];
     [tableMenu addItemWithTitle:@"复制 ASCII" action:@selector(copyPacketASCII:) keyEquivalent:@""];
     [tableMenu addItemWithTitle:@"复制整行" action:@selector(copyPacketAll:) keyEquivalent:@""];
+    [tableMenu addItemWithTitle:@"本地分析" action:@selector(analyzePacket:) keyEquivalent:@""];
     _dataTable.menu = tableMenu;
     [dataContainer addSubview:dataScroll];
 
@@ -977,9 +978,9 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSInteger row = _dataTable.selectedRow;
     if (row < 0 || row >= (NSInteger)_visiblePackets.count) { _detailView.string = @""; return; }
     NSDictionary *p = _visiblePackets[row];
-    NSString *detail = [NSString stringWithFormat:@"[%@] %@  %@\nHEX:   %@\nASCII: %@",
+    NSString *detail = [NSString stringWithFormat:@"[%@] %@  %@  %@\nHEX:   %@\nASCII: %@",
         p[@"ts"] ?: @"", p[@"dir"] ?: @"", p[@"len"] ?: @"",
-        p[@"hex"] ?: @"", p[@"ascii"] ?: @""];
+        p[@"kind"] ?: @"", p[@"hex"] ?: @"", p[@"ascii"] ?: @""];
     _detailView.string = detail;
 }
 
@@ -1159,6 +1160,28 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSString *line = [NSString stringWithFormat:@"[%@ %@] %@ | %@", p[@"ts"], p[@"dir"], p[@"hex"], p[@"ascii"]];
     [[NSPasteboard generalPasteboard] clearContents];
     [[NSPasteboard generalPasteboard] setString:line forType:NSPasteboardTypeString];
+}
+
+- (void)analyzePacket:(id)sender {
+    NSInteger row = _dataTable.clickedRow;
+    if (row < 0 || row >= (NSInteger)_visiblePackets.count) return;
+    NSDictionary *p = _visiblePackets[row];
+    NSArray *bytes = [p[@"hex"] componentsSeparatedByString:@" "];
+    NSInteger printable = 0;
+    for (NSString *token in bytes) {
+        unsigned value = (unsigned)strtoul(token.UTF8String, NULL, 16);
+        if (value >= 0x20 && value <= 0x7e) printable++;
+    }
+    NSMutableString *result = [NSMutableString stringWithFormat:@"\n本地分析：%@ %@，长度 %@，可打印字节 %ld/%ld",
+        p[@"kind"] ?: @"", p[@"dir"] ?: @"", p[@"len"] ?: @"", (long)printable, (long)bytes.count];
+    if (bytes.count > 0)
+        [result appendFormat:@"，首字节 0x%@", bytes[0]];
+    if (bytes.count > 1)
+        [result appendFormat:@"，功能码候选 0x%@", bytes[1]];
+    if (_detailView) {
+        _detailView.string = [_detailView.string stringByAppendingString:result];
+        [_detailView scrollRangeToVisible:NSMakeRange(_detailView.string.length, 0)];
+    }
 }
 
 - (void)alert:(NSString *)message {
