@@ -385,6 +385,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     Submenu(mainMenu, @"编辑", editMenu);
 
     NSMenu *viewMenu = [[[NSMenu alloc] initWithTitle:@"视图"] autorelease];
+    Item(viewMenu, @"打开数据库目录", @selector(revealDatabase:), @"d", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Item(viewMenu, @"清空接收区", @selector(clear:), @"k", NSEventModifierFlagCommand);
     Item(viewMenu, @"导出接收数据", @selector(exportLog:), @"e", NSEventModifierFlagCommand);
     Item(viewMenu, @"ASCII 列开关", @selector(toggleHexView:), @"h", NSEventModifierFlagCommand | NSEventModifierFlagShift);
@@ -990,7 +991,10 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 - (void)revealDatabase:(id)sender {
     char *raw = GoDatabaseInfo();
     NSString *path = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
-    if ([path hasPrefix:@"错误:"]) { [self alert:path]; return; }
+    BOOL isDirectory = NO;
+    if ([path hasPrefix:@"错误:"] || ![[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory] || !isDirectory) {
+        [self alert:path.length ? [NSString stringWithFormat:@"数据库目录不存在：%@", path] : @"数据库目录不可用"]; return;
+    }
     [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:path]]];
 }
 - (void)appendMonitorText:(NSString *)text {
