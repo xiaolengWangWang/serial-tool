@@ -1,7 +1,7 @@
 package main
 
 /*
-#cgo darwin LDFLAGS: -framework Cocoa
+#cgo darwin LDFLAGS: -framework Cocoa -framework Security
 #include <stdlib.h>
 #include "app.h"
 */

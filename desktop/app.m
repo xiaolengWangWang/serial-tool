@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#import <Security/Security.h>
 #import <objc/runtime.h>
 #include <stdlib.h>
 #include "app.h"
@@ -8,6 +9,7 @@
     NSWindow *_monitorWindow;
     NSWindow *_vsWindow;
     NSWindow *_toolboxWindow;
+    NSWindow *_aiSettingsWindow;
     NSTableView *_vsTable;
     NSTableView *_dataTable;
     NSMutableArray *_packets;
@@ -31,6 +33,8 @@
     NSInteger _rxCount, _txCount;
     BOOL _connected;
     BOOL _monitorPaused;
+    BOOL _aiEnabled;
+    NSTextField *_aiBaseURL, *_aiModel, *_aiKey;
 }
 - (void)appendText:(NSString *)text;
 - (void)appendMonitorText:(NSString *)text;
@@ -403,6 +407,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     Item(actionMenu, @"刷新串口", @selector(refresh:), @"r", NSEventModifierFlagCommand);
     Item(actionMenu, @"虚拟串口映射", @selector(openVSerialManager:), @"v", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Item(actionMenu, @"工具箱", @selector(openToolbox:), @"b", NSEventModifierFlagCommand | NSEventModifierFlagShift);
+    Item(actionMenu, @"AI 增强分析设置", @selector(openAISettings:), @"i", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Submenu(mainMenu, @"操作", actionMenu);
 
     NSMenu *editMenu = [[[NSMenu alloc] initWithTitle:@"编辑"] autorelease];
@@ -421,6 +426,52 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     Submenu(mainMenu, @"视图", viewMenu);
 
     NSApp.mainMenu = mainMenu;
+}
+
+- (void)openAISettings:(id)sender {
+    if (!_aiSettingsWindow) {
+        _aiSettingsWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 250)
+            styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+            backing:NSBackingStoreBuffered defer:NO];
+        _aiSettingsWindow.title = @"AI 增强分析";
+        _aiSettingsWindow.releasedWhenClosed = NO;
+        NSView *v = _aiSettingsWindow.contentView;
+        NSButton *enabled = [NSButton checkboxWithTitle:@"启用 DeepSeek（默认关闭）" target:nil action:nil];
+        enabled.frame = NSMakeRect(24, 198, 240, 26); enabled.state = [[NSUserDefaults standardUserDefaults] boolForKey:@"ai.enabled"] ? NSControlStateValueOn : NSControlStateValueOff;
+        _aiEnabled = enabled.state == NSControlStateValueOn; enabled.target = self; enabled.action = @selector(aiEnabledChanged:); [v addSubview:enabled];
+        [v addSubview:Label(@"API Base URL", NSMakeRect(24, 158, 100, 22))];
+        _aiBaseURL = [[NSTextField alloc] initWithFrame:NSMakeRect(130, 154, 320, 28)]; _aiBaseURL.stringValue = [[NSUserDefaults standardUserDefaults] stringForKey:@"ai.baseURL"] ?: @"https://api.deepseek.com"; [v addSubview:_aiBaseURL];
+        [v addSubview:Label(@"模型", NSMakeRect(24, 118, 100, 22))];
+        _aiModel = [[NSTextField alloc] initWithFrame:NSMakeRect(130, 114, 320, 28)]; _aiModel.stringValue = [[NSUserDefaults standardUserDefaults] stringForKey:@"ai.model"] ?: @"deepseek-chat"; [v addSubview:_aiModel];
+        [v addSubview:Label(@"API Key", NSMakeRect(24, 78, 100, 22))];
+        _aiKey = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(130, 74, 320, 28)]; _aiKey.placeholderString = @"留空表示不修改已保存 Key"; [v addSubview:_aiKey];
+        NSTextField *hint = Label(@"Key 仅保存到 macOS Keychain；未启用时不会发起网络请求。", NSMakeRect(24, 42, 420, 22)); hint.textColor = NSColor.secondaryLabelColor; [v addSubview:hint];
+        NSButton *save = [NSButton buttonWithTitle:@"保存" target:self action:@selector(saveAISettings:)]; save.frame = NSMakeRect(370, 12, 80, 28); [v addSubview:save];
+        [_aiSettingsWindow center];
+    }
+    [_aiSettingsWindow makeKeyAndOrderFront:nil];
+}
+
+- (void)aiEnabledChanged:(NSButton *)sender { _aiEnabled = sender.state == NSControlStateValueOn; }
+
+- (void)saveAISettings:(id)sender {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setBool:_aiEnabled forKey:@"ai.enabled"];
+    [defaults setObject:_aiBaseURL.stringValue forKey:@"ai.baseURL"];
+    [defaults setObject:_aiModel.stringValue forKey:@"ai.model"];
+    [defaults synchronize];
+    if (_aiKey.stringValue.length) {
+        NSData *value = [_aiKey.stringValue dataUsingEncoding:NSUTF8StringEncoding];
+        NSDictionary *query = @{(__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+            (__bridge id)kSecAttrService: @"CommBox.DeepSeek", (__bridge id)kSecAttrAccount: @"api-key"};
+        SecItemDelete((__bridge CFDictionaryRef)query);
+        NSDictionary *item = @{(__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+            (__bridge id)kSecAttrService: @"CommBox.DeepSeek", (__bridge id)kSecAttrAccount: @"api-key", (__bridge id)kSecValueData: value};
+        SecItemAdd((__bridge CFDictionaryRef)item, NULL);
+        _aiKey.stringValue = @"";
+    }
+    [self appendText:@"[AI 设置已保存；DeepSeek 仅在用户主动分析时调用]\n"];
+    [_aiSettingsWindow orderOut:nil];
 }
 
 - (void)toggleHexView:(id)sender {
