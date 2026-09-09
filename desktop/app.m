@@ -257,7 +257,9 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSButton *invertSelection = [NSButton buttonWithTitle:@"反选" target:self action:@selector(invertPacketSelection:)];
     invertSelection.frame = NSMakeRect(518, 50, 58, 28); invertSelection.autoresizingMask = NSViewMinXMargin; [dataContainer addSubview:invertSelection];
     NSButton *analyzeSelected = [NSButton buttonWithTitle:@"分析选中数据" target:self action:@selector(analyzeSelected:)];
-    analyzeSelected.frame = NSMakeRect(582, 50, 108, 28); analyzeSelected.autoresizingMask = NSViewMinXMargin; [dataContainer addSubview:analyzeSelected];
+    analyzeSelected.frame = NSMakeRect(544, 50, 72, 28); analyzeSelected.autoresizingMask = NSViewMinXMargin; [dataContainer addSubview:analyzeSelected];
+    NSButton *aiAnalyze = [NSButton buttonWithTitle:@"AI 分析" target:self action:@selector(aiAnalyzeSelected:)];
+    aiAnalyze.frame = NSMakeRect(620, 50, 70, 28); aiAnalyze.autoresizingMask = NSViewMinXMargin; [dataContainer addSubview:aiAnalyze];
     _selectionLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(370, 15, 320, 24)];
     _selectionLabel.editable = NO; _selectionLabel.bordered = NO; _selectionLabel.drawsBackground = NO;
     _selectionLabel.textColor = NSColor.secondaryLabelColor; _selectionLabel.autoresizingMask = NSViewMinXMargin;
@@ -1261,6 +1263,19 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _detailView.string = [NSString stringWithFormat:@"选中数据分析\n记录：%ld 条\nRX：%ld  TX：%ld\n数据量：%ld B\n\n首条报文：\n%@",
         (long)rows.count, (long)rx, (long)tx, (long)bytes, [NSString stringWithUTF8String:raw ?: "分析失败"]];
     free(raw);
+}
+
+- (void)aiAnalyzeSelected:(id)sender {
+    NSIndexSet *rows = _dataTable.selectedRowIndexes;
+    if (!rows.count) { [self alert:@"请先选择报文"]; return; }
+    NSMutableString *input = [NSMutableString string];
+    [rows enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
+        [input appendFormat:@"%@ %@\n", _visiblePackets[idx][@"dir"] ?: @"", _visiblePackets[idx][@"hex"] ?: @""];
+    }];
+    char *raw = GoAIAnalyze((char *)[_mode.titleOfSelectedItem UTF8String], (char *)input.UTF8String);
+    NSString *result = [NSString stringWithUTF8String:raw ?: "AI 分析失败"];
+    free(raw);
+    _detailView.string = [NSString stringWithFormat:@"AI 深度分析（仅本次主动调用）\n\n%@", result];
 }
 
 - (void)analyzePacket:(id)sender {

@@ -8,7 +8,11 @@ package main
 import "C"
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -155,6 +159,70 @@ func GoSetAISetting(key, value *C.char) *C.char {
 		return C.CString(err.Error())
 	}
 	return C.CString("")
+}
+
+//export GoAIAnalyze
+func GoAIAnalyze(transport, hex *C.char) *C.char {
+	if engine == nil || engine.GetSetting("deepseek.enabled") != "true" {
+		return C.CString("AI 未启用，请先在 AI 增强分析设置中启用")
+	}
+	key := engine.GetSetting("deepseek.api_key")
+	if key == "" {
+		return C.CString("AI Key 为空，请先配置 API Key")
+	}
+	input := strings.TrimSpace(C.GoString(hex))
+	if len(input) == 0 {
+		return C.CString("没有可分析的报文")
+	}
+	if len(input) > 16*1024 {
+		return C.CString("分析数据超过 16KB，请先筛选或减少报文")
+	}
+	base := strings.TrimRight(engine.GetSetting("deepseek.base_url"), "/")
+	if base == "" {
+		base = "https://api.deepseek.com"
+	}
+	if !strings.HasSuffix(base, "/chat/completions") {
+		base += "/chat/completions"
+	}
+	model := engine.GetSetting("deepseek.model")
+	if model == "" {
+		model = "deepseek-chat"
+	}
+	prompt := fmt.Sprintf("请分析以下 %s 通信报文。只根据给定数据说明协议、异常、风险和现场排查建议；不确定时明确说明，不要臆测串口参数。报文为 HEX：\n%s", C.GoString(transport), input)
+	body, _ := json.Marshal(map[string]any{"model": model, "temperature": 0.1, "messages": []map[string]string{{"role": "system", "content": "你是工业通信现场诊断助手。结论仅作排查建议，优先建议查阅设备协议文档。"}, {"role": "user", "content": prompt}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base, bytes.NewReader(body))
+	if err != nil {
+		return C.CString("AI 请求失败：" + err.Error())
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return C.CString("AI 请求失败：" + err.Error())
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err = json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return C.CString("AI 响应解析失败")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return C.CString("AI 请求失败：" + result.Error.Message)
+	}
+	if len(result.Choices) == 0 || result.Choices[0].Message.Content == "" {
+		return C.CString("AI 未返回分析结果")
+	}
+	return C.CString(result.Choices[0].Message.Content)
 }
 
 //export GoAnalyzePacket
