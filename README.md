@@ -112,6 +112,8 @@ GET /api/v1/health
 
 ## 构建
 
+本 macOS 开发线仅同步和发布 macOS/Linux 构建产物；本工作流不修改、不构建或上传 Windows 产物。
+
 ```bash
 # 命令行(多平台,纯 Go)
 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X main.version=0.3.0' -o commbox .
