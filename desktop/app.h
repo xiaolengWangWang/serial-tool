@@ -6,6 +6,7 @@ void UIAppend(const char *text);
 void UIAppendLog(const char *text);
 void UIMonitorAppend(const char *text);
 void UIConnectionClosed(void);
+// Packet display fields: timestamp, direction, HEX, ASCII, byte length.
 void UIAddPacket(const char *ts, const char *dir, const char *hex, const char *ascii, int len);
 void UILoopDone(void);
 char *GoToggleLoop(char *input, int asHex, char *eol, int count, int intervalMs);

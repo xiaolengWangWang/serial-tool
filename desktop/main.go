@@ -56,12 +56,22 @@ func toASCII(data []byte) string {
 	return string(b)
 }
 
+type packetDisplay struct {
+	ts, dir, hex, ascii string
+	len                 int
+}
+
+func packetDisplayFields(ts, dir string, data []byte) packetDisplay {
+	return packetDisplay{ts: ts, dir: dir, hex: fmt.Sprintf("% X", data), ascii: toASCII(data), len: len(data)}
+}
+
 func addPacket(dir string, data []byte) {
-	ts := C.CString(timestamp())
-	cdir := C.CString(dir)
-	hex := C.CString(fmt.Sprintf("% X", data))
-	ascii := C.CString(toASCII(data))
-	C.UIAddPacket(ts, cdir, hex, ascii, C.int(len(data)))
+	p := packetDisplayFields(timestamp(), dir, data)
+	ts := C.CString(p.ts)
+	cdir := C.CString(p.dir)
+	hex := C.CString(p.hex)
+	ascii := C.CString(p.ascii)
+	C.UIAddPacket(ts, cdir, hex, ascii, C.int(p.len))
 	C.free(unsafe.Pointer(ts))
 	C.free(unsafe.Pointer(cdir))
 	C.free(unsafe.Pointer(hex))
