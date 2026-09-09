@@ -319,6 +319,10 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     favBtn.frame = NSMakeRect(376, 126, 90, 28); [sendDataContainer addSubview:favBtn];
     NSButton *delBtn = [NSButton buttonWithTitle:@"删除" target:self action:@selector(deleteFavorite:)];
     delBtn.frame = NSMakeRect(470, 126, 70, 28); [sendDataContainer addSubview:delBtn];
+    [sendDataContainer addSubview:Label(@"间隔(ms)", NSMakeRect(540, 132, 58, 24))];
+    _interval = [[NSTextField alloc] initWithFrame:NSMakeRect(598, 128, 102, 30)];
+    _interval.stringValue = @"1000"; _interval.alignment = NSTextAlignmentRight;
+    _interval.autoresizingMask = NSViewMinXMargin; [sendDataContainer addSubview:_interval];
 
     NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 8, 590, 114)] autorelease];
     sendScroll.borderType = NSBezelBorder; sendScroll.hasVerticalScroller = YES; sendScroll.autoresizingMask = NSViewWidthSizable;
@@ -342,11 +346,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _loopCount = [[NSTextField alloc] initWithFrame:NSMakeRect(152, 164, 60, 28)];
     _loopCount.placeholderString = @"0=∞"; _loopCount.stringValue = @"0";
     _loopCount.autoresizingMask = NSViewMinYMargin; [timerContainer addSubview:_loopCount];
-    [timerContainer addSubview:Label(@"间隔(ms)", NSMakeRect(230, 168, 64, 24))];
-    _interval = [[NSTextField alloc] initWithFrame:NSMakeRect(296, 164, 98, 30)];
-    _interval.stringValue = @"1000"; _interval.alignment = NSTextAlignmentRight;
-    _interval.autoresizingMask = NSViewMinYMargin; [timerContainer addSubview:_interval];
-    NSTextField *timerHint = Label(@"定时与循环发送使用“发送数据”页中的内容和格式", NSMakeRect(0, 128, 420, 24));
+    NSTextField *timerHint = Label(@"间隔和发送内容已移至“发送数据”页", NSMakeRect(230, 168, 300, 24));
     timerHint.textColor = NSColor.secondaryLabelColor; [timerContainer addSubview:timerHint];
     _loopButton = [[NSButton buttonWithTitle:@"循环发送" target:self action:@selector(toggleLoop:)] retain];
     _loopButton.frame = NSMakeRect(0, 82, 150, 54); [timerContainer addSubview:_loopButton];
