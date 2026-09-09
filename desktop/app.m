@@ -561,6 +561,11 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 
 - (void)resetToDisconnected {
     [self stopTimer];
+    if ([_loopButton.title isEqualToString:@"停止循环"]) {
+        char *raw = GoToggleLoop((char *)"", 0, (char *)"无", 0, 10);
+        free(raw);
+        [self loopDone];
+    }
     _connected = NO;
     _mode.enabled = YES;
     [self setStatus:@"● 未连接" color:NSColor.secondaryLabelColor];
@@ -677,6 +682,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 - (void)toggleTimer:(id)sender {
     if (_sendTimer) { [self stopTimer]; return; }
     if (!_connected) { [self alert:@"请先连接或开始监听"]; return; }
+    if ([_loopButton.title isEqualToString:@"停止循环"]) { [self alert:@"请先停止循环发送"]; return; }
     if (!_send.string.length && (_hexSend.state == NSControlStateValueOn || [_eol.stringValue isEqualToString:@"无"])) {
         [self alert:@"请输入要发送的数据"]; return;
     }
@@ -684,36 +690,49 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     if (milliseconds < 10) { [self alert:@"定时间隔不能小于 10 ms"]; return; }
     _sendTimer = [NSTimer scheduledTimerWithTimeInterval:milliseconds / 1000.0 target:self
         selector:@selector(timerFired:) userInfo:nil repeats:YES];
-    _interval.enabled = NO; _timerButton.title = @"停止定时";
+    _interval.enabled = NO; _loopCount.enabled = NO; _loopSend.enabled = NO;
+    _timerButton.title = @"停止定时"; _loopButton.enabled = NO;
     [self appendText:[NSString stringWithFormat:@"\n[已开始定时发送：%ld ms]\n", (long)milliseconds]];
 }
 
 - (void)stopTimer {
     if (!_sendTimer) return;
     [_sendTimer invalidate]; _sendTimer = nil;
-    _interval.enabled = YES; _timerButton.title = @"开始定时";
+    _interval.enabled = YES; _loopCount.enabled = YES; _loopSend.enabled = YES;
+    _timerButton.title = @"开始定时"; _loopButton.enabled = YES;
     [self appendText:@"\n[已停止定时发送]\n"];
 }
 
 - (void)toggleLoop:(id)sender {
+    if ([_loopButton.title isEqualToString:@"循环发送"] && _sendTimer) {
+        [self alert:@"请先停止定时发送"]; return;
+    }
     BOOL loopEnabled = _loopSend.state == NSControlStateValueOn;
     NSString *input = _send.string;
+    if ([_loopButton.title isEqualToString:@"循环发送"] && !_connected) { [self alert:@"请先连接或开始监听"]; return; }
+    if ([_loopButton.title isEqualToString:@"循环发送"] && !input.length) { [self alert:@"请输入要发送的数据"]; return; }
     BOOL hex = _hexSend.state == NSControlStateValueOn;
     NSString *eol = _eol.stringValue;
     int count = loopEnabled ? (int)_loopCount.integerValue : 1;
     int ms = (int)_interval.integerValue;
+    if ([_loopButton.title isEqualToString:@"循环发送"] && ms < 10) { [self alert:@"发送间隔不能小于 10 ms"]; return; }
     char *raw = GoToggleLoop((char *)input.UTF8String, hex ? 1 : 0, (char *)eol.UTF8String, count, ms);
     NSString *result = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
     if ([result isEqualToString:@"started"]) {
         _loopButton.title = @"停止循环";
+        _interval.enabled = NO; _loopCount.enabled = NO; _loopSend.enabled = NO; _timerButton.enabled = NO;
     } else if ([result isEqualToString:@"stopped"]) {
         _loopButton.title = @"循环发送";
+        _interval.enabled = YES; _loopCount.enabled = YES; _loopSend.enabled = YES; _timerButton.enabled = YES;
     } else if ([result hasPrefix:@"error:"]) {
         [self alert:[result substringFromIndex:6]];
     }
 }
 
-- (void)loopDone { _loopButton.title = @"循环发送"; }
+- (void)loopDone {
+    _loopButton.title = @"循环发送";
+    _interval.enabled = YES; _loopCount.enabled = YES; _loopSend.enabled = YES; _timerButton.enabled = YES;
+}
 
 - (void)hexViewChanged:(id)sender {
     NSTableColumn *col = [_dataTable tableColumnWithIdentifier:@"ascii"];

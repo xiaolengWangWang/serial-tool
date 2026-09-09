@@ -345,6 +345,24 @@ func GoToggleLoop(input *C.char, asHex C.int, eol *C.char, count C.int, interval
 	e := C.GoString(eol)
 	n := int(count)
 	ms := int(intervalMs)
+	if strings.TrimSpace(inp) == "" {
+		loopMu.Lock()
+		loopCancel = nil
+		loopMu.Unlock()
+		return C.CString("error:请输入要发送的数据")
+	}
+	if ms < 10 {
+		loopMu.Lock()
+		loopCancel = nil
+		loopMu.Unlock()
+		return C.CString("error:发送间隔不能小于 10 ms")
+	}
+	if _, err := wincore.ParseData(inp, hex, e); err != nil {
+		loopMu.Lock()
+		loopCancel = nil
+		loopMu.Unlock()
+		return C.CString("error:" + err.Error())
+	}
 	go func() {
 		cnt := 0
 		for {
@@ -373,12 +391,10 @@ func GoToggleLoop(input *C.char, asHex C.int, eol *C.char, count C.int, interval
 			}
 			logSent(inp, hex, e)
 			cnt++
-			if ms > 0 {
-				select {
-				case <-cancel:
-					return
-				case <-time.After(time.Duration(ms) * time.Millisecond):
-				}
+			select {
+			case <-cancel:
+				return
+			case <-time.After(time.Duration(ms) * time.Millisecond):
 			}
 		}
 	}()
