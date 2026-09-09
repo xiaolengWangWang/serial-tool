@@ -26,7 +26,7 @@
     NSTextView *_send, *_monitorLog, *_sysLog;
     NSTimer *_sendTimer;
     NSPopUpButton *_timeFilter;
-    NSTextField *_statsLabel;
+    NSTextField *_statsLabel, *_selectionLabel;
     NSTextView *_detailView;
     NSInteger _rxCount, _txCount;
     BOOL _connected;
@@ -237,7 +237,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     dataContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 
     // 详情区（底部固定 90px）
-    NSScrollView *detailScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 700, 90)] autorelease];
+    NSScrollView *detailScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 360, 90)] autorelease];
     detailScroll.borderType = NSBezelBorder; detailScroll.hasVerticalScroller = YES;
     detailScroll.autoresizingMask = NSViewWidthSizable;
     _detailView = [[NSTextView alloc] initWithFrame:detailScroll.contentView.bounds];
@@ -246,6 +246,19 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _detailView.autoresizingMask = NSViewWidthSizable;
     detailScroll.documentView = _detailView;
     [dataContainer addSubview:detailScroll];
+    NSButton *selectAll = [NSButton buttonWithTitle:@"全选" target:self action:@selector(selectAllPackets:)];
+    selectAll.frame = NSMakeRect(370, 50, 58, 28); selectAll.autoresizingMask = NSViewMinXMargin; [dataContainer addSubview:selectAll];
+    NSButton *clearSelection = [NSButton buttonWithTitle:@"取消选择" target:self action:@selector(clearPacketSelection:)];
+    clearSelection.frame = NSMakeRect(434, 50, 78, 28); clearSelection.autoresizingMask = NSViewMinXMargin; [dataContainer addSubview:clearSelection];
+    NSButton *invertSelection = [NSButton buttonWithTitle:@"反选" target:self action:@selector(invertPacketSelection:)];
+    invertSelection.frame = NSMakeRect(518, 50, 58, 28); invertSelection.autoresizingMask = NSViewMinXMargin; [dataContainer addSubview:invertSelection];
+    NSButton *analyzeSelected = [NSButton buttonWithTitle:@"分析选中数据" target:self action:@selector(analyzeSelected:)];
+    analyzeSelected.frame = NSMakeRect(582, 50, 108, 28); analyzeSelected.autoresizingMask = NSViewMinXMargin; [dataContainer addSubview:analyzeSelected];
+    _selectionLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(370, 15, 320, 24)];
+    _selectionLabel.editable = NO; _selectionLabel.bordered = NO; _selectionLabel.drawsBackground = NO;
+    _selectionLabel.textColor = NSColor.secondaryLabelColor; _selectionLabel.autoresizingMask = NSViewMinXMargin;
+    _selectionLabel.stringValue = @"已选择 0 条";
+    [dataContainer addSubview:_selectionLabel];
 
     NSBox *detailSep = [[[NSBox alloc] initWithFrame:NSMakeRect(0, 90, 700, 1)] autorelease];
     detailSep.boxType = NSBoxSeparator; detailSep.autoresizingMask = NSViewWidthSizable;
@@ -258,6 +271,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _dataTable = [[NSTableView alloc] initWithFrame:dataScroll.contentView.bounds];
     _dataTable.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
     _dataTable.usesAlternatingRowBackgroundColors = YES;
+    _dataTable.allowsMultipleSelection = YES;
     _dataTable.dataSource = self; _dataTable.delegate = self;
     NSTableColumn *tc0 = [[[NSTableColumn alloc] initWithIdentifier:@"ts"] autorelease];
     tc0.title = @"时间"; tc0.width = 100; [_dataTable addTableColumn:tc0];
@@ -974,7 +988,16 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     return nil;
 }
 - (void)tableViewSelectionDidChange:(NSNotification *)notification {
-    if ([notification object] != _dataTable || !_detailView) return;
+    if ([notification object] != _dataTable) return;
+    NSInteger selected = _dataTable.selectedRowIndexes.count;
+    __block NSInteger rx = 0, tx = 0, bytes = 0;
+    [_dataTable.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
+        NSDictionary *p = _visiblePackets[idx];
+        if ([p[@"dir"] isEqualToString:@"RX"]) rx++; else if ([p[@"dir"] isEqualToString:@"TX"]) tx++;
+        bytes += [p[@"rawLen"] integerValue];
+    }];
+    _selectionLabel.stringValue = [NSString stringWithFormat:@"已选择 %ld 条  RX %ld  TX %ld  数据量 %ld B", (long)selected, (long)rx, (long)tx, (long)bytes];
+    if (!_detailView) return;
     NSInteger row = _dataTable.selectedRow;
     if (row < 0 || row >= (NSInteger)_visiblePackets.count) { _detailView.string = @""; return; }
     NSDictionary *p = _visiblePackets[row];
@@ -982,6 +1005,17 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         p[@"ts"] ?: @"", p[@"dir"] ?: @"", p[@"len"] ?: @"",
         p[@"kind"] ?: @"", p[@"hex"] ?: @"", p[@"ascii"] ?: @""];
     _detailView.string = detail;
+}
+
+- (void)selectAllPackets:(id)sender {
+    if (_visiblePackets.count) [_dataTable selectRowIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, _visiblePackets.count)] byExtendingSelection:NO];
+}
+- (void)clearPacketSelection:(id)sender { [_dataTable deselectAll:nil]; }
+- (void)invertPacketSelection:(id)sender {
+    NSMutableIndexSet *indexes = [NSMutableIndexSet indexSet];
+    for (NSUInteger i = 0; i < _visiblePackets.count; i++)
+        if (![_dataTable.selectedRowIndexes containsIndex:i]) [indexes addIndex:i];
+    [_dataTable selectRowIndexes:indexes byExtendingSelection:NO];
 }
 
 - (void)openMonitor:(id)sender {
@@ -1046,6 +1080,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [_packets removeAllObjects];
     [_visiblePackets removeAllObjects];
     [_dataTable reloadData];
+    [_dataTable deselectAll:nil];
+    [self tableViewSelectionDidChange:[NSNotification notificationWithName:@"selection" object:_dataTable]];
     _rxCount = 0; _txCount = 0;
     [self updatePacketStats];
 }
@@ -1160,6 +1196,23 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSString *line = [NSString stringWithFormat:@"[%@ %@] %@ | %@", p[@"ts"], p[@"dir"], p[@"hex"], p[@"ascii"]];
     [[NSPasteboard generalPasteboard] clearContents];
     [[NSPasteboard generalPasteboard] setString:line forType:NSPasteboardTypeString];
+}
+
+- (void)analyzeSelected:(id)sender {
+    NSIndexSet *rows = _dataTable.selectedRowIndexes;
+    if (!rows.count) { [self alert:@"请先选择报文"]; return; }
+    NSUInteger first = rows.firstIndex;
+    NSDictionary *p = _visiblePackets[first];
+    char *raw = GoAnalyzePacket((char *)[_mode.titleOfSelectedItem UTF8String], (char *)[p[@"hex"] UTF8String]);
+    __block NSInteger rx = 0, tx = 0, bytes = 0;
+    [rows enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
+        NSDictionary *item = _visiblePackets[idx];
+        if ([item[@"dir"] isEqualToString:@"RX"]) rx++; else if ([item[@"dir"] isEqualToString:@"TX"]) tx++;
+        bytes += [item[@"rawLen"] integerValue];
+    }];
+    _detailView.string = [NSString stringWithFormat:@"选中数据分析\n记录：%ld 条\nRX：%ld  TX：%ld\n数据量：%ld B\n\n首条报文：\n%@",
+        (long)rows.count, (long)rx, (long)tx, (long)bytes, [NSString stringWithUTF8String:raw ?: "分析失败"]];
+    free(raw);
 }
 
 - (void)analyzePacket:(id)sender {
