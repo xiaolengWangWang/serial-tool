@@ -1,7 +1,7 @@
 package main
 
 /*
-#cgo darwin LDFLAGS: -framework Cocoa -framework Security
+#cgo darwin LDFLAGS: -framework Cocoa
 #include <stdlib.h>
 #include "app.h"
 */
@@ -144,6 +144,17 @@ func GoDatabaseInfo() *C.char {
 //export GoVersion
 func GoVersion() *C.char {
 	return C.CString(wincore.Version)
+}
+
+//export GoGetAISetting
+func GoGetAISetting(key *C.char) *C.char { return C.CString(engine.GetSetting(C.GoString(key))) }
+
+//export GoSetAISetting
+func GoSetAISetting(key, value *C.char) *C.char {
+	if err := engine.SetSetting(C.GoString(key), C.GoString(value)); err != nil {
+		return C.CString(err.Error())
+	}
+	return C.CString("")
 }
 
 //export GoAnalyzePacket

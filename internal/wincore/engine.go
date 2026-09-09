@@ -47,38 +47,38 @@ type Config struct {
 
 type Engine struct {
 	sync.Mutex
-	port         serial.Port
-	listener     net.Listener
-	clients      map[net.Conn]struct{}
-	udp          *net.UDPConn
-	udpPeer      *net.UDPAddr
-	udpDialed    bool
-	bridge       bool
-	serialWrite  sync.Mutex
-	networkWrite sync.Mutex
-	store        *Store
-	onData       func(string, []byte)
-	onLog        func(string)
-	onClosed     func()
-	mode         Mode
-	httpURL      string
-	httpClient   *http.Client
-	vbridges     map[int]*vBridge // 后台运行的多个虚拟串口桥接
-	vseq         int
-	rxBytes      uint64
-	txBytes      uint64
-	rxCount      uint64
-	txCount      uint64
-	reconnects   uint64
-	errCount     uint64
-	state        int32
-	startedAt    int64
-	reconnectAddr string
-	reconnectStop chan struct{}
+	port              serial.Port
+	listener          net.Listener
+	clients           map[net.Conn]struct{}
+	udp               *net.UDPConn
+	udpPeer           *net.UDPAddr
+	udpDialed         bool
+	bridge            bool
+	serialWrite       sync.Mutex
+	networkWrite      sync.Mutex
+	store             *Store
+	onData            func(string, []byte)
+	onLog             func(string)
+	onClosed          func()
+	mode              Mode
+	httpURL           string
+	httpClient        *http.Client
+	vbridges          map[int]*vBridge // 后台运行的多个虚拟串口桥接
+	vseq              int
+	rxBytes           uint64
+	txBytes           uint64
+	rxCount           uint64
+	txCount           uint64
+	reconnects        uint64
+	errCount          uint64
+	state             int32
+	startedAt         int64
+	reconnectAddr     string
+	reconnectStop     chan struct{}
 	reconnectInterval time.Duration
-	histMu       sync.Mutex
-	favorites    map[string]string
-	sendHistory  []string
+	histMu            sync.Mutex
+	favorites         map[string]string
+	sendHistory       []string
 }
 
 // SetOnClosed 注册"连接被动断开"回调(远端关闭、串口拔出、监听出错等,
@@ -163,6 +163,9 @@ func (e *Engine) RecentSessions(limit int) ([]SessionInfo, error) {
 }
 
 func (e *Engine) DataDir() string { return e.store.Dir() }
+
+func (e *Engine) GetSetting(key string) string       { return e.store.GetSetting(key) }
+func (e *Engine) SetSetting(key, value string) error { return e.store.SetSetting(key, value) }
 
 func normalizeHTTPURL(raw string) string {
 	raw = strings.TrimSpace(raw)

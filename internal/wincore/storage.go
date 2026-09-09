@@ -18,12 +18,13 @@ import (
 var (
 	databaseSizeLimit int64 = 100 << 20
 	retentionDays           = 30
-	maxStoreSize     int64  = 1 << 30 // 1 GB
+	maxStoreSize      int64 = 1 << 30 // 1 GB
 )
 
 type Store struct {
 	sync.Mutex
 	db         *sql.DB
+	settingsDB *sql.DB
 	dir        string
 	path       string
 	date       string
@@ -38,8 +39,20 @@ func OpenStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	s := &Store{dir: dir}
+	settingsPath := filepath.Join(dir, "commbox-settings.sqlite3")
+	settingsDB, err := sql.Open("sqlite", settingsPath)
+	if err != nil {
+		return nil, err
+	}
+	settingsDB.SetMaxOpenConns(1)
+	if _, err = settingsDB.Exec(`PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`); err != nil {
+		_ = settingsDB.Close()
+		return nil, err
+	}
+	_ = os.Chmod(settingsPath, 0o600)
+	s := &Store{dir: dir, settingsDB: settingsDB}
 	if err := s.openFileLocked(time.Now(), false); err != nil {
+		_ = settingsDB.Close()
 		return nil, err
 	}
 	s.cleanupOldFiles()
@@ -47,6 +60,29 @@ func OpenStore(dir string) (*Store, error) {
 }
 
 func (s *Store) Dir() string { return s.dir }
+
+func (s *Store) GetSetting(key string) string {
+	s.Lock()
+	defer s.Unlock()
+	if s.settingsDB == nil {
+		return ""
+	}
+	var value string
+	if err := s.settingsDB.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&value); err != nil {
+		return ""
+	}
+	return value
+}
+
+func (s *Store) SetSetting(key, value string) error {
+	s.Lock()
+	defer s.Unlock()
+	if s.settingsDB == nil {
+		return fmt.Errorf("设置数据库不可用")
+	}
+	_, err := s.settingsDB.Exec(`INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	return err
+}
 
 func (s *Store) StartSession(mode, endpoint, parameters string) error {
 	s.Lock()
@@ -123,6 +159,10 @@ func (s *Store) Close() {
 	if s.db != nil {
 		_ = s.db.Close()
 		s.db = nil
+	}
+	if s.settingsDB != nil {
+		_ = s.settingsDB.Close()
+		s.settingsDB = nil
 	}
 }
 

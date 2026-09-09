@@ -31,6 +31,8 @@ char *GoUDPSend(char *text, int hexMode, char *eol);
 void GoSetHexView(int enabled);
 char *GoDatabaseInfo(void);
 char *GoVersion(void);
+char *GoGetAISetting(char *key);
+char *GoSetAISetting(char *key, char *value);
 char *GoStats(void);
 char *GoFavoriteNames(void);
 char *GoSaveFavorite(char *name, char *value);
