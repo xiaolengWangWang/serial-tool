@@ -1169,6 +1169,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSArray *bytes = [p[@"hex"] componentsSeparatedByString:@" "];
     NSInteger printable = 0;
     for (NSString *token in bytes) {
+        if (token.length != 2) continue;
         unsigned value = (unsigned)strtoul(token.UTF8String, NULL, 16);
         if (value >= 0x20 && value <= 0x7e) printable++;
     }
@@ -1176,7 +1177,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         p[@"kind"] ?: @"", p[@"dir"] ?: @"", p[@"len"] ?: @"", (long)printable, (long)bytes.count];
     if (bytes.count > 0)
         [result appendFormat:@"，首字节 0x%@", bytes[0]];
-    if (bytes.count > 1)
+    if (bytes.count >= 4)
         [result appendFormat:@"，功能码候选 0x%@", bytes[1]];
     if (_detailView) {
         _detailView.string = [_detailView.string stringByAppendingString:result];
