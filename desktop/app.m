@@ -267,7 +267,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [dataContainer addSubview:dataScroll];
 
     NSTabViewItem *dataItem = [[[NSTabViewItem alloc] initWithIdentifier:@"data"] autorelease];
-    dataItem.label = @"数据"; dataItem.view = dataContainer;
+    dataItem.label = @"接收数据"; dataItem.view = dataContainer;
     [tabView addTabViewItem:dataItem];
 
     NSScrollView *logScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 700, 290)] autorelease];
@@ -282,50 +282,68 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 
     [view addSubview:tabView];
 
-    NSTextField *sendTitle = Label(@"发送数据", NSMakeRect(320, 242, 120, 24));
-    sendTitle.font = [NSFont boldSystemFontOfSize:14]; [view addSubview:sendTitle];
+    NSTabView *sendTabView = [[[NSTabView alloc] initWithFrame:NSMakeRect(320, 8, 700, 258)] autorelease];
+    sendTabView.autoresizingMask = NSViewWidthSizable;
+
+    NSView *sendDataContainer = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 700, 230)] autorelease];
+    sendDataContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _hexSend = [[NSButton checkboxWithTitle:@"HEX 发送" target:nil action:nil] retain];
     _hexSend.state = NSControlStateValueOn;
-    _hexSend.frame = NSMakeRect(460, 240, 100, 26); [view addSubview:_hexSend];
-    _loopSend = [[NSButton checkboxWithTitle:@"循环" target:nil action:nil] retain];
-    _loopSend.frame = NSMakeRect(570, 240, 52, 26); [view addSubview:_loopSend];
-    _loopCount = [[NSTextField alloc] initWithFrame:NSMakeRect(626, 238, 52, 28)];
-    _loopCount.placeholderString = @"0=∞"; _loopCount.stringValue = @"0";
-    [view addSubview:_loopCount];
-    [view addSubview:Label(@"行尾", NSMakeRect(688, 242, 36, 24))];
-    _eol = [Combo(NSMakeRect(726, 238, 80, 30), @[@"无",@"LF",@"CR",@"CRLF"], @"无") retain];
-    [view addSubview:_eol];
-    [view addSubview:Label(@"间隔(ms)", NSMakeRect(816, 242, 64, 24))];
-    _interval = [[NSTextField alloc] initWithFrame:NSMakeRect(882, 238, 98, 30)];
-    _interval.stringValue = @"1000"; _interval.alignment = NSTextAlignmentRight;
-    [view addSubview:_interval];
+    _hexSend.frame = NSMakeRect(0, 184, 100, 26); _hexSend.autoresizingMask = NSViewMinYMargin; [sendDataContainer addSubview:_hexSend];
+    [sendDataContainer addSubview:Label(@"行尾", NSMakeRect(110, 186, 36, 24))];
+    _eol = [Combo(NSMakeRect(148, 182, 80, 30), @[@"无",@"LF",@"CR",@"CRLF"], @"无") retain];
+    _eol.autoresizingMask = NSViewMinYMargin; [sendDataContainer addSubview:_eol];
+    NSTextField *hint = Label(@"HEX 示例：01 03 00 00 00 02", NSMakeRect(246, 186, 280, 24));
+    hint.textColor = NSColor.secondaryLabelColor; hint.autoresizingMask = NSViewMinYMargin; [sendDataContainer addSubview:hint];
 
-    [view addSubview:Label(@"历史", NSMakeRect(320, 188, 40, 24))];
-_sendHistory = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(360, 184, 140, 26) pullsDown:NO];
-_sendHistory.target = self; _sendHistory.action = @selector(sendHistorySelected:);
-[view addSubview:_sendHistory];
-[view addSubview:Label(@"收藏", NSMakeRect(508, 188, 40, 24))];
-_favorites = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(548, 184, 140, 26) pullsDown:NO];
-_favorites.target = self; _favorites.action = @selector(favoriteSelected:);
-[view addSubview:_favorites];
-NSButton *favBtn = [NSButton buttonWithTitle:@"收藏当前" target:self action:@selector(saveFavorite:)];
-favBtn.frame = NSMakeRect(696, 182, 90, 28); [view addSubview:favBtn];
-NSButton *delBtn = [NSButton buttonWithTitle:@"删除" target:self action:@selector(deleteFavorite:)];
-delBtn.frame = NSMakeRect(790, 182, 70, 28); [view addSubview:delBtn];
+    [sendDataContainer addSubview:Label(@"历史", NSMakeRect(0, 150, 40, 24))];
+    _sendHistory = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(40, 146, 140, 26) pullsDown:NO];
+    _sendHistory.target = self; _sendHistory.action = @selector(sendHistorySelected:);
+    [sendDataContainer addSubview:_sendHistory];
+    [sendDataContainer addSubview:Label(@"收藏", NSMakeRect(188, 150, 40, 24))];
+    _favorites = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(228, 146, 140, 26) pullsDown:NO];
+    _favorites.target = self; _favorites.action = @selector(favoriteSelected:);
+    [sendDataContainer addSubview:_favorites];
+    NSButton *favBtn = [NSButton buttonWithTitle:@"收藏当前" target:self action:@selector(saveFavorite:)];
+    favBtn.frame = NSMakeRect(376, 144, 90, 28); [sendDataContainer addSubview:favBtn];
+    NSButton *delBtn = [NSButton buttonWithTitle:@"删除" target:self action:@selector(deleteFavorite:)];
+    delBtn.frame = NSMakeRect(470, 144, 70, 28); [sendDataContainer addSubview:delBtn];
 
-NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(320, 44, 590, 142)] autorelease];
+    NSScrollView *sendScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 8, 590, 132)] autorelease];
     sendScroll.borderType = NSBezelBorder; sendScroll.hasVerticalScroller = YES; sendScroll.autoresizingMask = NSViewWidthSizable;
     _send = [[NSTextView alloc] initWithFrame:sendScroll.contentView.bounds];
     _send.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
-    _send.autoresizingMask = NSViewWidthSizable; sendScroll.documentView = _send; [view addSubview:sendScroll];
+    _send.autoresizingMask = NSViewWidthSizable; sendScroll.documentView = _send; [sendDataContainer addSubview:sendScroll];
     NSButton *sendButton = [NSButton buttonWithTitle:@"发送一次" target:self action:@selector(send:)];
-    sendButton.frame = NSMakeRect(925, 176, 95, 54); sendButton.autoresizingMask = NSViewMinXMargin; [view addSubview:sendButton];
+    sendButton.frame = NSMakeRect(605, 8, 95, 132); sendButton.autoresizingMask = NSViewMinXMargin; [sendDataContainer addSubview:sendButton];
+
+    NSTabViewItem *sendDataItem = [[[NSTabViewItem alloc] initWithIdentifier:@"send"] autorelease];
+    sendDataItem.label = @"发送数据"; sendDataItem.view = sendDataContainer;
+    [sendTabView addTabViewItem:sendDataItem];
+
+    NSView *timerContainer = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 700, 230)] autorelease];
+    timerContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    _loopSend = [[NSButton checkboxWithTitle:@"循环" target:nil action:nil] retain];
+    _loopSend.frame = NSMakeRect(0, 184, 52, 26); _loopSend.autoresizingMask = NSViewMinYMargin; [timerContainer addSubview:_loopSend];
+    [timerContainer addSubview:Label(@"次数(0=一直)", NSMakeRect(58, 186, 92, 24))];
+    _loopCount = [[NSTextField alloc] initWithFrame:NSMakeRect(152, 182, 60, 28)];
+    _loopCount.placeholderString = @"0=∞"; _loopCount.stringValue = @"0";
+    _loopCount.autoresizingMask = NSViewMinYMargin; [timerContainer addSubview:_loopCount];
+    [timerContainer addSubview:Label(@"间隔(ms)", NSMakeRect(230, 186, 64, 24))];
+    _interval = [[NSTextField alloc] initWithFrame:NSMakeRect(296, 182, 98, 30)];
+    _interval.stringValue = @"1000"; _interval.alignment = NSTextAlignmentRight;
+    _interval.autoresizingMask = NSViewMinYMargin; [timerContainer addSubview:_interval];
+    NSTextField *timerHint = Label(@"定时与循环发送使用“发送数据”页中的内容和格式", NSMakeRect(0, 146, 420, 24));
+    timerHint.textColor = NSColor.secondaryLabelColor; [timerContainer addSubview:timerHint];
     _loopButton = [[NSButton buttonWithTitle:@"循环发送" target:self action:@selector(toggleLoop:)] retain];
-    _loopButton.frame = NSMakeRect(925, 116, 95, 54); _loopButton.autoresizingMask = NSViewMinXMargin; [view addSubview:_loopButton];
+    _loopButton.frame = NSMakeRect(0, 82, 150, 54); [timerContainer addSubview:_loopButton];
     _timerButton = [[NSButton buttonWithTitle:@"开始定时" target:self action:@selector(toggleTimer:)] retain];
-    _timerButton.frame = NSMakeRect(925, 56, 95, 54); _timerButton.autoresizingMask = NSViewMinXMargin; [view addSubview:_timerButton];
-    NSTextField *hint = Label(@"HEX 示例：01 03 00 00 00 02", NSMakeRect(320, 24, 360, 24));
-    hint.textColor = NSColor.secondaryLabelColor; [view addSubview:hint];
+    _timerButton.frame = NSMakeRect(160, 82, 150, 54); [timerContainer addSubview:_timerButton];
+
+    NSTabViewItem *timerItem = [[[NSTabViewItem alloc] initWithIdentifier:@"timer"] autorelease];
+    timerItem.label = @"定时发送"; timerItem.view = timerContainer;
+    [sendTabView addTabViewItem:timerItem];
+    [view addSubview:sendTabView];
 
     [_window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
