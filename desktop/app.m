@@ -1272,10 +1272,21 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [rows enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
         [input appendFormat:@"%@ %@\n", _visiblePackets[idx][@"dir"] ?: @"", _visiblePackets[idx][@"hex"] ?: @""];
     }];
-    char *raw = GoAIAnalyze((char *)[_mode.titleOfSelectedItem UTF8String], (char *)input.UTF8String);
-    NSString *result = [NSString stringWithUTF8String:raw ?: "AI 分析失败"];
-    free(raw);
-    _detailView.string = [NSString stringWithFormat:@"AI 深度分析（仅本次主动调用）\n\n%@", result];
+    NSString *transport = [_mode.titleOfSelectedItem copy];
+    NSButton *button = (NSButton *)sender;
+    button.enabled = NO;
+    _detailView.string = @"AI 深度分析请求中……\n\n本地通信不会被阻塞。";
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        char *raw = GoAIAnalyze((char *)transport.UTF8String, (char *)input.UTF8String);
+        NSString *result = [[NSString alloc] initWithUTF8String:raw ?: "AI 分析失败"];
+        free(raw);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            _detailView.string = [NSString stringWithFormat:@"AI 深度分析（仅本次主动调用）\n\n%@", result];
+            button.enabled = YES;
+            [result release];
+            [transport release];
+        });
+    });
 }
 
 - (void)analyzePacket:(id)sender {
