@@ -10,6 +10,7 @@
     NSWindow *_vsWindow;
     NSWindow *_toolboxWindow;
     NSWindow *_aiSettingsWindow;
+    NSWindow *_analysisWindow;
     NSTableView *_vsTable;
     NSTableView *_dataTable;
     NSMutableArray *_packets;
@@ -25,10 +26,12 @@
     NSArray *_serialControls;
     NSButton *_refresh, *_connect, *_hexView, *_hexSend, *_timerButton, *_quickTimerButton, *_loopButton, *_loopSend;
     NSTextField *_loopCount;
-    NSTextView *_send, *_monitorLog, *_sysLog;
+    NSTextView *_send, *_monitorLog, *_sysLog, *_analysisResult;
     NSTimer *_sendTimer;
     NSPopUpButton *_timeFilter;
     NSTextField *_statsLabel, *_selectionLabel;
+    NSTextField *_analysisStats;
+    NSPopUpButton *_analysisScope;
     NSTextView *_detailView;
     NSInteger _rxCount, _txCount;
     BOOL _connected;
@@ -258,7 +261,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     invertSelection.frame = NSMakeRect(518, 50, 58, 28); invertSelection.autoresizingMask = NSViewMinXMargin; [dataContainer addSubview:invertSelection];
     NSButton *analyzeSelected = [NSButton buttonWithTitle:@"分析选中数据" target:self action:@selector(analyzeSelected:)];
     analyzeSelected.frame = NSMakeRect(544, 50, 72, 28); analyzeSelected.autoresizingMask = NSViewMinXMargin; [dataContainer addSubview:analyzeSelected];
-    NSButton *aiAnalyze = [NSButton buttonWithTitle:@"AI 分析" target:self action:@selector(aiAnalyzeSelected:)];
+    NSButton *aiAnalyze = [NSButton buttonWithTitle:@"分析中心" target:self action:@selector(openAnalysisCenter:)];
     aiAnalyze.frame = NSMakeRect(620, 50, 70, 28); aiAnalyze.autoresizingMask = NSViewMinXMargin; [dataContainer addSubview:aiAnalyze];
     _selectionLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(370, 15, 320, 24)];
     _selectionLabel.editable = NO; _selectionLabel.bordered = NO; _selectionLabel.drawsBackground = NO;
@@ -471,6 +474,74 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     }
     [self appendText:@"[AI 设置已保存到本地 SQLite；DeepSeek 仅在用户主动分析时调用]\n"];
     [_aiSettingsWindow orderOut:nil];
+}
+
+- (NSArray *)analysisPackets {
+    if ([_analysisScope.titleOfSelectedItem isEqualToString:@"选中数据"]) {
+        NSMutableArray *selected = [NSMutableArray array];
+        [_dataTable.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
+            [selected addObject:_visiblePackets[idx]];
+        }];
+        return selected;
+    }
+    return _visiblePackets;
+}
+
+- (void)updateAnalysisScope:(id)sender {
+    NSArray *packets = [self analysisPackets];
+    NSInteger rx = 0, tx = 0, bytes = 0;
+    for (NSDictionary *p in packets) {
+        if ([p[@"dir"] isEqualToString:@"RX"]) rx++; else if ([p[@"dir"] isEqualToString:@"TX"]) tx++;
+        bytes += [p[@"rawLen"] integerValue];
+    }
+    _analysisStats.stringValue = [NSString stringWithFormat:@"记录：%ld    RX：%ld    TX：%ld    数据量：%ld B    完整性：✓ 当前可见范围",
+        (long)packets.count, (long)rx, (long)tx, (long)bytes];
+}
+
+- (void)openAnalysisCenter:(id)sender {
+    if (!_analysisWindow) {
+        _analysisWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 680, 470)
+            styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
+            backing:NSBackingStoreBuffered defer:NO];
+        _analysisWindow.title = @"CommBox 分析中心";
+        _analysisWindow.contentMinSize = NSMakeSize(620, 400);
+        _analysisWindow.releasedWhenClosed = NO;
+        NSView *v = _analysisWindow.contentView;
+        [v addSubview:Label(@"分析范围", NSMakeRect(24, 425, 70, 22))];
+        _analysisScope = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(100, 421, 160, 28) pullsDown:NO];
+        [_analysisScope addItemsWithTitles:@[@"当前数据区", @"选中数据"]]; _analysisScope.target = self; _analysisScope.action = @selector(updateAnalysisScope:); [v addSubview:_analysisScope];
+        _analysisStats = [[NSTextField alloc] initWithFrame:NSMakeRect(24, 382, 630, 24)];
+        _analysisStats.editable = NO; _analysisStats.bordered = NO; _analysisStats.drawsBackground = NO; _analysisStats.textColor = NSColor.secondaryLabelColor; [v addSubview:_analysisStats];
+        NSButton *local = [NSButton buttonWithTitle:@"开始本地分析" target:self action:@selector(runLocalAnalysis:)]; local.frame = NSMakeRect(24, 340, 130, 30); [v addSubview:local];
+        NSButton *ai = [NSButton buttonWithTitle:@"AI 深度分析" target:self action:@selector(runAIAnalysis:)]; ai.frame = NSMakeRect(164, 340, 130, 30); [v addSubview:ai];
+        NSScrollView *scroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(24, 24, 630, 295)] autorelease]; scroll.borderType = NSBezelBorder; scroll.hasVerticalScroller = YES; scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        _analysisResult = [[NSTextView alloc] initWithFrame:scroll.contentView.bounds]; _analysisResult.editable = NO; _analysisResult.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular]; _analysisResult.autoresizingMask = NSViewWidthSizable; scroll.documentView = _analysisResult; [v addSubview:scroll];
+        [_analysisWindow center];
+    }
+    [self updateAnalysisScope:nil];
+    [_analysisWindow makeKeyAndOrderFront:nil];
+}
+
+- (void)runLocalAnalysis:(id)sender {
+    NSArray *packets = [self analysisPackets];
+    if (!packets.count) { _analysisResult.string = @"没有可分析的数据。"; return; }
+    NSDictionary *p = packets[0];
+    char *raw = GoAnalyzePacket((char *)[_mode.titleOfSelectedItem UTF8String], (char *)[p[@"hex"] UTF8String]);
+    _analysisResult.string = [NSString stringWithFormat:@"范围统计\n%@\n\n首条报文分析\n%@", _analysisStats.stringValue, [NSString stringWithUTF8String:raw ?: "分析失败"]];
+    free(raw);
+}
+
+- (void)runAIAnalysis:(NSButton *)sender {
+    NSArray *packets = [self analysisPackets];
+    if (!packets.count) { _analysisResult.string = @"没有可分析的数据。"; return; }
+    NSMutableString *input = [NSMutableString string];
+    for (NSDictionary *p in packets) [input appendFormat:@"%@ %@\n", p[@"dir"] ?: @"", p[@"hex"] ?: @""];
+    NSString *transport = [_mode.titleOfSelectedItem copy]; sender.enabled = NO; _analysisResult.string = @"AI 分析请求中……\n\n本地通信不会被阻塞。";
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        char *raw = GoAIAnalyze((char *)transport.UTF8String, (char *)input.UTF8String);
+        NSString *result = [[NSString alloc] initWithUTF8String:raw ?: "AI 分析失败"]; free(raw);
+        dispatch_async(dispatch_get_main_queue(), ^{ _analysisResult.string = [NSString stringWithFormat:@"%@\n\n%@", _analysisStats.stringValue, result]; sender.enabled = YES; [result release]; [transport release]; });
+    });
 }
 
 - (void)toggleHexView:(id)sender {
