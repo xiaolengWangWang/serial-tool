@@ -3,3 +3,4 @@
 /serial-tool
 .DS_Store
 /commbox
+.worktrees/
