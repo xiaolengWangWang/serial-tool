@@ -19,3 +19,14 @@ func TestAnalyzeHexPacketInvalidInput(t *testing.T) {
 		t.Fatal("invalid HEX should return an analysis error")
 	}
 }
+
+func TestAnalyzeTransportPacketTCPUDP(t *testing.T) {
+	tcp := AnalyzeTransportPacket("TCP", "45 00 00 28 00 00 00 00 40 06 00 00 7F 00 00 01 7F 00 00 01 1F 90 23 28 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00")
+	if !strings.Contains(tcp, "TCP 报文分析") || !strings.Contains(tcp, "源端口：8080") || !strings.Contains(tcp, "目的端口：9000") {
+		t.Fatalf("TCP report = %q", tcp)
+	}
+	udp := AnalyzeTransportPacket("UDP", "45 00 00 1C 00 00 00 00 40 11 00 00 7F 00 00 01 7F 00 00 01 04 D2 16 2E 00 08 00 00")
+	if !strings.Contains(udp, "UDP 报文分析") || !strings.Contains(udp, "源端口：1234") || !strings.Contains(udp, "目的端口：5678") {
+		t.Fatalf("UDP report = %q", udp)
+	}
+}
