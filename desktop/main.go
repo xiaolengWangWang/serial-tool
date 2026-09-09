@@ -146,6 +146,11 @@ func GoVersion() *C.char {
 	return C.CString(wincore.Version)
 }
 
+//export GoAnalyzePacket
+func GoAnalyzePacket(hex *C.char) *C.char {
+	return C.CString(wincore.AnalyzeHexPacket(C.GoString(hex)))
+}
+
 //export GoStats
 func GoStats() *C.char {
 	st := engine.Stats()

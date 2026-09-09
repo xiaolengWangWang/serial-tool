@@ -1166,19 +1166,9 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSInteger row = _dataTable.clickedRow;
     if (row < 0 || row >= (NSInteger)_visiblePackets.count) return;
     NSDictionary *p = _visiblePackets[row];
-    NSArray *bytes = [p[@"hex"] componentsSeparatedByString:@" "];
-    NSInteger printable = 0;
-    for (NSString *token in bytes) {
-        if (token.length != 2) continue;
-        unsigned value = (unsigned)strtoul(token.UTF8String, NULL, 16);
-        if (value >= 0x20 && value <= 0x7e) printable++;
-    }
-    NSMutableString *result = [NSMutableString stringWithFormat:@"\n本地分析：%@ %@，长度 %@，可打印字节 %ld/%ld",
-        p[@"kind"] ?: @"", p[@"dir"] ?: @"", p[@"len"] ?: @"", (long)printable, (long)bytes.count];
-    if (bytes.count > 0)
-        [result appendFormat:@"，首字节 0x%@", bytes[0]];
-    if (bytes.count >= 4)
-        [result appendFormat:@"，功能码候选 0x%@", bytes[1]];
+    char *raw = GoAnalyzePacket((char *)[p[@"hex"] UTF8String]);
+    NSString *result = [NSString stringWithFormat:@"\n%@", [NSString stringWithUTF8String:raw ?: "分析失败"]];
+    free(raw);
     if (_detailView) {
         _detailView.string = [_detailView.string stringByAppendingString:result];
         [_detailView scrollRangeToVisible:NSMakeRange(_detailView.string.length, 0)];
