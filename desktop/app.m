@@ -1166,7 +1166,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSInteger row = _dataTable.clickedRow;
     if (row < 0 || row >= (NSInteger)_visiblePackets.count) return;
     NSDictionary *p = _visiblePackets[row];
-    char *raw = GoAnalyzePacket((char *)[p[@"hex"] UTF8String]);
+    char *raw = GoAnalyzePacket((char *)[_mode.titleOfSelectedItem UTF8String], (char *)[p[@"hex"] UTF8String]);
     NSString *result = [NSString stringWithFormat:@"\n%@", [NSString stringWithUTF8String:raw ?: "分析失败"]];
     free(raw);
     if (_detailView) {

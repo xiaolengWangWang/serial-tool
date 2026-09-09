@@ -147,8 +147,8 @@ func GoVersion() *C.char {
 }
 
 //export GoAnalyzePacket
-func GoAnalyzePacket(hex *C.char) *C.char {
-	return C.CString(wincore.AnalyzeHexPacket(C.GoString(hex)))
+func GoAnalyzePacket(transport, hex *C.char) *C.char {
+	return C.CString(wincore.AnalyzeTransportPacket(C.GoString(transport), C.GoString(hex)))
 }
 
 //export GoStats

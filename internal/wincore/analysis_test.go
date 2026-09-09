@@ -14,6 +14,15 @@ func TestAnalyzeHexPacketModbusCRC(t *testing.T) {
 	}
 }
 
+func TestAnalyzeModbusTCP(t *testing.T) {
+	report := AnalyzeTransportPacket("TCP", "00 01 00 00 00 06 01 03 00 00 00 0A")
+	for _, want := range []string{"Modbus TCP", "单元号 1", "读保持寄存器", "起始地址：0，数量/值：10"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report %q does not contain %q", report, want)
+		}
+	}
+}
+
 func TestAnalyzeHexPacketInvalidInput(t *testing.T) {
 	if !strings.HasPrefix(AnalyzeHexPacket("GG"), "分析失败：") {
 		t.Fatal("invalid HEX should return an analysis error")
