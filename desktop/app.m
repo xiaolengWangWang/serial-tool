@@ -79,7 +79,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 @implementation AppDelegate
 - (void)applicationDidFinishLaunching:(NSNotification *)note {
     [self buildMenu];
-    _window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 1280, 800)
+    _window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 1280, 700)
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
         backing:NSBackingStoreBuffered defer:NO];
     char *ver = GoVersion();
