@@ -4,7 +4,7 @@
 #include <string.h>
 #include "app.h"
 
-@interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate> {
+@interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate> {
     NSWindow *_window;
     NSWindow *_monitorWindow;
     NSWindow *_vsWindow;
@@ -79,17 +79,27 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 @implementation AppDelegate
 - (void)applicationDidFinishLaunching:(NSNotification *)note {
     [self buildMenu];
-    _window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 1040, 700)
+    _window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 1280, 800)
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
         backing:NSBackingStoreBuffered defer:NO];
     char *ver = GoVersion();
     NSString *version = [NSString stringWithUTF8String:ver ?: ""];
     free(ver);
     _window.title = [NSString stringWithFormat:@"CommBox v%@", version];
-    _window.contentMinSize = NSMakeSize(1040, 700);
+    _window.contentMinSize = NSMakeSize(1100, 700);
+    _window.titleVisibility = NSWindowTitleVisible;
+    _window.titlebarAppearsTransparent = NO;
+    _window.toolbarStyle = NSWindowToolbarStyleUnifiedCompact;
+    NSToolbar *toolbar = [[[NSToolbar alloc] initWithIdentifier:@"CommBoxToolbar"] autorelease];
+    toolbar.delegate = self;
+    toolbar.displayMode = NSToolbarDisplayModeIconAndLabel;
+    toolbar.allowsUserCustomization = NO;
+    _window.toolbar = toolbar;
     _window.delegate = self;
     [_window center];
     NSView *view = _window.contentView;
+    view.wantsLayer = YES;
+    view.layer.backgroundColor = [NSColor windowBackgroundColor].CGColor;
 
     // 发送区底色（比窗口背景略深，区分数据区）
     NSView *sendBg = [[[NSView alloc] initWithFrame:NSMakeRect(310, 0, 730, 272)] autorelease];
@@ -404,6 +414,31 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSString *databaseInfo = [NSString stringWithUTF8String:database ?: ""]; free(database);
     if ([databaseInfo hasPrefix:@"错误:"]) [self alert:databaseInfo];
     else [self appendText:[NSString stringWithFormat:@"[SQLite 数据目录：%@]\n", databaseInfo]];
+}
+
+- (NSArray *)toolbarAllowedItemIdentifiers:(NSToolbar *)toolbar {
+    return @[@"new", @"clear", @"export", @"analysis", @"database", NSToolbarFlexibleSpaceItemIdentifier, NSToolbarSpaceItemIdentifier];
+}
+
+- (NSArray *)toolbarDefaultItemIdentifiers:(NSToolbar *)toolbar {
+    return @[@"new", NSToolbarSpaceItemIdentifier, @"clear", @"export", NSToolbarFlexibleSpaceItemIdentifier, @"analysis", @"database"];
+}
+
+- (NSToolbarItem *)toolbar:(NSToolbar *)toolbar itemForItemIdentifier:(NSString *)identifier willBeInsertedIntoToolbar:(BOOL)flag {
+    NSString *label = nil;
+    NSString *imageName = nil;
+    SEL action = NULL;
+    if ([identifier isEqualToString:@"new"]) { label = @"新建"; imageName = NSImageNameAddTemplate; action = @selector(newInstance:); }
+    else if ([identifier isEqualToString:@"clear"]) { label = @"清空"; imageName = NSImageNameRemoveTemplate; action = @selector(clear:); }
+    else if ([identifier isEqualToString:@"export"]) { label = @"导出"; imageName = NSImageNameShareTemplate; action = @selector(exportLog:); }
+    else if ([identifier isEqualToString:@"analysis"]) { label = @"数据分析"; imageName = NSImageNameAdvanced; action = @selector(openAnalysisCenter:); }
+    else if ([identifier isEqualToString:@"database"]) { label = @"SQLite 数据库"; imageName = NSImageNameFolder; action = @selector(revealDatabase:); }
+    else return nil;
+    NSToolbarItem *item = [[[NSToolbarItem alloc] initWithItemIdentifier:identifier] autorelease];
+    item.label = label; item.paletteLabel = label; item.toolTip = label;
+    item.image = [NSImage imageNamed:imageName];
+    item.target = self; item.action = action;
+    return item;
 }
 
 - (void)buildMenu {
