@@ -5,7 +5,7 @@
 #include "app.h"
 int RunLayoutChecks(id delegate, NSString *directory);
 
-@interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate> {
+@interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate, NSTextFieldDelegate> {
     NSWindow *_window;
     NSWindow *_monitorWindow;
     NSWindow *_vsWindow;
@@ -37,6 +37,10 @@ int RunLayoutChecks(id delegate, NSString *directory);
     NSBox *_horizontalSeparator;
     NSTabView *_dataView, *_sendView;
     NSView *_leftPane, *_centerPane, *_rightPane;
+    BOOL _analysisVisible;
+    NSStackView *_filterRow;
+    NSView *_endpointForm, *_serialForm, *_networkForm, *_addressForm, *_protocolField, *_portField;
+    BOOL _databaseBusy;
     NSInteger _rxCount, _txCount;
     BOOL _connected;
     BOOL _monitorPaused;
@@ -97,6 +101,33 @@ static void PinRow(NSView *row, NSView *parent, CGFloat top) {
     ]];
 }
 
+static NSStackView *Column(NSArray<NSView *> *views, CGFloat spacing) {
+    NSStackView *column = [NSStackView stackViewWithViews:views];
+    column.orientation = NSUserInterfaceLayoutOrientationVertical;
+    column.alignment = NSLayoutAttributeLeading;
+    column.spacing = spacing;
+    column.detachesHiddenViews = YES;
+    for (NSView *view in views) {
+        view.translatesAutoresizingMaskIntoConstraints = NO;
+        [view.widthAnchor constraintEqualToAnchor:column.widthAnchor].active = YES;
+    }
+    return column;
+}
+
+static NSStackView *Field(NSTextField *label, NSView *input) {
+    label.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+    label.textColor = NSColor.secondaryLabelColor;
+    return Column(@[label, input], 4);
+}
+
+static NSStackView *FormPair(NSView *first, NSView *second) {
+    NSStackView *row = Row(@[first, second]);
+    row.alignment = NSLayoutAttributeTop;
+    row.distribution = NSStackViewDistributionFillEqually;
+    row.spacing = 12;
+    return row;
+}
+
 static void Item(NSMenu *menu, NSString *title, SEL action, NSString *key, NSEventModifierFlags mask) {
     NSMenuItem *item = [menu addItemWithTitle:title action:action keyEquivalent:key];
     item.keyEquivalentModifierMask = mask;
@@ -117,7 +148,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSString *version = [NSString stringWithUTF8String:ver ?: ""];
     free(ver);
     _window.title = [NSString stringWithFormat:@"CommBox v%@", version];
-    _window.contentMinSize = NSMakeSize(1280, 700);
+    _window.contentMinSize = NSMakeSize(1040, 700);
     _window.titleVisibility = NSWindowTitleVisible;
     _window.titlebarAppearsTransparent = NO;
     _window.toolbarStyle = NSWindowToolbarStyleUnifiedCompact;
@@ -251,21 +282,23 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSTextField *searchLabel = Label(@"搜索", NSMakeRect(320, 616, 40, 22));
     searchLabel.autoresizingMask = NSViewMinYMargin;
     [view addSubview:searchLabel];
-    _searchField = [[NSTextField alloc] initWithFrame:NSMakeRect(360, 612, 190, 26)];
+    _searchField = [[NSSearchField alloc] initWithFrame:NSMakeRect(360, 612, 190, 26)];
+    _searchField.placeholderString = @"搜索 HEX / ASCII";
+    _searchField.delegate = self;
     _searchField.autoresizingMask = NSViewMinYMargin;
     [view addSubview:_searchField];
     _dirFilter = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(558, 610, 70, 28) pullsDown:NO];
-    [_dirFilter addItemsWithTitles:@[@"全部", @"RX", @"TX"]];
+    [_dirFilter addItemsWithTitles:@[@"全部方向", @"RX", @"TX"]];
     _dirFilter.target = self; _dirFilter.action = @selector(applyFilter);
     _dirFilter.autoresizingMask = NSViewMinYMargin;
     [view addSubview:_dirFilter];
     _typeFilter = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(634, 610, 70, 28) pullsDown:NO];
-    [_typeFilter addItemsWithTitles:@[@"全部", @"ASCII", @"HEX"]];
+    [_typeFilter addItemsWithTitles:@[@"全部类型", @"ASCII", @"HEX"]];
     _typeFilter.target = self; _typeFilter.action = @selector(applyFilter);
     _typeFilter.autoresizingMask = NSViewMinYMargin;
     [view addSubview:_typeFilter];
     _lengthFilter = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(710, 610, 70, 28) pullsDown:NO];
-    [_lengthFilter addItemsWithTitles:@[@"全部", @"1-8", @"9-64", @"65+"]];
+    [_lengthFilter addItemsWithTitles:@[@"全部长度", @"1–8 B", @"9–64 B", @"65 B 以上"]];
     _lengthFilter.target = self; _lengthFilter.action = @selector(applyFilter);
     _lengthFilter.autoresizingMask = NSViewMinYMargin;
     [view addSubview:_lengthFilter];
@@ -278,10 +311,20 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     clearFilterBtn.autoresizingMask = NSViewMinYMargin;
     [view addSubview:clearFilterBtn];
     _timeFilter = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(786, 610, 100, 28) pullsDown:NO];
-    [_timeFilter addItemsWithTitles:@[@"全部", @"1分钟", @"5分钟", @"30分钟"]];
+    [_timeFilter addItemsWithTitles:@[@"全部时间", @"近 1 分钟", @"近 5 分钟", @"近 30 分钟"]];
     _timeFilter.target = self; _timeFilter.action = @selector(applyFilter);
     _timeFilter.autoresizingMask = NSViewMinYMargin;
     [view addSubview:_timeFilter];
+    [searchLabel removeFromSuperview];
+    [filterBtn removeFromSuperview];
+    clearFilterBtn.title = @"重置";
+    _filterRow = Row(@[_searchField, _dirFilter, _typeFilter, _lengthFilter, _timeFilter, clearFilterBtn]);
+    [_searchField.widthAnchor constraintEqualToConstant:160].active = YES;
+    for (NSPopUpButton *filter in @[_dirFilter, _typeFilter, _lengthFilter, _timeFilter]) {
+        [filter.widthAnchor constraintEqualToConstant:96].active = YES;
+    }
+    _filterRow.frame = NSMakeRect(320, 610, 700, 30);
+    [view addSubview:_filterRow];
 
     NSTabView *tabView = [[NSTabView alloc] initWithFrame:NSMakeRect(320, 276, 700, 334)];
     _dataView = tabView;
@@ -336,10 +379,10 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         [detailScroll.leadingAnchor constraintEqualToAnchor:dataContainer.leadingAnchor],
         [detailScroll.trailingAnchor constraintEqualToAnchor:dataContainer.trailingAnchor],
         [detailScroll.bottomAnchor constraintEqualToAnchor:dataContainer.bottomAnchor],
-        [detailScroll.heightAnchor constraintEqualToConstant:90]
+        [detailScroll.heightAnchor constraintEqualToConstant:56]
     ]];
 
-    NSBox *detailSep = [[[NSBox alloc] initWithFrame:NSMakeRect(0, 90, 700, 1)] autorelease];
+    NSBox *detailSep = [[[NSBox alloc] initWithFrame:NSMakeRect(0, 56, 700, 1)] autorelease];
     detailSep.boxType = NSBoxSeparator; detailSep.autoresizingMask = NSViewWidthSizable;
     [dataContainer addSubview:detailSep];
 
@@ -480,7 +523,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     timerContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _loopSend = [[NSButton checkboxWithTitle:@"循环" target:nil action:nil] retain];
     _loopSend.frame = NSMakeRect(0, 166, 52, 26); _loopSend.autoresizingMask = NSViewMinYMargin; [timerContainer addSubview:_loopSend];
-    [timerContainer addSubview:Label(@"次数(0=一直)", NSMakeRect(58, 168, 92, 24))];
+    NSTextField *countLabel = Label(@"次数(0=一直)", NSMakeRect(58, 168, 92, 24));
+    [timerContainer addSubview:countLabel];
     _loopCount = [[NSTextField alloc] initWithFrame:NSMakeRect(152, 164, 60, 28)];
     _loopCount.placeholderString = @"0=∞"; _loopCount.stringValue = @"0";
     _loopCount.autoresizingMask = NSViewMinYMargin; [timerContainer addSubview:_loopCount];
@@ -490,6 +534,9 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _loopButton.frame = NSMakeRect(0, 82, 150, 54); [timerContainer addSubview:_loopButton];
     _timerButton = [[NSButton buttonWithTitle:@"开始定时" target:self action:@selector(toggleTimer:)] retain];
     _timerButton.frame = NSMakeRect(160, 82, 150, 54); [timerContainer addSubview:_timerButton];
+    PinRow(Row(@[_loopSend, countLabel, _loopCount, timerHint]), timerContainer, 4);
+    [_loopCount.widthAnchor constraintEqualToConstant:65].active = YES;
+    PinRow(Row(@[_loopButton, _timerButton]), timerContainer, 48);
 
     NSTabViewItem *timerItem = [[[NSTabViewItem alloc] initWithIdentifier:@"timer"] autorelease];
     timerItem.label = @"定时发送"; timerItem.view = timerContainer;
@@ -535,7 +582,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _analysisResult.editable = NO; _analysisResult.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
     _analysisResult.autoresizingMask = NSViewWidthSizable; analysisScroll.documentView = _analysisResult;
     [analysisView addSubview:analysisScroll];
-    NSStackView *analysisHeader = [NSStackView stackViewWithViews:@[localTitle, _analysisScope, _analysisStats, localButton, aiSep, aiTitle, _analysisAIStatus, aiButton, settingsButton]];
+    NSButton *databaseButton = [NSButton buttonWithTitle:@"分析数据库…" target:self action:@selector(openDatabaseAnalysis:)];
+    NSStackView *analysisHeader = [NSStackView stackViewWithViews:@[localTitle, _analysisScope, _analysisStats, localButton, databaseButton, aiSep, aiTitle, _analysisAIStatus, aiButton, settingsButton]];
     analysisHeader.orientation = NSUserInterfaceLayoutOrientationVertical;
     analysisHeader.alignment = NSLayoutAttributeLeading;
     analysisHeader.spacing = 10;
@@ -586,9 +634,47 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         }
         child.frame = frame;
     }
+    // A compact form keeps mode-dependent fields in one flow, without empty slots.
+    [config removeFromSuperview];
+    NSStackView *portRow = Row(@[_ports, _refresh]);
+    [_ports setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [_ports.widthAnchor constraintEqualToAnchor:portRow.widthAnchor constant:-64].active = YES;
+    [_refresh.widthAnchor constraintEqualToConstant:56].active = YES;
+    _endpointForm = Field(_endpointLabel, portRow);
+    _serialForm = Column(@[FormPair(Field(baudLabel, _baud), Field(dataLabel, _data)), FormPair(Field(parityLabel, _parity), Field(stopLabel, _stop))], 12);
+    _protocolField = Field(_protocolLabel, _bridgeProtocol);
+    _networkForm = FormPair(_protocolField, Field(_roleLabel, _role));
+    _portField = Field(_portLabel, _port);
+    _addressForm = FormPair(Field(_ipLabel, _ip), _portField);
+    NSTextField *connectionTitle = Label(@"连接配置", NSZeroRect);
+    connectionTitle.font = [NSFont systemFontOfSize:15 weight:NSFontWeightSemibold];
+    NSStackView *form = Column(@[connectionTitle, Field(modeLabel, _mode), _endpointForm, _serialForm, _networkForm, _addressForm], 16);
+    form.translatesAutoresizingMaskIntoConstraints = NO;
+    [_leftPane addSubview:form];
+    NSTextField *stateTitle = Label(@"连接状态", NSZeroRect);
+    stateTitle.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
+    _status.alignment = NSTextAlignmentLeft;
+    _status.font = [NSFont systemFontOfSize:12];
+    _status.lineBreakMode = NSLineBreakByWordWrapping;
+    _connect.bezelColor = NSColor.controlAccentColor;
+    addressHint.stringValue = @"选择通信模式，配置参数后连接";
+    addressHint.alignment = NSTextAlignmentLeft;
+    NSStackView *connectionActions = Column(@[stateTitle, _status, _connect, _history, addressHint], 10);
+    connectionActions.translatesAutoresizingMaskIntoConstraints = NO;
+    [_leftPane addSubview:connectionActions];
+    [NSLayoutConstraint activateConstraints:@[
+        [form.leadingAnchor constraintEqualToAnchor:_leftPane.leadingAnchor constant:20],
+        [form.trailingAnchor constraintEqualToAnchor:_leftPane.trailingAnchor constant:-20],
+        [form.topAnchor constraintEqualToAnchor:_leftPane.topAnchor constant:20],
+        [connectionActions.leadingAnchor constraintEqualToAnchor:form.leadingAnchor],
+        [connectionActions.trailingAnchor constraintEqualToAnchor:form.trailingAnchor],
+        [connectionActions.topAnchor constraintEqualToAnchor:form.bottomAnchor constant:24],
+        [_status.heightAnchor constraintEqualToConstant:50]
+    ]];
     _window.contentView = view;
     view.autoresizesSubviews = NO;
     [_window setContentSize:NSMakeSize(1280, 700)];
+    PinRow(_filterRow, _centerPane, 60);
     [self layoutMainPanes];
 
     if (getenv("COMMBOX_LAYOUT_CHECK_DIR")) {
@@ -617,15 +703,17 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     if (!_leftPane) return;
     CGFloat width = _window.contentView.bounds.size.width;
     CGFloat height = _window.contentView.bounds.size.height;
-    CGFloat rightX = width - 255.0;
+    if (width < 1280) _analysisVisible = NO;
+    _rightPane.hidden = !_analysisVisible;
+    CGFloat rightX = width - (_analysisVisible ? 255.0 : 0);
     CGFloat centerWidth = MAX(710.0, rightX - 315.0);
-    _leftPane.frame = NSMakeRect(0, height - 700, 310, 700);
+    _leftPane.frame = NSMakeRect(0, 0, 310, height);
     _centerPane.frame = NSMakeRect(310, 0, centerWidth, height);
     _rightPane.frame = NSMakeRect(rightX, 0, 255, height);
-    _dataView.frame = NSMakeRect(10, 276, centerWidth - 10, height - 366);
-    _sendView.frame = NSMakeRect(10, 8, centerWidth - 10, 258);
-    _sendBackground.frame = NSMakeRect(0, 0, centerWidth, 272);
-    _horizontalSeparator.frame = NSMakeRect(0, 272, centerWidth, 1);
+    _dataView.frame = NSMakeRect(10, 204, centerWidth - 10, height - 294);
+    _sendView.frame = NSMakeRect(10, 8, centerWidth - 10, 190);
+    _sendBackground.frame = NSMakeRect(0, 0, centerWidth, 200);
+    _horizontalSeparator.frame = NSMakeRect(0, 200, centerWidth, 1);
     _analysisSidebar.frame = NSMakeRect(20, 20, 215, height - 40);
 }
 
@@ -644,8 +732,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     if ([identifier isEqualToString:@"new"]) { label = @"新建"; imageName = NSImageNameAddTemplate; action = @selector(newInstance:); }
     else if ([identifier isEqualToString:@"clear"]) { label = @"清空"; imageName = NSImageNameRemoveTemplate; action = @selector(clear:); }
     else if ([identifier isEqualToString:@"export"]) { label = @"导出"; imageName = NSImageNameShareTemplate; action = @selector(exportLog:); }
-    else if ([identifier isEqualToString:@"analysis"]) { label = @"数据分析"; imageName = NSImageNameAdvanced; action = @selector(openAnalysisCenter:); }
-    else if ([identifier isEqualToString:@"database"]) { label = @"SQLite 数据库"; imageName = NSImageNameFolder; action = @selector(revealDatabase:); }
+    else if ([identifier isEqualToString:@"analysis"]) { label = @"分析中心"; imageName = NSImageNameAdvanced; action = @selector(toggleAnalysisCenter:); }
+    else if ([identifier isEqualToString:@"database"]) { label = @"数据库分析"; imageName = NSImageNameFolder; action = @selector(openDatabaseAnalysis:); }
     else return nil;
     NSToolbarItem *item = [[[NSToolbarItem alloc] initWithItemIdentifier:identifier] autorelease];
     item.label = label; item.paletteLabel = label; item.toolTip = label;
@@ -758,8 +846,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         if ([p[@"dir"] isEqualToString:@"RX"]) rx++; else if ([p[@"dir"] isEqualToString:@"TX"]) tx++;
         bytes += [p[@"rawLen"] integerValue];
     }
-    _analysisStats.stringValue = [NSString stringWithFormat:@"记录：%ld · %ld B\nRX：%ld · TX：%ld\n范围：当前可见数据",
-        (long)packets.count, (long)bytes, (long)rx, (long)tx];
+    _analysisStats.stringValue = [NSString stringWithFormat:@"记录：%ld · %ld B\nRX：%ld · TX：%ld\n范围：%@",
+        (long)packets.count, (long)bytes, (long)rx, (long)tx, _analysisScope.titleOfSelectedItem];
     char *enabled = GoGetAISetting((char *)"deepseek.enabled");
     char *key = GoGetAISetting((char *)"deepseek.api_key");
     BOOL ready = strcmp(enabled ?: "", "true") == 0 && strlen(key ?: "") > 0;
@@ -768,12 +856,94 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 }
 
 - (void)openAnalysisCenter:(id)sender {
+    _analysisVisible = YES;
+    if (_window.contentView.bounds.size.width < 1280) [_window setContentSize:NSMakeSize(1280, _window.contentView.bounds.size.height)];
+    [self layoutMainPanes];
     [self updateAnalysisScope:nil];
     [_window makeKeyAndOrderFront:nil];
     [_window makeFirstResponder:_analysisScope];
 }
 
+- (void)toggleAnalysisCenter:(id)sender {
+    if (!_analysisVisible) { [self openAnalysisCenter:sender]; return; }
+    _analysisVisible = NO;
+    [self layoutMainPanes];
+}
+
+- (NSAlert *)databaseAnalysisDialog:(NSArray *)files {
+    NSAlert *dialog = [[[NSAlert alloc] init] autorelease];
+    dialog.messageText = @"分析数据库中的通信数据";
+    dialog.informativeText = @"只读查询本地捕获文件，不上传数据。统计包含筛选范围内全部记录，详细解析最多 20 条完整报文；超过记录或 8 MiB 上限会明确提示。";
+    [dialog addButtonWithTitle:@"开始本地分析"];
+    [dialog addButtonWithTitle:@"取消"];
+    NSPopUpButton *database = [[[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO] autorelease];
+    [database addItemsWithTitles:files];
+    [database selectItemAtIndex:files.count - 1];
+    database.tag = 101;
+    NSDatePicker *start = [[[NSDatePicker alloc] initWithFrame:NSZeroRect] autorelease];
+    NSDatePicker *end = [[[NSDatePicker alloc] initWithFrame:NSZeroRect] autorelease];
+    for (NSDatePicker *picker in @[start, end]) {
+        picker.datePickerStyle = NSDatePickerStyleTextFieldAndStepper;
+        picker.datePickerElements = NSDatePickerElementFlagYearMonthDay | NSDatePickerElementFlagHourMinuteSecond;
+        picker.timeZone = NSTimeZone.localTimeZone;
+    }
+    start.dateValue = [NSDate dateWithTimeIntervalSinceNow:-86400]; start.tag = 102;
+    end.dateValue = [NSDate date]; end.tag = 103;
+    NSPopUpButton *direction = [[[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO] autorelease];
+    [direction addItemsWithTitles:@[@"全部方向", @"RX", @"TX"]]; direction.tag = 104;
+    NSPopUpButton *count = [[[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO] autorelease];
+    [count addItemsWithTitles:@[@"最近 100 条", @"最近 500 条", @"最近 2000 条"]]; count.tag = 105;
+    NSStackView *form = Column(@[
+        Field(Label(@"数据库文件", NSZeroRect), database),
+        Field(Label(@"开始时间（本地时间）", NSZeroRect), start),
+        Field(Label(@"结束时间（本地时间）", NSZeroRect), end),
+        FormPair(Field(Label(@"方向", NSZeroRect), direction), Field(Label(@"详细分析候选范围", NSZeroRect), count))
+    ], 12);
+    [form.widthAnchor constraintEqualToConstant:420].active = YES;
+    dialog.accessoryView = form;
+    return dialog;
+}
+
+- (void)openDatabaseAnalysis:(id)sender {
+    if (_databaseBusy) { [self alert:@"数据库正在本地分析，请稍候。\n查询最多等待 30 秒。"] ; return; }
+    char *raw = GoListAnalysisDatabases();
+    NSString *json = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
+    NSDictionary *result = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if (!result || [result[@"error"] length]) { [self alert:result[@"error"] ?: @"无法读取数据库列表"]; return; }
+    NSArray *files = result[@"files"];
+    if (!files.count) { [self alert:@"尚无通信数据库。请先建立连接并收发数据。"] ; return; }
+    NSAlert *dialog = [self databaseAnalysisDialog:files];
+    [dialog beginSheetModalForWindow:_window completionHandler:^(NSModalResponse response) {
+        if (response != NSAlertFirstButtonReturn) return;
+        NSView *form = dialog.accessoryView;
+        NSDatePicker *start = (NSDatePicker *)[form viewWithTag:102];
+        NSDatePicker *end = (NSDatePicker *)[form viewWithTag:103];
+        if ([start.dateValue compare:end.dateValue] == NSOrderedDescending) { [self alert:@"开始时间不能晚于结束时间"]; return; }
+        NSString *filename = [(NSPopUpButton *)[form viewWithTag:101] titleOfSelectedItem];
+        NSInteger directionIndex = [(NSPopUpButton *)[form viewWithTag:104] indexOfSelectedItem];
+        NSInteger countIndex = [(NSPopUpButton *)[form viewWithTag:105] indexOfSelectedItem];
+        NSString *direction = @[@"ALL", @"RX", @"TX"][directionIndex];
+        int limit = [@[@100, @500, @2000][countIndex] intValue];
+        NSISO8601DateFormatter *formatter = [[[NSISO8601DateFormatter alloc] init] autorelease];
+        NSString *from = [formatter stringFromDate:start.dateValue];
+        NSString *to = [formatter stringFromDate:end.dateValue];
+        _databaseBusy = YES;
+        [self openAnalysisCenter:nil];
+        _analysisResult.string = @"正在只读查询数据库并进行本地分析……\n通信与定时发送不受影响。";
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            char *report = GoAnalyzeDatabase((char *)filename.UTF8String, (char *)from.UTF8String, (char *)to.UTF8String, (char *)direction.UTF8String, limit);
+            NSString *text = [[NSString alloc] initWithUTF8String:report ?: "数据库分析失败"]; free(report);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                _databaseBusy = NO;
+                _analysisResult.string = text;
+                [text release];
+            });
+        });
+    }];
+}
+
 - (void)runLocalAnalysis:(id)sender {
+    [self updateAnalysisScope:nil];
     NSArray *packets = [self analysisPackets];
     if (!packets.count) { _analysisResult.string = @"没有可分析的数据。"; return; }
     NSMutableString *report = [NSMutableString stringWithFormat:@"范围统计\n%@\n\n详细报文分析\n", _analysisStats.stringValue];
@@ -1153,28 +1323,22 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     BOOL server = [self isServerMode];
 
     // 串口名 / URL 标签行
-    _endpointLabel.hidden = !(usesSerialName || http);
-    _endpointLabel.stringValue = http ? @"请求 URL" : @"串口";
+    _endpointLabel.hidden = !usesSerialName;
+    _endpointLabel.stringValue = @"串口设备";
     _ports.hidden = !usesSerialName; _refresh.hidden = !usesSerialName;
     for (NSView *c in _serialControls) c.hidden = !usesSerialName;
     _protocolLabel.hidden = !bridge; _bridgeProtocol.hidden = !bridge;
     _roleLabel.hidden = !usesNet; _role.hidden = !usesNet;
-    _ipLabel.hidden = !usesNet; _ip.hidden = !(usesNet || http);
-    _ipLabel.stringValue = net ? (server ? @"监听网卡" : @"服务器 IP") : @"IP 地址";
+    _ipLabel.hidden = !(usesNet || http); _ip.hidden = !(usesNet || http);
+    _ipLabel.stringValue = http ? @"请求 URL" : (net ? (server ? @"监听地址" : @"服务器 IP") : @"IP 地址");
     _portLabel.hidden = !usesNet; _port.hidden = !usesNet;
 
-    // 网络控件按模式重排位置(串口服务器在底部,其余在顶部)
-    if (bridge) {
-        _roleLabel.frame = NSMakeRect(165, 310, 100, 22); _role.frame = NSMakeRect(165, 278, 115, 30);
-        _ipLabel.frame = NSMakeRect(40, 242, 100, 22);     _ip.frame = NSMakeRect(40, 208, 150, 30);
-        _portLabel.frame = NSMakeRect(196, 242, 84, 22);   _port.frame = NSMakeRect(196, 208, 84, 30);
-    } else if (http) {
-        _ipLabel.frame = NSMakeRect(40, 548, 150, 22);     _ip.frame = NSMakeRect(40, 514, 240, 30);
-    } else { // TCP / UDP
-        _roleLabel.frame = NSMakeRect(40, 548, 100, 22);   _role.frame = NSMakeRect(40, 514, 150, 30);
-        _ipLabel.frame = NSMakeRect(40, 466, 100, 22);     _ip.frame = NSMakeRect(40, 432, 150, 30);
-        _portLabel.frame = NSMakeRect(196, 466, 84, 22);   _port.frame = NSMakeRect(196, 432, 84, 30);
-    }
+    _endpointForm.hidden = !usesSerialName;
+    _serialForm.hidden = !usesSerialName;
+    _networkForm.hidden = !usesNet;
+    _protocolField.hidden = !bridge;
+    _addressForm.hidden = !(usesNet || http);
+    _portField.hidden = !usesNet;
 
     _connect.title = bridge ? (server ? @"启动服务器" : @"连接并启动") : (server ? @"开始监听" : @"连接");
 
@@ -1502,24 +1666,29 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 }
 
 - (void)applyFilter {
+    NSHashTable *selectedPackets = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
+    [_dataTable.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
+        if (idx < _visiblePackets.count) [selectedPackets addObject:_visiblePackets[idx]];
+    }];
+    [_dataTable deselectAll:nil];
     NSString *kw = [_searchField.stringValue lowercaseString];
     NSString *dir = _dirFilter ? _dirFilter.titleOfSelectedItem : @"全部";
     NSString *type = _typeFilter ? _typeFilter.titleOfSelectedItem : @"全部";
-    NSString *length = _lengthFilter ? _lengthFilter.titleOfSelectedItem : @"全部";
-    NSString *timeRange = _timeFilter ? _timeFilter.titleOfSelectedItem : @"全部";
+    NSInteger length = _lengthFilter.indexOfSelectedItem;
+    NSInteger timeRange = _timeFilter.indexOfSelectedItem;
     NSTimeInterval since = 0;
-    if ([timeRange isEqualToString:@"1分钟"])       since = [NSDate date].timeIntervalSince1970 - 60;
-    else if ([timeRange isEqualToString:@"5分钟"])   since = [NSDate date].timeIntervalSince1970 - 300;
-    else if ([timeRange isEqualToString:@"30分钟"])  since = [NSDate date].timeIntervalSince1970 - 1800;
+    if (timeRange == 1) since = [NSDate date].timeIntervalSince1970 - 60;
+    else if (timeRange == 2) since = [NSDate date].timeIntervalSince1970 - 300;
+    else if (timeRange == 3) since = [NSDate date].timeIntervalSince1970 - 1800;
     [_visiblePackets removeAllObjects];
     for (NSDictionary *p in _packets) {
         if (since > 0 && [p[@"epoch"] doubleValue] < since) continue;
-        if (![dir isEqualToString:@"全部"] && ![p[@"dir"] isEqualToString:dir]) continue;
-        if (![type isEqualToString:@"全部"] && ![p[@"kind"] isEqualToString:type]) continue;
+        if (_dirFilter.indexOfSelectedItem > 0 && ![p[@"dir"] isEqualToString:dir]) continue;
+        if (_typeFilter.indexOfSelectedItem > 0 && ![p[@"kind"] isEqualToString:type]) continue;
         NSInteger bytes = [p[@"rawLen"] integerValue];
-        if ([length isEqualToString:@"1-8"] && (bytes < 1 || bytes > 8)) continue;
-        if ([length isEqualToString:@"9-64"] && (bytes < 9 || bytes > 64)) continue;
-        if ([length isEqualToString:@"65+"] && bytes < 65) continue;
+        if (length == 1 && (bytes < 1 || bytes > 8)) continue;
+        if (length == 2 && (bytes < 9 || bytes > 64)) continue;
+        if (length == 3 && bytes < 65) continue;
         if (kw.length) {
             if (![[p[@"hex"] lowercaseString] containsString:kw] &&
                 ![[p[@"ascii"] lowercaseString] containsString:kw]) continue;
@@ -1527,21 +1696,26 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         [_visiblePackets addObject:p];
     }
     [_dataTable reloadData];
+    NSMutableIndexSet *selection = [NSMutableIndexSet indexSet];
+    [_visiblePackets enumerateObjectsUsingBlock:^(id packet, NSUInteger idx, BOOL *stop) {
+        if ([selectedPackets containsObject:packet]) [selection addIndex:idx];
+    }];
+    [_dataTable selectRowIndexes:selection byExtendingSelection:NO];
+    [self tableViewSelectionDidChange:[NSNotification notificationWithName:@"selection" object:_dataTable]];
     if (_visiblePackets.count > 0)
         [_dataTable scrollRowToVisible:(NSInteger)_visiblePackets.count - 1];
 }
 
 - (void)clearFilter {
     _searchField.stringValue = @"";
-    if (_dirFilter) [_dirFilter selectItemWithTitle:@"全部"];
-    if (_typeFilter) [_typeFilter selectItemWithTitle:@"全部"];
-    if (_lengthFilter) [_lengthFilter selectItemWithTitle:@"全部"];
+    if (_dirFilter) [_dirFilter selectItemAtIndex:0];
+    if (_typeFilter) [_typeFilter selectItemAtIndex:0];
+    if (_lengthFilter) [_lengthFilter selectItemAtIndex:0];
     if (_timeFilter) [_timeFilter selectItemAtIndex:0];
-    [_visiblePackets removeAllObjects];
-    [_visiblePackets addObjectsFromArray:_packets];
-    [_dataTable reloadData];
-    if (_visiblePackets.count > 0)
-        [_dataTable scrollRowToVisible:(NSInteger)_visiblePackets.count - 1];
+    [self applyFilter];
+}
+- (void)controlTextDidChange:(NSNotification *)notification {
+    if (notification.object == _searchField) [self applyFilter];
 }
 - (void)updatePacketStats {
     if (!_statsLabel) return;
@@ -1595,20 +1769,10 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 }
 
 - (void)analyzeSelected:(id)sender {
-    NSIndexSet *rows = _dataTable.selectedRowIndexes;
-    if (!rows.count) { [self alert:@"请先选择报文"]; return; }
-    NSUInteger first = rows.firstIndex;
-    NSDictionary *p = _visiblePackets[first];
-    char *raw = GoAnalyzePacket((char *)[_mode.titleOfSelectedItem UTF8String], (char *)[p[@"hex"] UTF8String]);
-    __block NSInteger rx = 0, tx = 0, bytes = 0;
-    [rows enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
-        NSDictionary *item = _visiblePackets[idx];
-        if ([item[@"dir"] isEqualToString:@"RX"]) rx++; else if ([item[@"dir"] isEqualToString:@"TX"]) tx++;
-        bytes += [item[@"rawLen"] integerValue];
-    }];
-    _detailView.string = [NSString stringWithFormat:@"选中数据分析\n记录：%ld 条\nRX：%ld  TX：%ld\n数据量：%ld B\n\n首条报文：\n%@",
-        (long)rows.count, (long)rx, (long)tx, (long)bytes, [NSString stringWithUTF8String:raw ?: "分析失败"]];
-    free(raw);
+    if (!_dataTable.selectedRowIndexes.count) { [self alert:@"请先选择报文"]; return; }
+    [_analysisScope selectItemWithTitle:@"选中数据"];
+    [self openAnalysisCenter:nil];
+    [self runLocalAnalysis:nil];
 }
 
 - (void)aiAnalyzeSelected:(id)sender {

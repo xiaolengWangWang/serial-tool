@@ -431,6 +431,11 @@ func (e *Engine) Connect(cfg Config) error {
 		}
 	}
 
+	// Snapshot initial readers before publishing the mutable client map.
+	var initialClients []net.Conn
+	for client := range clients {
+		initialClients = append(initialClients, client)
+	}
 	e.Lock()
 	e.port, e.listener, e.clients = p, listener, clients
 	e.udp, e.udpPeer, e.udpDialed = udp, peer, udpDialed
@@ -454,20 +459,20 @@ func (e *Engine) Connect(cfg Config) error {
 	if err := e.store.StartSession(string(cfg.Mode), endpoint, parameters); err != nil {
 		e.emitLog("SQLite 会话写入失败: " + err.Error())
 	}
+	atomic.StoreInt64(&e.startedAt, time.Now().UnixNano())
+	atomic.StoreInt32(&e.state, int32(StateConnected))
 	if p != nil {
 		go e.readSerial(p)
 	}
 	if listener != nil {
 		go e.acceptLoop(listener)
 	}
-	for client := range clients {
+	for _, client := range initialClients {
 		go e.readTCP(client)
 	}
 	if udp != nil {
 		go e.readUDP(udp)
 	}
-	atomic.StoreInt64(&e.startedAt, time.Now().UnixNano())
-	atomic.StoreInt32(&e.state, int32(StateConnected))
 	e.emitLog(fmt.Sprintf("已启动 %s %s", cfg.Mode, endpoint))
 	return nil
 }
@@ -624,13 +629,14 @@ func (e *Engine) readTCP(client net.Conn) {
 		_, active := e.clients[client]
 		delete(e.clients, client)
 		mode := e.mode
+		reconnect := e.reconnectAddr != ""
 		e.Unlock()
 		if active {
 			msg := "TCP 客户端已断开: " + client.RemoteAddr().String()
 			e.emitLog(msg)
 			e.recordEvent(msg)
 			if mode == ModeTCPClient {
-				if e.reconnectAddr != "" {
+				if reconnect {
 					// 被动断开,自动重连(指数退避);UI 通过状态栏观察状态
 					atomic.StoreInt32(&e.state, int32(StateReconnecting))
 					e.emitLog("TCP 连接断开,自动重连中...")

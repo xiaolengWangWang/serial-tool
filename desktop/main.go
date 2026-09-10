@@ -147,6 +147,38 @@ func GoDatabaseInfo() *C.char {
 	return C.CString(engine.DataDir())
 }
 
+//export GoListAnalysisDatabases
+func GoListAnalysisDatabases() *C.char {
+	result := struct {
+		Files []string `json:"files"`
+		Error string   `json:"error"`
+	}{Files: []string{}}
+	if engine == nil {
+		result.Error = "数据库引擎尚未初始化"
+	} else {
+		files, err := wincore.ListAnalysisDatabases(engine.DataDir())
+		if err != nil {
+			result.Error = err.Error()
+		} else {
+			result.Files = files
+		}
+	}
+	data, _ := json.Marshal(result)
+	return C.CString(string(data))
+}
+
+//export GoAnalyzeDatabase
+func GoAnalyzeDatabase(filename, start, end, direction *C.char, limit C.int) *C.char {
+	if engine == nil {
+		return C.CString("错误:数据库引擎尚未初始化")
+	}
+	report, err := wincore.AnalyzeDatabase(engine.DataDir(), C.GoString(filename), C.GoString(start), C.GoString(end), C.GoString(direction), int(limit))
+	if err != nil {
+		return C.CString("错误:" + err.Error())
+	}
+	return C.CString(report)
+}
+
 //export GoVersion
 func GoVersion() *C.char {
 	return C.CString(wincore.Version)

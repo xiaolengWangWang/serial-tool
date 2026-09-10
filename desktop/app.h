@@ -30,6 +30,9 @@ char *GoNetworkSend(char *text, int hexMode, char *eol);
 char *GoUDPSend(char *text, int hexMode, char *eol);
 void GoSetHexView(int enabled);
 char *GoDatabaseInfo(void);
+// Caller frees returned strings. Run database analysis on a background UI queue.
+char *GoListAnalysisDatabases(void);
+char *GoAnalyzeDatabase(char *filename, char *start, char *end, char *direction, int limit);
 char *GoVersion(void);
 char *GoGetAISetting(char *key);
 char *GoSetAISetting(char *key, char *value);
