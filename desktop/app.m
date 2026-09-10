@@ -464,10 +464,15 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 - (void)aiEnabledChanged:(NSButton *)sender { _aiEnabled = sender.state == NSControlStateValueOn; }
 
 - (void)saveAISettings:(id)sender {
+    NSString *baseURL = [_aiBaseURL.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *model = [_aiModel.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSURL *url = [NSURL URLWithString:baseURL];
+    if (!url || !url.host.length || !([url.scheme.lowercaseString isEqualToString:@"http"] || [url.scheme.lowercaseString isEqualToString:@"https"])) { [self alert:@"API Base URL 无效，请使用 http:// 或 https:// 地址"]; return; }
+    if (!model.length) { [self alert:@"模型不能为空"]; return; }
     char *error = GoSetAISetting((char *)"deepseek.enabled", (char *)(_aiEnabled ? "true" : "false"));
     if (strlen(error ?: "") > 0) { NSString *message = [NSString stringWithUTF8String:error]; free(error); [self alert:message]; return; } free(error);
-    error = GoSetAISetting((char *)"deepseek.base_url", (char *)_aiBaseURL.stringValue.UTF8String); free(error);
-    error = GoSetAISetting((char *)"deepseek.model", (char *)_aiModel.stringValue.UTF8String); free(error);
+    error = GoSetAISetting((char *)"deepseek.base_url", (char *)baseURL.UTF8String); free(error);
+    error = GoSetAISetting((char *)"deepseek.model", (char *)model.UTF8String); free(error);
     if (_aiKey.stringValue.length) {
         error = GoSetAISetting((char *)"deepseek.api_key", (char *)_aiKey.stringValue.UTF8String); free(error);
         _aiKey.stringValue = @"";

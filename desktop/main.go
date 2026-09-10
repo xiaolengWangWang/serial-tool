@@ -12,7 +12,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -181,6 +183,10 @@ func GoAIAnalyze(transport, hex *C.char) *C.char {
 	if base == "" {
 		base = "https://api.deepseek.com"
 	}
+	parsed, err := neturl.Parse(base)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return C.CString("AI Base URL 无效，请使用 http:// 或 https:// 地址")
+	}
 	if !strings.HasSuffix(base, "/chat/completions") {
 		base += "/chat/completions"
 	}
@@ -213,11 +219,15 @@ func GoAIAnalyze(transport, hex *C.char) *C.char {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if err = json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result); err != nil {
 		return C.CString("AI 响应解析失败")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return C.CString("AI 请求失败：" + result.Error.Message)
+		message := result.Error.Message
+		if message == "" {
+			message = resp.Status
+		}
+		return C.CString("AI 请求失败：" + message)
 	}
 	if len(result.Choices) == 0 || result.Choices[0].Message.Content == "" {
 		return C.CString("AI 未返回分析结果")
