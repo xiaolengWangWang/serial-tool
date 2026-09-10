@@ -1,7 +1,9 @@
 package wincore
 
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -53,7 +55,29 @@ func AnalyzeTransportPacket(transport, input string) string {
 	if !isIPTransport {
 		appendModbusReport(&out, transport, data)
 	}
+	appendDataTypeReport(&out, data)
 	return strings.TrimRight(out.String(), "\n")
+}
+
+func appendDataTypeReport(out *strings.Builder, data []byte) {
+	if len(data) >= 2 {
+		fmt.Fprintf(out, "数据类型候选：UInt16 BE=%d，LE=%d\n", binary.BigEndian.Uint16(data[:2]), binary.LittleEndian.Uint16(data[:2]))
+	}
+	if len(data) < 4 {
+		return
+	}
+	orders := map[string][]byte{
+		"ABCD": data[:4], "BADC": {data[1], data[0], data[3], data[2]},
+		"CDAB": {data[2], data[3], data[0], data[1]}, "DCBA": {data[3], data[2], data[1], data[0]},
+	}
+	fmt.Fprintf(out, "UInt32/Float32 候选：\n")
+	for name, b := range orders {
+		bits := binary.BigEndian.Uint32(b)
+		value := math.Float32frombits(bits)
+		if !math.IsNaN(float64(value)) && !math.IsInf(float64(value), 0) {
+			fmt.Fprintf(out, "  %s：UInt32=%d，Float32=%g\n", name, bits, value)
+		}
+	}
 }
 
 func appendModbusReport(out *strings.Builder, transport string, data []byte) {

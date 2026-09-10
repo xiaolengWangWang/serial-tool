@@ -23,6 +23,15 @@ func TestAnalyzeModbusTCP(t *testing.T) {
 	}
 }
 
+func TestAnalyzeDataTypes(t *testing.T) {
+	report := AnalyzeHexPacket("43 48 00 00")
+	for _, want := range []string{"UInt16 BE=17224", "UInt32/Float32 候选", "ABCD：UInt32=1128792064", "Float32=200"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report %q does not contain %q", report, want)
+		}
+	}
+}
+
 func TestAnalyzeHexPacketInvalidInput(t *testing.T) {
 	if !strings.HasPrefix(AnalyzeHexPacket("GG"), "分析失败：") {
 		t.Fatal("invalid HEX should return an analysis error")
