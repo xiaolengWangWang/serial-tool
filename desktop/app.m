@@ -30,7 +30,7 @@
     NSTimer *_sendTimer;
     NSPopUpButton *_timeFilter;
     NSTextField *_statsLabel, *_selectionLabel;
-    NSTextField *_analysisStats;
+    NSTextField *_analysisStats, *_analysisAIStatus;
     NSPopUpButton *_analysisScope;
     NSTextView *_detailView;
     NSInteger _rxCount, _txCount;
@@ -496,6 +496,11 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     }
     _analysisStats.stringValue = [NSString stringWithFormat:@"记录：%ld    RX：%ld    TX：%ld    数据量：%ld B    完整性：✓ 当前可见范围",
         (long)packets.count, (long)rx, (long)tx, (long)bytes];
+    char *enabled = GoGetAISetting((char *)"deepseek.enabled");
+    char *key = GoGetAISetting((char *)"deepseek.api_key");
+    BOOL ready = strcmp(enabled ?: "", "true") == 0 && strlen(key ?: "") > 0;
+    _analysisAIStatus.stringValue = ready ? @"AI 状态：可用（点击后仍需确认发送范围）" : (strcmp(enabled ?: "", "true") == 0 ? @"AI 状态：Key 未配置" : @"AI 状态：未启用，本地分析可用");
+    free(enabled); free(key);
 }
 
 - (void)openAnalysisCenter:(id)sender {
@@ -512,8 +517,9 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         [_analysisScope addItemsWithTitles:@[@"当前数据区", @"选中数据"]]; _analysisScope.target = self; _analysisScope.action = @selector(updateAnalysisScope:); [v addSubview:_analysisScope];
         _analysisStats = [[NSTextField alloc] initWithFrame:NSMakeRect(24, 382, 630, 24)];
         _analysisStats.editable = NO; _analysisStats.bordered = NO; _analysisStats.drawsBackground = NO; _analysisStats.textColor = NSColor.secondaryLabelColor; [v addSubview:_analysisStats];
-        NSButton *local = [NSButton buttonWithTitle:@"开始本地分析" target:self action:@selector(runLocalAnalysis:)]; local.frame = NSMakeRect(24, 340, 130, 30); [v addSubview:local];
-        NSButton *ai = [NSButton buttonWithTitle:@"AI 深度分析" target:self action:@selector(runAIAnalysis:)]; ai.frame = NSMakeRect(164, 340, 130, 30); [v addSubview:ai];
+        _analysisAIStatus = [[NSTextField alloc] initWithFrame:NSMakeRect(24, 356, 630, 22)]; _analysisAIStatus.editable = NO; _analysisAIStatus.bordered = NO; _analysisAIStatus.drawsBackground = NO; [v addSubview:_analysisAIStatus];
+        NSButton *local = [NSButton buttonWithTitle:@"开始本地分析" target:self action:@selector(runLocalAnalysis:)]; local.frame = NSMakeRect(24, 320, 130, 30); [v addSubview:local];
+        NSButton *ai = [NSButton buttonWithTitle:@"AI 深度分析" target:self action:@selector(runAIAnalysis:)]; ai.frame = NSMakeRect(164, 320, 130, 30); [v addSubview:ai];
         NSScrollView *scroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(24, 24, 630, 295)] autorelease]; scroll.borderType = NSBezelBorder; scroll.hasVerticalScroller = YES; scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         _analysisResult = [[NSTextView alloc] initWithFrame:scroll.contentView.bounds]; _analysisResult.editable = NO; _analysisResult.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular]; _analysisResult.autoresizingMask = NSViewWidthSizable; scroll.documentView = _analysisResult; [v addSubview:scroll];
         [_analysisWindow center];
@@ -536,6 +542,17 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     if (!packets.count) { _analysisResult.string = @"没有可分析的数据。"; return; }
     NSMutableString *input = [NSMutableString string];
     for (NSDictionary *p in packets) [input appendFormat:@"%@ %@\n", p[@"dir"] ?: @"", p[@"hex"] ?: @""];
+    char *enabled = GoGetAISetting((char *)"deepseek.enabled");
+    char *key = GoGetAISetting((char *)"deepseek.api_key");
+    BOOL ready = strcmp(enabled ?: "", "true") == 0 && strlen(key ?: "") > 0;
+    free(enabled); free(key);
+    if (!ready) { [self alert:@"AI 未启用或 Key 未配置，请先打开“操作 → AI 增强分析设置”"]; return; }
+    NSString *preview = [input substringToIndex:MIN((NSUInteger)600, input.length)];
+    NSAlert *confirm = [[[NSAlert alloc] init] autorelease];
+    confirm.messageText = @"确认发送到 DeepSeek？";
+    confirm.informativeText = [NSString stringWithFormat:@"将发送当前范围的 %ld 条报文，预览（最多 600 字符）：\n%@\n\n不会发送 IP、设备名或主机名。", (long)packets.count, preview];
+    [confirm addButtonWithTitle:@"确认并发送"]; [confirm addButtonWithTitle:@"取消"];
+    if ([confirm runModal] != NSAlertFirstButtonReturn) return;
     NSString *transport = [_mode.titleOfSelectedItem copy]; sender.enabled = NO; _analysisResult.string = @"AI 分析请求中……\n\n本地通信不会被阻塞。";
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         char *raw = GoAIAnalyze((char *)transport.UTF8String, (char *)input.UTF8String);
