@@ -33,6 +33,10 @@
     NSTextField *_analysisStats, *_analysisAIStatus;
     NSPopUpButton *_analysisScope;
     NSTextView *_detailView;
+    NSView *_sendBackground, *_analysisSidebar;
+    NSBox *_horizontalSeparator;
+    NSTabView *_dataView, *_sendView;
+    NSView *_leftPane, *_centerPane, *_rightPane;
     NSInteger _rxCount, _txCount;
     BOOL _connected;
     BOOL _monitorPaused;
@@ -86,7 +90,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSString *version = [NSString stringWithUTF8String:ver ?: ""];
     free(ver);
     _window.title = [NSString stringWithFormat:@"CommBox v%@", version];
-    _window.contentMinSize = NSMakeSize(1100, 700);
+    _window.contentMinSize = NSMakeSize(1280, 700);
     _window.titleVisibility = NSWindowTitleVisible;
     _window.titlebarAppearsTransparent = NO;
     _window.toolbarStyle = NSWindowToolbarStyleUnifiedCompact;
@@ -103,6 +107,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 
     // 发送区底色（比窗口背景略深，区分数据区）
     NSView *sendBg = [[[NSView alloc] initWithFrame:NSMakeRect(310, 0, 710, 272)] autorelease];
+    _sendBackground = sendBg;
     sendBg.wantsLayer = YES;
     sendBg.layer.backgroundColor = [[NSColor colorWithWhite:0.94 alpha:1.0] CGColor];
     sendBg.autoresizingMask = NSViewMinXMargin;
@@ -113,6 +118,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [view addSubview:vSep];
     // 横分隔线：数据区 | 发送区
     NSBox *hSep = [[[NSBox alloc] initWithFrame:NSMakeRect(310, 272, 710, 1)] autorelease];
+    _horizontalSeparator = hSep;
     hSep.boxType = NSBoxSeparator; hSep.autoresizingMask = NSViewMinXMargin;
     [view addSubview:hSep];
 
@@ -249,7 +255,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [view addSubview:_timeFilter];
 
     NSTabView *tabView = [[NSTabView alloc] initWithFrame:NSMakeRect(320, 276, 700, 334)];
-    tabView.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
+    _dataView = tabView;
+    tabView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 
     // 数据 Tab — NSTableView 结构化报文表格
     _packets = [[NSMutableArray alloc] init];
@@ -339,7 +346,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [view addSubview:tabView];
 
     NSTabView *sendTabView = [[[NSTabView alloc] initWithFrame:NSMakeRect(320, 8, 700, 258)] autorelease];
-    sendTabView.autoresizingMask = NSViewMinXMargin;
+    _sendView = sendTabView;
+    sendTabView.autoresizingMask = NSViewWidthSizable;
 
     NSView *sendDataContainer = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 700, 212)] autorelease];
     sendDataContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
@@ -404,6 +412,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [view addSubview:sendTabView];
 
     NSBox *analysisSidebar = [[[NSBox alloc] initWithFrame:NSMakeRect(1045, 20, 215, 680)] autorelease];
+    _analysisSidebar = analysisSidebar;
     analysisSidebar.title = @"分析中心";
     analysisSidebar.boxType = NSBoxPrimary;
     analysisSidebar.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
@@ -443,6 +452,34 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [analysisView addSubview:analysisScroll];
     [self updateAnalysisScope:nil];
 
+    _leftPane = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 310, view.bounds.size.height)] autorelease];
+    _centerPane = [[[NSView alloc] initWithFrame:NSMakeRect(310, 0, 710, view.bounds.size.height)] autorelease];
+    _rightPane = [[[NSView alloc] initWithFrame:NSMakeRect(1025, 0, 255, view.bounds.size.height)] autorelease];
+    _leftPane.autoresizingMask = NSViewHeightSizable;
+    _centerPane.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    _rightPane.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
+    for (NSView *pane in @[_leftPane, _centerPane, _rightPane]) {
+        pane.wantsLayer = YES;
+        pane.layer.backgroundColor = [NSColor windowBackgroundColor].CGColor;
+    }
+    _leftPane.layer.backgroundColor = [NSColor controlBackgroundColor].CGColor;
+    _rightPane.layer.backgroundColor = [NSColor controlBackgroundColor].CGColor;
+    [view addSubview:_leftPane]; [view addSubview:_centerPane]; [view addSubview:_rightPane];
+    NSArray *legacyViews = [[view.subviews copy] autorelease];
+    for (NSView *child in legacyViews) {
+        if (child == _leftPane || child == _centerPane || child == _rightPane) continue;
+        NSRect frame = child.frame;
+        if (child == _analysisSidebar) {
+            frame.origin.x -= 1025.0; [_rightPane addSubview:child];
+        } else if (frame.origin.x < 310.0) {
+            [_leftPane addSubview:child];
+        } else {
+            frame.origin.x -= 310.0; [_centerPane addSubview:child];
+        }
+        child.frame = frame;
+    }
+    [self layoutMainPanes];
+
     [_window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
     [self modeChanged:nil];
@@ -454,6 +491,26 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSString *databaseInfo = [NSString stringWithUTF8String:database ?: ""]; free(database);
     if ([databaseInfo hasPrefix:@"错误:"]) [self alert:databaseInfo];
     else [self appendText:[NSString stringWithFormat:@"[SQLite 数据目录：%@]\n", databaseInfo]];
+}
+
+- (void)windowDidResize:(NSNotification *)notification {
+    if ([notification object] != _window) return;
+    [self layoutMainPanes];
+}
+
+- (void)layoutMainPanes {
+    CGFloat width = _window.contentView.bounds.size.width;
+    CGFloat height = _window.contentView.bounds.size.height;
+    CGFloat rightX = width - 255.0;
+    CGFloat centerWidth = MAX(710.0, rightX - 315.0);
+    _leftPane.frame = NSMakeRect(0, 0, 310, height);
+    _centerPane.frame = NSMakeRect(310, 0, centerWidth, height);
+    _rightPane.frame = NSMakeRect(rightX, 0, 255, height);
+    _dataView.frame = NSMakeRect(10, 276, centerWidth - 10, height - 366);
+    _sendView.frame = NSMakeRect(10, 8, centerWidth - 10, 258);
+    _sendBackground.frame = NSMakeRect(0, 0, centerWidth, 272);
+    _horizontalSeparator.frame = NSMakeRect(0, 272, centerWidth, 1);
+    _analysisSidebar.frame = NSMakeRect(20, 20, 215, height - 40);
 }
 
 - (NSArray *)toolbarAllowedItemIdentifiers:(NSToolbar *)toolbar {
