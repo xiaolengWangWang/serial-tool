@@ -169,6 +169,11 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSTextField *addressHint = Label(@"服务端绑定本机地址，客户端填写远程地址", NSMakeRect(40, 34, 240, 22));
     addressHint.font = [NSFont systemFontOfSize:11]; addressHint.textColor = NSColor.tertiaryLabelColor;
     addressHint.alignment = NSTextAlignmentCenter; [view addSubview:addressHint];
+    for (NSView *control in @[modeLabel, _mode, _endpointLabel, _ports, _refresh, baudLabel, dataLabel, _baud, _data,
+                              parityLabel, stopLabel, _parity, _stop, _protocolLabel, _bridgeProtocol, _roleLabel, _role,
+                              _ipLabel, _ip, _portLabel, _port, _status, _connect, _history, addressHint]) {
+        control.autoresizingMask = NSViewMinYMargin | NSViewMaxXMargin;
+    }
 
     NSTextField *receiveTitle = Label(@"接收数据", NSMakeRect(320, 655, 120, 24));
     receiveTitle.font = [NSFont boldSystemFontOfSize:14];
