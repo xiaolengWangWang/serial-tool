@@ -297,6 +297,12 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     tc3.title = @"ASCII"; tc3.width = 180; [_dataTable addTableColumn:tc3];
     NSTableColumn *tc4 = [[[NSTableColumn alloc] initWithIdentifier:@"len"] autorelease];
     tc4.title = @"长度"; tc4.width = 65; [_dataTable addTableColumn:tc4];
+    NSTableColumn *tc5 = [[[NSTableColumn alloc] initWithIdentifier:@"protocol"] autorelease];
+    tc5.title = @"协议"; tc5.width = 90; [_dataTable addTableColumn:tc5];
+    NSTableColumn *tc6 = [[[NSTableColumn alloc] initWithIdentifier:@"status"] autorelease];
+    tc6.title = @"状态"; tc6.width = 65; [_dataTable addTableColumn:tc6];
+    NSTableColumn *tc7 = [[[NSTableColumn alloc] initWithIdentifier:@"response"] autorelease];
+    tc7.title = @"响应时间"; tc7.width = 80; [_dataTable addTableColumn:tc7];
     dataScroll.documentView = _dataTable;
     NSMenu *tableMenu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
     [tableMenu addItemWithTitle:@"复制 HEX" action:@selector(copyPacketHex:) keyEquivalent:@""];
@@ -1159,9 +1165,10 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSInteger row = _dataTable.selectedRow;
     if (row < 0 || row >= (NSInteger)_visiblePackets.count) { _detailView.string = @""; return; }
     NSDictionary *p = _visiblePackets[row];
-    NSString *detail = [NSString stringWithFormat:@"[%@] %@  %@  %@\nHEX:   %@\nASCII: %@",
+    NSString *detail = [NSString stringWithFormat:@"[%@] %@  %@  %@\n协议：%@  状态：%@  响应：%@\nHEX:   %@\nASCII: %@",
         p[@"ts"] ?: @"", p[@"dir"] ?: @"", p[@"len"] ?: @"",
-        p[@"kind"] ?: @"", p[@"hex"] ?: @"", p[@"ascii"] ?: @""];
+        p[@"kind"] ?: @"", p[@"protocol"] ?: @"", p[@"status"] ?: @"正常", p[@"response"] ?: @"-",
+        p[@"hex"] ?: @"", p[@"ascii"] ?: @""];
     _detailView.string = detail;
 }
 
@@ -1317,9 +1324,15 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 }
 
 - (void)addPacketWithTS:(NSString *)ts dir:(NSString *)dir hex:(NSString *)hex ascii:(NSString *)ascii kind:(NSString *)kind len:(NSInteger)len {
+    NSString *protocol = _mode.titleOfSelectedItem ?: @"未知";
+    NSString *status = @"正常";
+    if ([protocol isEqualToString:@"串口"] || [protocol isEqualToString:@"串口服务器"]) {
+        NSArray *tokens = [hex componentsSeparatedByString:@" "];
+        if (tokens.count > 1 && (strtoul([tokens[1] UTF8String], NULL, 16) & 0x80)) status = @"异常";
+    }
     NSDictionary *p = @{
         @"ts": ts, @"dir": dir, @"hex": hex, @"ascii": ascii,
-        @"kind": kind, @"rawLen": @(len),
+        @"kind": kind, @"protocol": protocol, @"status": status, @"response": @"-", @"rawLen": @(len),
         @"len": [NSString stringWithFormat:@"%ld B", (long)len],
         @"epoch": @([NSDate date].timeIntervalSince1970)
     };
