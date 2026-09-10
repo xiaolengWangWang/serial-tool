@@ -102,18 +102,18 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     view.layer.backgroundColor = [NSColor windowBackgroundColor].CGColor;
 
     // 发送区底色（比窗口背景略深，区分数据区）
-    NSView *sendBg = [[[NSView alloc] initWithFrame:NSMakeRect(310, 0, 730, 272)] autorelease];
+    NSView *sendBg = [[[NSView alloc] initWithFrame:NSMakeRect(310, 0, 710, 272)] autorelease];
     sendBg.wantsLayer = YES;
     sendBg.layer.backgroundColor = [[NSColor colorWithWhite:0.94 alpha:1.0] CGColor];
-    sendBg.autoresizingMask = NSViewWidthSizable;
+    sendBg.autoresizingMask = NSViewMinXMargin;
     [view addSubview:sendBg];
     // 竖分隔线：左面板 | 右内容
     NSBox *vSep = [[[NSBox alloc] initWithFrame:NSMakeRect(309, 0, 2, 700)] autorelease];
     vSep.boxType = NSBoxSeparator; vSep.autoresizingMask = NSViewHeightSizable;
     [view addSubview:vSep];
     // 横分隔线：数据区 | 发送区
-    NSBox *hSep = [[[NSBox alloc] initWithFrame:NSMakeRect(310, 272, 730, 1)] autorelease];
-    hSep.boxType = NSBoxSeparator; hSep.autoresizingMask = NSViewWidthSizable;
+    NSBox *hSep = [[[NSBox alloc] initWithFrame:NSMakeRect(310, 272, 710, 1)] autorelease];
+    hSep.boxType = NSBoxSeparator; hSep.autoresizingMask = NSViewMinXMargin;
     [view addSubview:hSep];
 
     NSBox *config = [[[NSBox alloc] initWithFrame:NSMakeRect(20, 20, 280, 660)] autorelease];
@@ -249,7 +249,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [view addSubview:_timeFilter];
 
     NSTabView *tabView = [[NSTabView alloc] initWithFrame:NSMakeRect(320, 276, 700, 334)];
-    tabView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    tabView.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
 
     // 数据 Tab — NSTableView 结构化报文表格
     _packets = [[NSMutableArray alloc] init];
@@ -339,7 +339,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [view addSubview:tabView];
 
     NSTabView *sendTabView = [[[NSTabView alloc] initWithFrame:NSMakeRect(320, 8, 700, 258)] autorelease];
-    sendTabView.autoresizingMask = NSViewWidthSizable;
+    sendTabView.autoresizingMask = NSViewMinXMargin;
 
     NSView *sendDataContainer = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 700, 212)] autorelease];
     sendDataContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
@@ -402,6 +402,34 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     timerItem.label = @"定时发送"; timerItem.view = timerContainer;
     [sendTabView addTabViewItem:timerItem];
     [view addSubview:sendTabView];
+
+    NSBox *analysisSidebar = [[[NSBox alloc] initWithFrame:NSMakeRect(1045, 20, 215, 680)] autorelease];
+    analysisSidebar.title = @"分析中心";
+    analysisSidebar.boxType = NSBoxPrimary;
+    analysisSidebar.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
+    [view addSubview:analysisSidebar];
+    NSView *analysisView = analysisSidebar.contentView;
+    NSTextField *localTitle = Label(@"本地分析", NSMakeRect(16, 610, 180, 24));
+    localTitle.font = [NSFont boldSystemFontOfSize:14]; [analysisView addSubview:localTitle];
+    NSTextField *localHint = Label(@"协议解析、Modbus、CRC、\n请求响应和数据类型分析", NSMakeRect(16, 555, 180, 48));
+    localHint.font = [NSFont systemFontOfSize:12]; localHint.textColor = NSColor.secondaryLabelColor;
+    localHint.usesSingleLineMode = NO; [analysisView addSubview:localHint];
+    NSButton *localButton = [NSButton buttonWithTitle:@"打开本地分析" target:self action:@selector(openAnalysisCenter:)];
+    localButton.frame = NSMakeRect(16, 515, 180, 32); localButton.bezelStyle = NSBezelStyleRounded; [analysisView addSubview:localButton];
+    NSBox *aiSep = [[[NSBox alloc] initWithFrame:NSMakeRect(16, 480, 180, 1)] autorelease];
+    aiSep.boxType = NSBoxSeparator; [analysisView addSubview:aiSep];
+    NSTextField *aiTitle = Label(@"AI 增强分析", NSMakeRect(16, 438, 180, 24));
+    aiTitle.font = [NSFont boldSystemFontOfSize:14]; [analysisView addSubview:aiTitle];
+    NSTextField *aiHint = Label(@"DeepSeek 默认关闭\n不会自动上传通信数据", NSMakeRect(16, 385, 180, 40));
+    aiHint.font = [NSFont systemFontOfSize:12]; aiHint.textColor = NSColor.secondaryLabelColor;
+    aiHint.usesSingleLineMode = NO; [analysisView addSubview:aiHint];
+    NSButton *aiButton = [NSButton buttonWithTitle:@"AI 深度分析" target:self action:@selector(openAnalysisCenter:)];
+    aiButton.frame = NSMakeRect(16, 345, 180, 32); aiButton.bezelStyle = NSBezelStyleRounded; [analysisView addSubview:aiButton];
+    NSButton *settingsButton = [NSButton buttonWithTitle:@"AI 设置" target:self action:@selector(openAISettings:)];
+    settingsButton.frame = NSMakeRect(16, 305, 180, 28); settingsButton.bezelStyle = NSBezelStyleRounded; [analysisView addSubview:settingsButton];
+    NSTextField *sideHint = Label(@"选择数据后点击“打开本地分析”\n查看完整解析结果。", NSMakeRect(16, 22, 180, 48));
+    sideHint.font = [NSFont systemFontOfSize:11]; sideHint.textColor = NSColor.tertiaryLabelColor;
+    sideHint.usesSingleLineMode = NO; [analysisView addSubview:sideHint];
 
     [_window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
