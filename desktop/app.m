@@ -59,6 +59,9 @@ static NSTextField *Label(NSString *text, NSRect frame) {
     label.selectable = NO;
     label.bordered = NO;
     label.drawsBackground = NO;
+    label.usesSingleLineMode = YES;
+    label.maximumNumberOfLines = 1;
+    label.lineBreakMode = NSLineBreakByTruncatingTail;
     return label;
 }
 
