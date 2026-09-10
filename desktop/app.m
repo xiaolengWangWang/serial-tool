@@ -411,25 +411,37 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSView *analysisView = analysisSidebar.contentView;
     NSTextField *localTitle = Label(@"本地分析", NSMakeRect(16, 610, 180, 24));
     localTitle.font = [NSFont boldSystemFontOfSize:14]; [analysisView addSubview:localTitle];
-    NSTextField *localHint = Label(@"协议解析、Modbus、CRC、\n请求响应和数据类型分析", NSMakeRect(16, 555, 180, 48));
-    localHint.font = [NSFont systemFontOfSize:12]; localHint.textColor = NSColor.secondaryLabelColor;
-    localHint.usesSingleLineMode = NO; [analysisView addSubview:localHint];
-    NSButton *localButton = [NSButton buttonWithTitle:@"打开本地分析" target:self action:@selector(openAnalysisCenter:)];
-    localButton.frame = NSMakeRect(16, 515, 180, 32); localButton.bezelStyle = NSBezelStyleRounded; [analysisView addSubview:localButton];
-    NSBox *aiSep = [[[NSBox alloc] initWithFrame:NSMakeRect(16, 480, 180, 1)] autorelease];
+    _analysisScope = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(16, 570, 180, 28) pullsDown:NO];
+    [_analysisScope addItemsWithTitles:@[@"当前数据区", @"选中数据"]];
+    _analysisScope.target = self; _analysisScope.action = @selector(updateAnalysisScope:);
+    [analysisView addSubview:_analysisScope];
+    _analysisStats = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 510, 180, 50)];
+    _analysisStats.editable = NO; _analysisStats.bordered = NO; _analysisStats.drawsBackground = NO;
+    _analysisStats.font = [NSFont systemFontOfSize:11]; _analysisStats.textColor = NSColor.secondaryLabelColor;
+    _analysisStats.usesSingleLineMode = NO; _analysisStats.maximumNumberOfLines = 3;
+    ((NSTextFieldCell *)_analysisStats.cell).wraps = YES; [analysisView addSubview:_analysisStats];
+    NSButton *localButton = [NSButton buttonWithTitle:@"开始本地分析" target:self action:@selector(runLocalAnalysis:)];
+    localButton.frame = NSMakeRect(16, 470, 180, 32); localButton.bezelStyle = NSBezelStyleRounded; [analysisView addSubview:localButton];
+    NSBox *aiSep = [[[NSBox alloc] initWithFrame:NSMakeRect(16, 455, 180, 1)] autorelease];
     aiSep.boxType = NSBoxSeparator; [analysisView addSubview:aiSep];
-    NSTextField *aiTitle = Label(@"AI 增强分析", NSMakeRect(16, 438, 180, 24));
+    NSTextField *aiTitle = Label(@"AI 增强分析", NSMakeRect(16, 420, 180, 24));
     aiTitle.font = [NSFont boldSystemFontOfSize:14]; [analysisView addSubview:aiTitle];
-    NSTextField *aiHint = Label(@"DeepSeek 默认关闭\n不会自动上传通信数据", NSMakeRect(16, 385, 180, 40));
-    aiHint.font = [NSFont systemFontOfSize:12]; aiHint.textColor = NSColor.secondaryLabelColor;
-    aiHint.usesSingleLineMode = NO; [analysisView addSubview:aiHint];
-    NSButton *aiButton = [NSButton buttonWithTitle:@"AI 深度分析" target:self action:@selector(openAnalysisCenter:)];
-    aiButton.frame = NSMakeRect(16, 345, 180, 32); aiButton.bezelStyle = NSBezelStyleRounded; [analysisView addSubview:aiButton];
+    _analysisAIStatus = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 370, 180, 42)];
+    _analysisAIStatus.editable = NO; _analysisAIStatus.bordered = NO; _analysisAIStatus.drawsBackground = NO;
+    _analysisAIStatus.font = [NSFont systemFontOfSize:11]; _analysisAIStatus.textColor = NSColor.secondaryLabelColor;
+    _analysisAIStatus.usesSingleLineMode = NO; _analysisAIStatus.maximumNumberOfLines = 2;
+    ((NSTextFieldCell *)_analysisAIStatus.cell).wraps = YES; [analysisView addSubview:_analysisAIStatus];
+    NSButton *aiButton = [NSButton buttonWithTitle:@"AI 深度分析" target:self action:@selector(runAIAnalysis:)];
+    aiButton.frame = NSMakeRect(16, 330, 180, 32); aiButton.bezelStyle = NSBezelStyleRounded; [analysisView addSubview:aiButton];
     NSButton *settingsButton = [NSButton buttonWithTitle:@"AI 设置" target:self action:@selector(openAISettings:)];
-    settingsButton.frame = NSMakeRect(16, 305, 180, 28); settingsButton.bezelStyle = NSBezelStyleRounded; [analysisView addSubview:settingsButton];
-    NSTextField *sideHint = Label(@"选择数据后点击“打开本地分析”\n查看完整解析结果。", NSMakeRect(16, 22, 180, 48));
-    sideHint.font = [NSFont systemFontOfSize:11]; sideHint.textColor = NSColor.tertiaryLabelColor;
-    sideHint.usesSingleLineMode = NO; [analysisView addSubview:sideHint];
+    settingsButton.frame = NSMakeRect(16, 295, 180, 28); settingsButton.bezelStyle = NSBezelStyleRounded; [analysisView addSubview:settingsButton];
+    NSScrollView *analysisScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(16, 20, 180, 260)] autorelease];
+    analysisScroll.borderType = NSBezelBorder; analysisScroll.hasVerticalScroller = YES;
+    _analysisResult = [[NSTextView alloc] initWithFrame:analysisScroll.contentView.bounds];
+    _analysisResult.editable = NO; _analysisResult.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+    _analysisResult.autoresizingMask = NSViewWidthSizable; analysisScroll.documentView = _analysisResult;
+    [analysisView addSubview:analysisScroll];
+    [self updateAnalysisScope:nil];
 
     [_window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
@@ -583,32 +595,9 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 }
 
 - (void)openAnalysisCenter:(id)sender {
-    if (!_analysisWindow) {
-        _analysisWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 680, 470)
-            styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
-            backing:NSBackingStoreBuffered defer:NO];
-        _analysisWindow.title = @"CommBox 分析中心";
-        _analysisWindow.contentMinSize = NSMakeSize(620, 400);
-        _analysisWindow.releasedWhenClosed = NO;
-        NSView *v = _analysisWindow.contentView;
-        [v addSubview:Label(@"分析范围", NSMakeRect(24, 425, 70, 22))];
-        _analysisScope = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(100, 421, 160, 28) pullsDown:NO];
-        [_analysisScope addItemsWithTitles:@[@"当前数据区", @"选中数据"]]; _analysisScope.target = self; _analysisScope.action = @selector(updateAnalysisScope:); [v addSubview:_analysisScope];
-        _analysisStats = [[NSTextField alloc] initWithFrame:NSMakeRect(24, 382, 630, 24)];
-        _analysisStats.editable = NO; _analysisStats.bordered = NO; _analysisStats.drawsBackground = NO; _analysisStats.textColor = NSColor.secondaryLabelColor; [v addSubview:_analysisStats];
-        _analysisAIStatus = [[NSTextField alloc] initWithFrame:NSMakeRect(24, 356, 630, 22)]; _analysisAIStatus.editable = NO; _analysisAIStatus.bordered = NO; _analysisAIStatus.drawsBackground = NO; [v addSubview:_analysisAIStatus];
-        NSButton *local = [NSButton buttonWithTitle:@"开始本地分析" target:self action:@selector(runLocalAnalysis:)]; local.frame = NSMakeRect(24, 320, 130, 30); [v addSubview:local];
-        NSButton *ai = [NSButton buttonWithTitle:@"AI 深度分析" target:self action:@selector(runAIAnalysis:)]; ai.frame = NSMakeRect(164, 320, 130, 30); [v addSubview:ai];
-        NSScrollView *scroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(24, 24, 630, 295)] autorelease]; scroll.borderType = NSBezelBorder; scroll.hasVerticalScroller = YES; scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-        _analysisResult = [[NSTextView alloc] initWithFrame:scroll.contentView.bounds]; _analysisResult.editable = NO; _analysisResult.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular]; _analysisResult.autoresizingMask = NSViewWidthSizable; scroll.documentView = _analysisResult; [v addSubview:scroll];
-        NSRect mainFrame = _window.frame;
-        NSRect analysisFrame = _analysisWindow.frame;
-        analysisFrame.origin.x = mainFrame.origin.x + (mainFrame.size.width - analysisFrame.size.width) / 2.0;
-        analysisFrame.origin.y = mainFrame.origin.y + (mainFrame.size.height - analysisFrame.size.height) / 2.0;
-        [_analysisWindow setFrame:analysisFrame display:NO];
-    }
     [self updateAnalysisScope:nil];
-    [_analysisWindow makeKeyAndOrderFront:nil];
+    [_window makeKeyAndOrderFront:nil];
+    [_window makeFirstResponder:_analysisScope];
 }
 
 - (void)runLocalAnalysis:(id)sender {
