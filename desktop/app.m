@@ -527,7 +527,11 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         NSButton *ai = [NSButton buttonWithTitle:@"AI 深度分析" target:self action:@selector(runAIAnalysis:)]; ai.frame = NSMakeRect(164, 320, 130, 30); [v addSubview:ai];
         NSScrollView *scroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(24, 24, 630, 295)] autorelease]; scroll.borderType = NSBezelBorder; scroll.hasVerticalScroller = YES; scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         _analysisResult = [[NSTextView alloc] initWithFrame:scroll.contentView.bounds]; _analysisResult.editable = NO; _analysisResult.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular]; _analysisResult.autoresizingMask = NSViewWidthSizable; scroll.documentView = _analysisResult; [v addSubview:scroll];
-        [_analysisWindow center];
+        NSRect mainFrame = _window.frame;
+        NSRect analysisFrame = _analysisWindow.frame;
+        analysisFrame.origin.x = mainFrame.origin.x + (mainFrame.size.width - analysisFrame.size.width) / 2.0;
+        analysisFrame.origin.y = mainFrame.origin.y + (mainFrame.size.height - analysisFrame.size.height) / 2.0;
+        [_analysisWindow setFrame:analysisFrame display:NO];
     }
     [self updateAnalysisScope:nil];
     [_analysisWindow makeKeyAndOrderFront:nil];
@@ -536,10 +540,16 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 - (void)runLocalAnalysis:(id)sender {
     NSArray *packets = [self analysisPackets];
     if (!packets.count) { _analysisResult.string = @"没有可分析的数据。"; return; }
-    NSDictionary *p = packets[0];
-    char *raw = GoAnalyzePacket((char *)[_mode.titleOfSelectedItem UTF8String], (char *)[p[@"hex"] UTF8String]);
-    _analysisResult.string = [NSString stringWithFormat:@"范围统计\n%@\n\n首条报文分析\n%@", _analysisStats.stringValue, [NSString stringWithUTF8String:raw ?: "分析失败"]];
-    free(raw);
+    NSMutableString *report = [NSMutableString stringWithFormat:@"范围统计\n%@\n\n详细报文分析\n", _analysisStats.stringValue];
+    NSUInteger limit = MIN((NSUInteger)20, packets.count);
+    for (NSUInteger i = 0; i < limit; i++) {
+        NSDictionary *p = packets[i];
+        char *raw = GoAnalyzePacket((char *)[_mode.titleOfSelectedItem UTF8String], (char *)[p[@"hex"] UTF8String]);
+        [report appendFormat:@"\n[%lu] %@ %@ %@\nHEX：%@\n%@\n", (unsigned long)(i + 1), p[@"ts"] ?: @"", p[@"dir"] ?: @"", p[@"len"] ?: @"", p[@"hex"] ?: @"", [NSString stringWithUTF8String:raw ?: "分析失败"]];
+        free(raw);
+    }
+    if (packets.count > limit) [report appendFormat:@"\n其余 %ld 条未展开，范围统计仍包含全部数据。", (long)(packets.count - limit)];
+    _analysisResult.string = report;
 }
 
 - (void)runAIAnalysis:(NSButton *)sender {
