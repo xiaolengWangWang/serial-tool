@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "app.h"
+int RunLayoutChecks(id delegate, NSString *directory);
 
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSToolbarDelegate> {
     NSWindow *_window;
@@ -10,7 +11,6 @@
     NSWindow *_vsWindow;
     NSWindow *_toolboxWindow;
     NSWindow *_aiSettingsWindow;
-    NSWindow *_analysisWindow;
     NSTableView *_vsTable;
     NSTableView *_dataTable;
     NSMutableArray *_packets;
@@ -73,6 +73,30 @@ static NSComboBox *Combo(NSRect frame, NSArray *items, NSString *value) {
     return box;
 }
 
+static NSStackView *Row(NSArray<NSView *> *views) {
+    NSStackView *row = [NSStackView stackViewWithViews:views];
+    row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row.alignment = NSLayoutAttributeCenterY;
+    row.spacing = 8;
+    row.detachesHiddenViews = YES;
+    for (NSView *view in views) {
+        view.translatesAutoresizingMaskIntoConstraints = NO;
+        [view setContentCompressionResistancePriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
+    }
+    return row;
+}
+
+static void PinRow(NSView *row, NSView *parent, CGFloat top) {
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+    [parent addSubview:row];
+    [NSLayoutConstraint activateConstraints:@[
+        [row.leadingAnchor constraintEqualToAnchor:parent.leadingAnchor constant:8],
+        [row.trailingAnchor constraintLessThanOrEqualToAnchor:parent.trailingAnchor constant:-8],
+        [row.topAnchor constraintEqualToAnchor:parent.topAnchor constant:top],
+        [row.heightAnchor constraintEqualToConstant:30]
+    ]];
+}
+
 static void Item(NSMenu *menu, NSString *title, SEL action, NSString *key, NSEventModifierFlags mask) {
     NSMenuItem *item = [menu addItemWithTitle:title action:action keyEquivalent:key];
     item.keyEquivalentModifierMask = mask;
@@ -104,7 +128,9 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _window.toolbar = toolbar;
     _window.delegate = self;
     [_window center];
-    NSView *view = _window.contentView;
+    // Build against one stable content coordinate system; attaching the toolbar
+    // must not resize only part of the controls during construction.
+    NSView *view = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 1280, 700)] autorelease];
     view.wantsLayer = YES;
     view.layer.backgroundColor = [NSColor windowBackgroundColor].CGColor;
 
@@ -294,6 +320,25 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _selectionLabel.stringValue = @"已选择 0 条";
     [dataContainer addSubview:_selectionLabel];
 
+    // Dedicated selection row leaves the full width below it for packet details.
+    NSStackView *selectionRow = Row(@[selectAll, clearSelection, invertSelection, analyzeSelected, aiAnalyze]);
+    PinRow(selectionRow, dataContainer, 0);
+    _selectionLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    _selectionLabel.font = [NSFont systemFontOfSize:11];
+    _selectionLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    _selectionLabel.maximumNumberOfLines = 1;
+    detailScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    [NSLayoutConstraint activateConstraints:@[
+        [_selectionLabel.leadingAnchor constraintEqualToAnchor:dataContainer.leadingAnchor constant:8],
+        [_selectionLabel.trailingAnchor constraintEqualToAnchor:dataContainer.trailingAnchor constant:-8],
+        [_selectionLabel.topAnchor constraintEqualToAnchor:selectionRow.bottomAnchor constant:4],
+        [_selectionLabel.heightAnchor constraintEqualToConstant:20],
+        [detailScroll.leadingAnchor constraintEqualToAnchor:dataContainer.leadingAnchor],
+        [detailScroll.trailingAnchor constraintEqualToAnchor:dataContainer.trailingAnchor],
+        [detailScroll.bottomAnchor constraintEqualToAnchor:dataContainer.bottomAnchor],
+        [detailScroll.heightAnchor constraintEqualToConstant:90]
+    ]];
+
     NSBox *detailSep = [[[NSBox alloc] initWithFrame:NSMakeRect(0, 90, 700, 1)] autorelease];
     detailSep.boxType = NSBoxSeparator; detailSep.autoresizingMask = NSViewWidthSizable;
     [dataContainer addSubview:detailSep];
@@ -302,6 +347,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSScrollView *dataScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 91, 700, 243)] autorelease];
     dataScroll.borderType = NSBezelBorder; dataScroll.hasVerticalScroller = YES; dataScroll.hasHorizontalScroller = YES;
     dataScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    dataScroll.translatesAutoresizingMaskIntoConstraints = NO;
     _dataTable = [[NSTableView alloc] initWithFrame:dataScroll.contentView.bounds];
     _dataTable.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
     _dataTable.usesAlternatingRowBackgroundColors = YES;
@@ -331,6 +377,12 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [tableMenu addItemWithTitle:@"本地分析" action:@selector(analyzePacket:) keyEquivalent:@""];
     _dataTable.menu = tableMenu;
     [dataContainer addSubview:dataScroll];
+    [NSLayoutConstraint activateConstraints:@[
+        [dataScroll.leadingAnchor constraintEqualToAnchor:dataContainer.leadingAnchor],
+        [dataScroll.trailingAnchor constraintEqualToAnchor:dataContainer.trailingAnchor],
+        [dataScroll.topAnchor constraintEqualToAnchor:_selectionLabel.bottomAnchor constant:4],
+        [dataScroll.bottomAnchor constraintEqualToAnchor:detailScroll.topAnchor constant:-6]
+    ]];
 
     NSTabViewItem *dataItem = [[[NSTabViewItem alloc] initWithIdentifier:@"data"] autorelease];
     dataItem.label = @"接收数据"; dataItem.view = dataContainer;
@@ -357,17 +409,20 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _hexSend = [[NSButton checkboxWithTitle:@"HEX 发送" target:nil action:nil] retain];
     _hexSend.state = NSControlStateValueOn;
     _hexSend.frame = NSMakeRect(0, 166, 100, 26); _hexSend.autoresizingMask = NSViewMinYMargin; [sendDataContainer addSubview:_hexSend];
-    [sendDataContainer addSubview:Label(@"行尾", NSMakeRect(110, 168, 36, 24))];
+    NSTextField *eolLabel = Label(@"行尾", NSMakeRect(110, 168, 36, 24));
+    [sendDataContainer addSubview:eolLabel];
     _eol = [Combo(NSMakeRect(148, 164, 80, 30), @[@"无",@"LF",@"CR",@"CRLF"], @"无") retain];
     _eol.autoresizingMask = NSViewMinYMargin; [sendDataContainer addSubview:_eol];
     NSTextField *hint = Label(@"HEX 示例：01 03 00 00 00 02", NSMakeRect(246, 168, 280, 24));
     hint.textColor = NSColor.secondaryLabelColor; hint.autoresizingMask = NSViewMinYMargin; [sendDataContainer addSubview:hint];
 
-    [sendDataContainer addSubview:Label(@"历史", NSMakeRect(0, 132, 40, 24))];
+    NSTextField *historyLabel = Label(@"历史", NSMakeRect(0, 132, 40, 24));
+    [sendDataContainer addSubview:historyLabel];
     _sendHistory = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(40, 128, 140, 26) pullsDown:NO];
     _sendHistory.target = self; _sendHistory.action = @selector(sendHistorySelected:);
     [sendDataContainer addSubview:_sendHistory];
-    [sendDataContainer addSubview:Label(@"收藏", NSMakeRect(188, 132, 40, 24))];
+    NSTextField *favoriteLabel = Label(@"收藏", NSMakeRect(188, 132, 40, 24));
+    [sendDataContainer addSubview:favoriteLabel];
     _favorites = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(228, 128, 140, 26) pullsDown:NO];
     _favorites.target = self; _favorites.action = @selector(favoriteSelected:);
     [sendDataContainer addSubview:_favorites];
@@ -375,7 +430,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     favBtn.frame = NSMakeRect(376, 126, 90, 28); [sendDataContainer addSubview:favBtn];
     NSButton *delBtn = [NSButton buttonWithTitle:@"删除" target:self action:@selector(deleteFavorite:)];
     delBtn.frame = NSMakeRect(470, 126, 70, 28); [sendDataContainer addSubview:delBtn];
-    [sendDataContainer addSubview:Label(@"间隔(ms)", NSMakeRect(540, 132, 58, 24))];
+    NSTextField *intervalLabel = Label(@"间隔(ms)", NSMakeRect(540, 132, 58, 24));
+    [sendDataContainer addSubview:intervalLabel];
     _interval = [[NSTextField alloc] initWithFrame:NSMakeRect(598, 128, 102, 30)];
     _interval.stringValue = @"1000"; _interval.alignment = NSTextAlignmentRight;
     _interval.autoresizingMask = NSViewMinXMargin; [sendDataContainer addSubview:_interval];
@@ -389,6 +445,32 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     sendButton.frame = NSMakeRect(605, 68, 95, 54); sendButton.autoresizingMask = NSViewMinXMargin; [sendDataContainer addSubview:sendButton];
     _quickTimerButton = [[NSButton buttonWithTitle:@"开始定时" target:self action:@selector(toggleTimer:)] retain];
     _quickTimerButton.frame = NSMakeRect(605, 8, 95, 54); _quickTimerButton.autoresizingMask = NSViewMinXMargin; [sendDataContainer addSubview:_quickTimerButton];
+
+    PinRow(Row(@[_hexSend, eolLabel, _eol, intervalLabel, _interval, hint]), sendDataContainer, 4);
+    PinRow(Row(@[historyLabel, _sendHistory, favoriteLabel, _favorites, favBtn, delBtn]), sendDataContainer, 40);
+    [_eol.widthAnchor constraintEqualToConstant:75].active = YES;
+    [_interval.widthAnchor constraintEqualToConstant:80].active = YES;
+    [_sendHistory.widthAnchor constraintEqualToConstant:130].active = YES;
+    [_favorites.widthAnchor constraintEqualToConstant:130].active = YES;
+    // Long saved messages must not enlarge the popup or cover adjacent actions.
+    [_sendHistory setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [_favorites setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    NSStackView *sendActions = [NSStackView stackViewWithViews:@[sendButton, _quickTimerButton]];
+    sendActions.orientation = NSUserInterfaceLayoutOrientationVertical;
+    sendActions.alignment = NSLayoutAttributeWidth;
+    sendActions.spacing = 8;
+    sendActions.translatesAutoresizingMaskIntoConstraints = NO;
+    sendScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    [sendDataContainer addSubview:sendActions];
+    [NSLayoutConstraint activateConstraints:@[
+        [sendActions.trailingAnchor constraintEqualToAnchor:sendDataContainer.trailingAnchor constant:-8],
+        [sendActions.topAnchor constraintEqualToAnchor:sendDataContainer.topAnchor constant:80],
+        [sendActions.widthAnchor constraintEqualToConstant:100],
+        [sendScroll.leadingAnchor constraintEqualToAnchor:sendDataContainer.leadingAnchor constant:8],
+        [sendScroll.trailingAnchor constraintEqualToAnchor:sendActions.leadingAnchor constant:-8],
+        [sendScroll.topAnchor constraintEqualToAnchor:sendDataContainer.topAnchor constant:80],
+        [sendScroll.bottomAnchor constraintEqualToAnchor:sendDataContainer.bottomAnchor constant:-8]
+    ]];
 
     NSTabViewItem *sendDataItem = [[[NSTabViewItem alloc] initWithIdentifier:@"send"] autorelease];
     sendDataItem.label = @"发送数据"; sendDataItem.view = sendDataContainer;
@@ -453,12 +535,35 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _analysisResult.editable = NO; _analysisResult.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
     _analysisResult.autoresizingMask = NSViewWidthSizable; analysisScroll.documentView = _analysisResult;
     [analysisView addSubview:analysisScroll];
+    NSStackView *analysisHeader = [NSStackView stackViewWithViews:@[localTitle, _analysisScope, _analysisStats, localButton, aiSep, aiTitle, _analysisAIStatus, aiButton, settingsButton]];
+    analysisHeader.orientation = NSUserInterfaceLayoutOrientationVertical;
+    analysisHeader.alignment = NSLayoutAttributeLeading;
+    analysisHeader.spacing = 10;
+    analysisHeader.translatesAutoresizingMaskIntoConstraints = NO;
+    analysisScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    [analysisView addSubview:analysisHeader];
+    for (NSView *item in analysisHeader.views) {
+        [item.widthAnchor constraintEqualToAnchor:analysisHeader.widthAnchor].active = YES;
+    }
+    _analysisResult.string = @"选择分析范围后，点击“开始本地分析”。\n\nAI 增强分析默认关闭。";
+    [NSLayoutConstraint activateConstraints:@[
+        [analysisHeader.topAnchor constraintEqualToAnchor:analysisView.topAnchor constant:12],
+        [analysisHeader.leadingAnchor constraintEqualToAnchor:analysisView.leadingAnchor constant:12],
+        [analysisHeader.trailingAnchor constraintEqualToAnchor:analysisView.trailingAnchor constant:-12],
+        [_analysisStats.heightAnchor constraintEqualToConstant:52],
+        [_analysisAIStatus.heightAnchor constraintEqualToConstant:44],
+        [aiSep.heightAnchor constraintEqualToConstant:1],
+        [analysisScroll.topAnchor constraintEqualToAnchor:analysisHeader.bottomAnchor constant:12],
+        [analysisScroll.leadingAnchor constraintEqualToAnchor:analysisHeader.leadingAnchor],
+        [analysisScroll.trailingAnchor constraintEqualToAnchor:analysisHeader.trailingAnchor],
+        [analysisScroll.bottomAnchor constraintEqualToAnchor:analysisView.bottomAnchor constant:-12]
+    ]];
     [self updateAnalysisScope:nil];
 
     _leftPane = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 310, view.bounds.size.height)] autorelease];
     _centerPane = [[[NSView alloc] initWithFrame:NSMakeRect(310, 0, 710, view.bounds.size.height)] autorelease];
     _rightPane = [[[NSView alloc] initWithFrame:NSMakeRect(1025, 0, 255, view.bounds.size.height)] autorelease];
-    _leftPane.autoresizingMask = NSViewHeightSizable;
+    _leftPane.autoresizingMask = NSViewMinYMargin;
     _centerPane.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _rightPane.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
     for (NSView *pane in @[_leftPane, _centerPane, _rightPane]) {
@@ -481,7 +586,14 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         }
         child.frame = frame;
     }
+    _window.contentView = view;
+    view.autoresizesSubviews = NO;
+    [_window setContentSize:NSMakeSize(1280, 700)];
     [self layoutMainPanes];
+
+    if (getenv("COMMBOX_LAYOUT_CHECK_DIR")) {
+        exit(RunLayoutChecks(self, [NSString stringWithUTF8String:getenv("COMMBOX_LAYOUT_CHECK_DIR")]));
+    }
 
     [_window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
@@ -502,11 +614,12 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 }
 
 - (void)layoutMainPanes {
+    if (!_leftPane) return;
     CGFloat width = _window.contentView.bounds.size.width;
     CGFloat height = _window.contentView.bounds.size.height;
     CGFloat rightX = width - 255.0;
     CGFloat centerWidth = MAX(710.0, rightX - 315.0);
-    _leftPane.frame = NSMakeRect(0, 0, 310, height);
+    _leftPane.frame = NSMakeRect(0, height - 700, 310, 700);
     _centerPane.frame = NSMakeRect(310, 0, centerWidth, height);
     _rightPane.frame = NSMakeRect(rightX, 0, 255, height);
     _dataView.frame = NSMakeRect(10, 276, centerWidth - 10, height - 366);
@@ -645,8 +758,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         if ([p[@"dir"] isEqualToString:@"RX"]) rx++; else if ([p[@"dir"] isEqualToString:@"TX"]) tx++;
         bytes += [p[@"rawLen"] integerValue];
     }
-    _analysisStats.stringValue = [NSString stringWithFormat:@"记录：%ld    RX：%ld    TX：%ld    数据量：%ld B    完整性：✓ 当前可见范围",
-        (long)packets.count, (long)rx, (long)tx, (long)bytes];
+    _analysisStats.stringValue = [NSString stringWithFormat:@"记录：%ld · %ld B\nRX：%ld · TX：%ld\n范围：当前可见数据",
+        (long)packets.count, (long)bytes, (long)rx, (long)tx];
     char *enabled = GoGetAISetting((char *)"deepseek.enabled");
     char *key = GoGetAISetting((char *)"deepseek.api_key");
     BOOL ready = strcmp(enabled ?: "", "true") == 0 && strlen(key ?: "") > 0;
@@ -1046,7 +1159,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     for (NSView *c in _serialControls) c.hidden = !usesSerialName;
     _protocolLabel.hidden = !bridge; _bridgeProtocol.hidden = !bridge;
     _roleLabel.hidden = !usesNet; _role.hidden = !usesNet;
-    _ipLabel.hidden = !(usesNet || http); _ip.hidden = !(usesNet || http);
+    _ipLabel.hidden = !usesNet; _ip.hidden = !(usesNet || http);
     _ipLabel.stringValue = net ? (server ? @"监听网卡" : @"服务器 IP") : @"IP 地址";
     _portLabel.hidden = !usesNet; _port.hidden = !usesNet;
 
