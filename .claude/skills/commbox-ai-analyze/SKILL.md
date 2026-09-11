@@ -31,8 +31,8 @@ HEX="接收 01 03 02 00 64 B9 AF
 [ -n "$KEY" ] || { echo "未找到 DeepSeek API Key：设 DEEPSEEK_API_KEY，或在 CommBox「AI 增强分析设置」里配置"; exit 1; }
 
 jq -nc --arg model "$MODEL" \
-       --arg sys "你是工业通信现场诊断助手。结论仅作排查建议，优先建议查阅设备协议文档。" \
-       --arg usr "请分析以下 ${TRANSPORT} 通信报文。只根据给定数据说明协议、异常、风险和现场排查建议；不确定时明确说明，不要臆测串口参数。报文为 HEX：
+       --arg sys "你是工业通信现场诊断助手。按以下步骤分析：1) 协议识别（Modbus RTU/TCP、DL/T645、CJ/T188、自定义帧等）并说明依据；2) 逐字节解析（用表格列出字段/值/含义）；3) 校验核对（CRC/校验和/LRC 的算法与字节序，能核对则核对）；4) 异常与风险（异常响应、长度不符、CRC 错误、半包/粘包、可疑值）；5) 现场排查建议。只依据给定数据，未提供的参数（波特率、数据位、校验、寄存器表等）不臆测、标注“需确认”；区分确定结论与推测；结论仅作排查建议，以设备协议文档为准。" \
+       --arg usr "请分析以下 ${TRANSPORT} 通信报文。报文为 HEX：
 ${HEX}" \
   '{model:$model,temperature:0.1,messages:[{role:"system",content:$sys},{role:"user",content:$usr}]}' \
 | curl -s -m 60 "${BASE%/}/chat/completions" \
@@ -46,6 +46,8 @@ ${HEX}" \
    的 `deepseek.api_key` / `deepseek.base_url` / `deepseek.model`（与桌面版“AI 增强分析设置”共用同一份配置）。
 
 Base URL 默认 `https://api.deepseek.com`，模型默认 `deepseek-chat`。
+
+> 提示词与桌面版 CommBox 内嵌的分析指南（`desktop/ai_analysis_guide.md`）同源，保证终端与 GUI 的分析框架一致。
 
 ## 注意
 - 只发送 HEX 报文与传输类型，不发送 IP、设备名或主机名。

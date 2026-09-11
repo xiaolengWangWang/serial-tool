@@ -52,6 +52,7 @@ int RunLayoutChecks(id delegate, NSString *directory);
     NSTextField *_aiBaseURL, *_aiModel, *_aiKey;
     NSButton *_aiEnabledButton;
     NSTextField *_aiKeyHint;
+    NSString *_lastDatabaseReport;
 }
 - (void)appendText:(NSString *)text;
 - (void)appendMonitorText:(NSString *)text;
@@ -132,6 +133,102 @@ static NSTextField *Label(NSString *text, NSRect frame) {
     label.maximumNumberOfLines = 1;
     label.lineBreakMode = NSLineBreakByTruncatingTail;
     return label;
+}
+
+// mdDisplayWidth 粗略估算字符串显示宽度：非 ASCII（中文等）按 2 计，用于对齐表格列。
+static NSUInteger mdDisplayWidth(NSString *s) {
+    NSUInteger w = 0;
+    for (NSUInteger i = 0; i < s.length; i++) w += ([s characterAtIndex:i] >= 0x1100) ? 2 : 1;
+    return w;
+}
+
+// mdAppendInline 把一行文本按 **加粗** 拆分后追加到富文本，其余按 base 字体。
+static void mdAppendInline(NSMutableAttributedString *out, NSString *text, NSFont *base, NSColor *color) {
+    NSFont *bold = [[NSFontManager sharedFontManager] convertFont:base toHaveTrait:NSBoldFontMask];
+    NSDictionary *baseAttr = @{NSFontAttributeName: base, NSForegroundColorAttributeName: color};
+    NSDictionary *boldAttr = @{NSFontAttributeName: bold, NSForegroundColorAttributeName: color};
+    NSScanner *sc = [NSScanner scannerWithString:text];
+    sc.charactersToBeSkipped = nil;
+    while (!sc.isAtEnd) {
+        NSString *chunk = nil;
+        if ([sc scanUpToString:@"**" intoString:&chunk] && chunk.length) {
+            [out appendAttributedString:[[[NSAttributedString alloc] initWithString:chunk attributes:baseAttr] autorelease]];
+        }
+        if ([sc scanString:@"**" intoString:NULL]) {
+            NSString *b = nil;
+            if ([sc scanUpToString:@"**" intoString:&b] && b.length) {
+                [out appendAttributedString:[[[NSAttributedString alloc] initWithString:b attributes:boldAttr] autorelease]];
+            }
+            [sc scanString:@"**" intoString:NULL];
+        }
+    }
+}
+
+// mdPretty 把 Markdown 风格的分析结果渲染成可读富文本：标题、加粗、对齐表格、分隔线、项目符号。
+static NSAttributedString *mdPretty(NSString *md) {
+    NSColor *fg = NSColor.textColor, *sub = NSColor.secondaryLabelColor;
+    NSFont *body = [NSFont systemFontOfSize:12.5];
+    NSFont *h1 = [NSFont boldSystemFontOfSize:17], *h2 = [NSFont boldSystemFontOfSize:14.5], *h3 = [NSFont boldSystemFontOfSize:12.5];
+    NSFont *mono = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+    NSMutableAttributedString *out = [[[NSMutableAttributedString alloc] init] autorelease];
+    NSArray<NSString *> *lines = [md componentsSeparatedByString:@"\n"];
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    NSUInteger i = 0;
+    while (i < lines.count) {
+        NSString *trim = [lines[i] stringByTrimmingCharactersInSet:ws];
+        if ([trim hasPrefix:@"|"]) {                                   // 表格块
+            NSMutableArray<NSArray<NSString *> *> *rows = [NSMutableArray array];
+            while (i < lines.count) {
+                NSString *t = [lines[i] stringByTrimmingCharactersInSet:ws];
+                if (![t hasPrefix:@"|"]) break;
+                NSMutableArray *cells = [NSMutableArray array];
+                for (NSString *c in [t componentsSeparatedByString:@"|"]) [cells addObject:[c stringByTrimmingCharactersInSet:ws]];
+                if (cells.count && ![cells.firstObject length]) [cells removeObjectAtIndex:0];
+                if (cells.count && ![cells.lastObject length]) [cells removeLastObject];
+                [rows addObject:cells];
+                i++;
+            }
+            NSUInteger cols = 0;
+            for (NSArray *r in rows) cols = MAX(cols, r.count);
+            if (!cols) continue;
+            NSUInteger *w = calloc(cols, sizeof(NSUInteger));
+            for (NSArray *r in rows) for (NSUInteger c = 0; c < r.count; c++) { NSUInteger l = mdDisplayWidth(r[c]); if (l > w[c]) w[c] = l; }
+            for (NSArray *r in rows) {
+                BOOL sep = r.count > 0;                                // 跳过 |---|:--- 分隔行
+                for (NSString *c in r) { for (NSUInteger k = 0; k < c.length; k++) { unichar ch = [c characterAtIndex:k]; if (ch != '-' && ch != ':' && ch != ' ') { sep = NO; break; } } if (!sep) break; }
+                if (sep) continue;
+                NSMutableString *rs = [NSMutableString string];
+                for (NSUInteger c = 0; c < cols; c++) {
+                    NSString *cell = c < r.count ? r[c] : @"";
+                    [rs appendString:cell];
+                    for (NSInteger p = 0; p < (NSInteger)w[c] - (NSInteger)mdDisplayWidth(cell) + 2; p++) [rs appendString:@" "];
+                }
+                [rs appendString:@"\n"];
+                [out appendAttributedString:[[[NSAttributedString alloc] initWithString:rs attributes:@{NSFontAttributeName: mono, NSForegroundColorAttributeName: fg}] autorelease]];
+            }
+            free(w);
+            continue;
+        }
+        NSFont *hf = nil; NSString *content = trim;
+        if ([trim hasPrefix:@"### "]) { hf = h3; content = [trim substringFromIndex:4]; }
+        else if ([trim hasPrefix:@"## "]) { hf = h2; content = [trim substringFromIndex:3]; }
+        else if ([trim hasPrefix:@"# "]) { hf = h1; content = [trim substringFromIndex:2]; }
+        if (hf) {
+            mdAppendInline(out, content, hf, fg);
+            [out appendAttributedString:[[[NSAttributedString alloc] initWithString:@"\n" attributes:@{NSFontAttributeName: hf}] autorelease]];
+            i++; continue;
+        }
+        if ([trim isEqualToString:@"---"] || [trim isEqualToString:@"***"] || [trim isEqualToString:@"___"]) {
+            [out appendAttributedString:[[[NSAttributedString alloc] initWithString:@"──────────────────────\n" attributes:@{NSFontAttributeName: mono, NSForegroundColorAttributeName: sub}] autorelease]];
+            i++; continue;
+        }
+        NSString *para = lines[i];
+        if ([trim hasPrefix:@"- "] || [trim hasPrefix:@"* "]) para = [@"  • " stringByAppendingString:[trim substringFromIndex:2]];
+        mdAppendInline(out, para, body, fg);
+        [out appendAttributedString:[[[NSAttributedString alloc] initWithString:@"\n" attributes:@{NSFontAttributeName: body}] autorelease]];
+        i++;
+    }
+    return out;
 }
 
 static NSComboBox *Combo(NSRect frame, NSArray *items, NSString *value) {
@@ -907,22 +1004,22 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         [v addSubview:Label(@"模型", NSMakeRect(24, 118, 100, 22))];
         _aiModel = [[NSTextField alloc] initWithFrame:NSMakeRect(130, 114, 320, 28)]; [v addSubview:_aiModel];
         [v addSubview:Label(@"API Key", NSMakeRect(24, 78, 100, 22))];
-        _aiKey = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(130, 74, 320, 28)]; _aiKey.placeholderString = @"留空表示不修改已保存 Key"; [v addSubview:_aiKey];
+        _aiKey = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(130, 74, 320, 28)]; _aiKey.placeholderString = @"sk-..."; [v addSubview:_aiKey];
         _aiKeyHint = Label(@"", NSMakeRect(24, 42, 420, 22)); _aiKeyHint.textColor = NSColor.secondaryLabelColor; [v addSubview:_aiKeyHint];
         NSButton *save = [NSButton buttonWithTitle:@"保存" target:self action:@selector(saveAISettings:)]; save.frame = NSMakeRect(370, 12, 80, 28); [v addSubview:save];
         [_aiSettingsWindow center];
     }
     // 每次打开都重新读取已保存设置，避免复用窗口时显示旧状态。
     char *enabledRaw = GoGetAISetting((char *)"deepseek.enabled"); BOOL savedEnabled = [[NSString stringWithUTF8String:enabledRaw ?: ""] isEqualToString:@"true"]; free(enabledRaw);
-    char *keyRaw = GoGetAISetting((char *)"deepseek.api_key"); BOOL hasKey = strlen(keyRaw ?: "") > 0; free(keyRaw);
+    char *keyRaw = GoGetAISetting((char *)"deepseek.api_key"); NSString *savedKey = [NSString stringWithUTF8String:keyRaw ?: ""]; BOOL hasKey = savedKey.length > 0; free(keyRaw);
     char *baseURLRaw = GoGetAISetting((char *)"deepseek.base_url"); NSString *savedURL = [NSString stringWithUTF8String:baseURLRaw ?: ""]; free(baseURLRaw);
     char *modelRaw = GoGetAISetting((char *)"deepseek.model"); NSString *savedModel = [NSString stringWithUTF8String:modelRaw ?: ""]; free(modelRaw);
     _aiEnabledButton.state = savedEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     _aiEnabled = savedEnabled;
     _aiBaseURL.stringValue = savedURL.length ? savedURL : @"https://api.deepseek.com";
     _aiModel.stringValue = savedModel.length ? savedModel : @"deepseek-chat";
-    _aiKey.stringValue = @"";
-    _aiKeyHint.stringValue = hasKey ? @"Key 已保存到本地 SQLite；未启用时不会发起网络请求。" : @"Key 为空；保存后仅写入本地 SQLite，不会自动调用。";
+    _aiKey.stringValue = savedKey;
+    _aiKeyHint.stringValue = hasKey ? @"Key 已保存（掩码显示），存于本地 SQLite；未启用时不会发起网络请求。" : @"Key 为空；填写后保存仅写入本地 SQLite，不会自动调用。";
     [_aiSettingsWindow makeKeyAndOrderFront:nil];
 }
 
@@ -938,10 +1035,13 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     if (strlen(error ?: "") > 0) { NSString *message = [NSString stringWithUTF8String:error]; free(error); [self alert:message]; return; } free(error);
     error = GoSetAISetting((char *)"deepseek.base_url", (char *)baseURL.UTF8String); free(error);
     error = GoSetAISetting((char *)"deepseek.model", (char *)model.UTF8String); free(error);
-    if (_aiKey.stringValue.length) {
-        error = GoSetAISetting((char *)"deepseek.api_key", (char *)_aiKey.stringValue.UTF8String); free(error);
-        _aiKey.stringValue = @"";
+    NSString *trimmedKey = [_aiKey.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if ([trimmedKey rangeOfCharacterFromSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]].location != NSNotFound) {
+        [self alert:@"API Key 不能包含空格或换行，请重新粘贴"]; return;
     }
+    // 保留最后一次内容：始终写入当前字段值（含清空），并回填规范化后的明文。
+    error = GoSetAISetting((char *)"deepseek.api_key", (char *)trimmedKey.UTF8String); free(error);
+    _aiKey.stringValue = trimmedKey;
     [self appendText:@"[AI 设置已保存到本地 SQLite；DeepSeek 仅在用户主动分析时调用]\n"];
     [_aiSettingsWindow orderOut:nil];
 }
@@ -1063,6 +1163,9 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 _databaseBusy = NO;
                 _analysisResult.string = text;
+                // 记住这份数据库报告，供“AI 深度分析”直接对数据库数据分析。
+                [_lastDatabaseReport release];
+                _lastDatabaseReport = [text retain];
                 [text release];
             });
         });
@@ -1086,15 +1189,34 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 }
 
 - (void)runAIAnalysis:(NSButton *)sender {
-    NSArray *packets = [self analysisPackets];
-    if (!packets.count) { _analysisResult.string = @"没有可分析的数据。"; return; }
-    NSMutableString *input = [NSMutableString string];
-    for (NSDictionary *p in packets) [input appendFormat:@"%@ %@\n", p[@"dir"] ?: @"", p[@"hex"] ?: @""];
     char *enabled = GoGetAISetting((char *)"deepseek.enabled");
     char *key = GoGetAISetting((char *)"deepseek.api_key");
     BOOL ready = strcmp(enabled ?: "", "true") == 0 && strlen(key ?: "") > 0;
     free(enabled); free(key);
     if (!ready) { [self alert:@"AI 未启用或 Key 未配置，请先打开“操作 → AI 增强分析设置”"]; return; }
+
+    // 当前展示的是数据库分析报告时，直接让 AI 深度分析这份数据库数据。
+    if (_lastDatabaseReport.length > 0 && [_analysisResult.string isEqualToString:_lastDatabaseReport]) {
+        NSString *report = [_lastDatabaseReport copy];
+        NSString *preview = [report substringToIndex:MIN((NSUInteger)600, report.length)];
+        NSAlert *confirm = [[[NSAlert alloc] init] autorelease];
+        confirm.messageText = @"确认把数据库分析报告发送到 DeepSeek？";
+        confirm.informativeText = [NSString stringWithFormat:@"将发送本次数据库分析报告（%lu 字符，预览最多 600 字符）：\n%@\n\n不会发送 IP、设备名或主机名。", (unsigned long)report.length, preview];
+        [confirm addButtonWithTitle:@"确认并发送"]; [confirm addButtonWithTitle:@"取消"];
+        if ([confirm runModal] != NSAlertFirstButtonReturn) { [report release]; return; }
+        sender.enabled = NO; _analysisResult.string = @"AI 正在分析数据库报告……\n\n本地通信不会被阻塞。";
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            char *raw = GoAIAnalyzeReport((char *)report.UTF8String);
+            NSString *result = [[NSString alloc] initWithUTF8String:raw ?: "AI 分析失败"]; free(raw);
+            dispatch_async(dispatch_get_main_queue(), ^{ [_analysisResult.textStorage setAttributedString:mdPretty([NSString stringWithFormat:@"# 数据库 AI 深度分析\n\n%@", result])]; sender.enabled = YES; [result release]; [report release]; });
+        });
+        return;
+    }
+
+    NSArray *packets = [self analysisPackets];
+    if (!packets.count) { _analysisResult.string = @"没有可分析的数据。先点“开始本地分析”或“分析数据库…”，再点 AI 深度分析。"; return; }
+    NSMutableString *input = [NSMutableString string];
+    for (NSDictionary *p in packets) [input appendFormat:@"%@ %@\n", p[@"dir"] ?: @"", p[@"hex"] ?: @""];
     NSString *preview = [input substringToIndex:MIN((NSUInteger)600, input.length)];
     NSAlert *confirm = [[[NSAlert alloc] init] autorelease];
     confirm.messageText = @"确认发送到 DeepSeek？";
@@ -1105,7 +1227,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         char *raw = GoAIAnalyze((char *)transport.UTF8String, (char *)input.UTF8String);
         NSString *result = [[NSString alloc] initWithUTF8String:raw ?: "AI 分析失败"]; free(raw);
-        dispatch_async(dispatch_get_main_queue(), ^{ _analysisResult.string = [NSString stringWithFormat:@"%@\n\n%@", _analysisStats.stringValue, result]; sender.enabled = YES; [result release]; [transport release]; });
+        dispatch_async(dispatch_get_main_queue(), ^{ [_analysisResult.textStorage setAttributedString:mdPretty([NSString stringWithFormat:@"%@\n\n%@", _analysisStats.stringValue, result])]; sender.enabled = YES; [result release]; [transport release]; });
     });
 }
 
@@ -1949,7 +2071,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         NSString *result = [[NSString alloc] initWithUTF8String:raw ?: "AI 分析失败"];
         free(raw);
         dispatch_async(dispatch_get_main_queue(), ^{
-            _detailView.string = [NSString stringWithFormat:@"AI 深度分析（仅本次主动调用）\n\n%@", result];
+            [_detailView.textStorage setAttributedString:mdPretty([NSString stringWithFormat:@"# AI 深度分析（仅本次主动调用）\n\n%@", result])];
             button.enabled = YES;
             [result release];
             [transport release];

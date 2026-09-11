@@ -37,6 +37,7 @@ char *GoVersion(void);
 char *GoGetAISetting(char *key);
 char *GoSetAISetting(char *key, char *value);
 char *GoAIAnalyze(char *transport, char *hex);
+char *GoAIAnalyzeReport(char *report);
 char *GoStats(void);
 char *GoFavoriteNames(void);
 char *GoSaveFavorite(char *name, char *value);

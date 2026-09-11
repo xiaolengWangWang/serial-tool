@@ -10,6 +10,7 @@ import "C"
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,6 +27,12 @@ import (
 
 	"serial-tool/internal/wincore"
 )
+
+// aiAnalysisGuide 是随工具发布的报文分析指南，作为 DeepSeek 的系统提示，
+// 让分析行为由这份可维护的 Markdown 驱动。
+//
+//go:embed ai_analysis_guide.md
+var aiAnalysisGuide string
 
 var engine *wincore.Engine
 var hexMode atomic.Bool
@@ -199,21 +206,22 @@ func GoSetAISetting(key, value *C.char) *C.char {
 	return C.CString("")
 }
 
-//export GoAIAnalyze
-func GoAIAnalyze(transport, hex *C.char) *C.char {
+// deepseekChat 用已保存的 DeepSeek 配置发起一次对话，返回助手回复；出错时返回中文错误串。
+// 由 GoAIAnalyze（实时报文）与 GoAIAnalyzeReport（数据库报告）共用。
+func deepseekChat(userPrompt string) string {
 	if engine == nil || engine.GetSetting("deepseek.enabled") != "true" {
-		return C.CString("AI 未启用，请先在 AI 增强分析设置中启用")
+		return "AI 未启用，请先在 AI 增强分析设置中启用"
 	}
-	key := engine.GetSetting("deepseek.api_key")
+	key := strings.TrimSpace(engine.GetSetting("deepseek.api_key"))
 	if key == "" {
-		return C.CString("AI Key 为空，请先配置 API Key")
+		return "AI Key 为空，请先配置 API Key"
 	}
-	input := strings.TrimSpace(C.GoString(hex))
-	if len(input) == 0 {
-		return C.CString("没有可分析的报文")
-	}
-	if len(input) > 16*1024 {
-		return C.CString("分析数据超过 16KB，请先筛选或减少报文")
+	// API Key 会放入 Authorization 头，含空格或控制字符会被 net/http 拒绝并抛出晦涩错误；
+	// 这里提前给出清晰提示，通常是粘贴时带进了换行或多余内容。
+	for _, r := range key {
+		if r < 0x20 || r == 0x7f || r == ' ' {
+			return "AI Key 含非法字符（空格、换行或控制字符），请在 AI 设置中重新粘贴 Key"
+		}
 	}
 	base := strings.TrimRight(engine.GetSetting("deepseek.base_url"), "/")
 	if base == "" {
@@ -221,7 +229,7 @@ func GoAIAnalyze(transport, hex *C.char) *C.char {
 	}
 	parsed, err := neturl.Parse(base)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return C.CString("AI Base URL 无效，请使用 http:// 或 https:// 地址")
+		return "AI Base URL 无效，请使用 http:// 或 https:// 地址"
 	}
 	if !strings.HasSuffix(base, "/chat/completions") {
 		base += "/chat/completions"
@@ -230,19 +238,22 @@ func GoAIAnalyze(transport, hex *C.char) *C.char {
 	if model == "" {
 		model = "deepseek-chat"
 	}
-	prompt := fmt.Sprintf("请分析以下 %s 通信报文。只根据给定数据说明协议、异常、风险和现场排查建议；不确定时明确说明，不要臆测串口参数。报文为 HEX：\n%s", C.GoString(transport), input)
-	body, _ := json.Marshal(map[string]any{"model": model, "temperature": 0.1, "messages": []map[string]string{{"role": "system", "content": "你是工业通信现场诊断助手。结论仅作排查建议，优先建议查阅设备协议文档。"}, {"role": "user", "content": prompt}}})
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	system := strings.TrimSpace(aiAnalysisGuide)
+	if system == "" {
+		system = "你是工业通信现场诊断助手。结论仅作排查建议，优先建议查阅设备协议文档。"
+	}
+	body, _ := json.Marshal(map[string]any{"model": model, "temperature": 0.1, "messages": []map[string]string{{"role": "system", "content": system}, {"role": "user", "content": userPrompt}}})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base, bytes.NewReader(body))
 	if err != nil {
-		return C.CString("AI 请求失败：" + err.Error())
+		return "AI 请求失败：" + err.Error()
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return C.CString("AI 请求失败：" + err.Error())
+		return "AI 请求失败：" + err.Error()
 	}
 	defer resp.Body.Close()
 	var result struct {
@@ -256,19 +267,46 @@ func GoAIAnalyze(transport, hex *C.char) *C.char {
 		} `json:"error"`
 	}
 	if err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result); err != nil {
-		return C.CString("AI 响应解析失败")
+		return "AI 响应解析失败"
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		message := result.Error.Message
 		if message == "" {
 			message = resp.Status
 		}
-		return C.CString("AI 请求失败：" + message)
+		return "AI 请求失败：" + message
 	}
 	if len(result.Choices) == 0 || result.Choices[0].Message.Content == "" {
-		return C.CString("AI 未返回分析结果")
+		return "AI 未返回分析结果"
 	}
-	return C.CString(result.Choices[0].Message.Content)
+	return result.Choices[0].Message.Content
+}
+
+//export GoAIAnalyze
+func GoAIAnalyze(transport, hex *C.char) *C.char {
+	input := strings.TrimSpace(C.GoString(hex))
+	if len(input) == 0 {
+		return C.CString("没有可分析的报文")
+	}
+	if len(input) > 16*1024 {
+		return C.CString("分析数据超过 16KB，请先筛选或减少报文")
+	}
+	prompt := fmt.Sprintf("请分析以下 %s 通信报文。只根据给定数据说明协议、异常、风险和现场排查建议；不确定时明确说明，不要臆测串口参数。报文为 HEX：\n%s", C.GoString(transport), input)
+	return C.CString(deepseekChat(prompt))
+}
+
+//export GoAIAnalyzeReport
+func GoAIAnalyzeReport(report *C.char) *C.char {
+	text := strings.TrimSpace(C.GoString(report))
+	if len(text) == 0 {
+		return C.CString("没有可分析的数据库数据")
+	}
+	const maxReport = 32 * 1024
+	if len(text) > maxReport {
+		text = text[:maxReport] + "\n……（报告过长，已截断）"
+	}
+	prompt := fmt.Sprintf("以下是本地 SQLite 采集数据的分析报告，含统计与逐条 HEX 报文解析。请据此做协议识别、异常定位、风险评估与现场排查建议；只依据报告内容，不确定时明确说明，不臆测未给出的参数。\n\n%s", text)
+	return C.CString(deepseekChat(prompt))
 }
 
 //export GoAnalyzePacket

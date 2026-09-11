@@ -131,7 +131,7 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath \
 # macOS 桌面版(需在 macOS 上用 CGo 构建)
 mkdir -p 'build/CommBox.app/Contents/MacOS'
 cp desktop/Info.plist 'build/CommBox.app/Contents/Info.plist'
-go build -o 'build/CommBox.app/Contents/MacOS/CommBox' ./desktop
+go build -trimpath -ldflags='-s -w' -o 'build/CommBox.app/Contents/MacOS/CommBox' ./desktop
 codesign --force --deep --sign - 'build/CommBox.app'
 ```
 
