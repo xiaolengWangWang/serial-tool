@@ -50,6 +50,8 @@ int RunLayoutChecks(id delegate, NSString *directory);
     BOOL _monitorPaused;
     BOOL _aiEnabled;
     NSTextField *_aiBaseURL, *_aiModel, *_aiKey;
+    NSButton *_aiEnabledButton;
+    NSTextField *_aiKeyHint;
 }
 - (void)appendText:(NSString *)text;
 - (void)appendMonitorText:(NSString *)text;
@@ -898,23 +900,29 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         _aiSettingsWindow.title = @"AI 增强分析";
         _aiSettingsWindow.releasedWhenClosed = NO;
         NSView *v = _aiSettingsWindow.contentView;
-        char *enabledRaw = GoGetAISetting((char *)"deepseek.enabled"); BOOL savedEnabled = [[NSString stringWithUTF8String:enabledRaw ?: ""] isEqualToString:@"true"]; free(enabledRaw);
-        char *keyRaw = GoGetAISetting((char *)"deepseek.api_key"); BOOL hasKey = strlen(keyRaw ?: "") > 0; free(keyRaw);
-        NSButton *enabled = [NSButton checkboxWithTitle:@"启用 DeepSeek（默认关闭）" target:nil action:nil];
-        enabled.frame = NSMakeRect(24, 198, 260, 26); enabled.state = savedEnabled ? NSControlStateValueOn : NSControlStateValueOff;
-        _aiEnabled = enabled.state == NSControlStateValueOn; enabled.target = self; enabled.action = @selector(aiEnabledChanged:); [v addSubview:enabled];
+        _aiEnabledButton = [NSButton checkboxWithTitle:@"启用 DeepSeek（默认关闭）" target:self action:@selector(aiEnabledChanged:)];
+        _aiEnabledButton.frame = NSMakeRect(24, 198, 260, 26); [v addSubview:_aiEnabledButton];
         [v addSubview:Label(@"API Base URL", NSMakeRect(24, 158, 100, 22))];
-        char *baseURL = GoGetAISetting((char *)"deepseek.base_url"); NSString *savedURL = [NSString stringWithUTF8String:baseURL ?: ""]; free(baseURL);
-        _aiBaseURL = [[NSTextField alloc] initWithFrame:NSMakeRect(130, 154, 320, 28)]; _aiBaseURL.stringValue = savedURL.length ? savedURL : @"https://api.deepseek.com"; [v addSubview:_aiBaseURL];
+        _aiBaseURL = [[NSTextField alloc] initWithFrame:NSMakeRect(130, 154, 320, 28)]; [v addSubview:_aiBaseURL];
         [v addSubview:Label(@"模型", NSMakeRect(24, 118, 100, 22))];
-        char *model = GoGetAISetting((char *)"deepseek.model"); NSString *savedModel = [NSString stringWithUTF8String:model ?: ""]; free(model);
-        _aiModel = [[NSTextField alloc] initWithFrame:NSMakeRect(130, 114, 320, 28)]; _aiModel.stringValue = savedModel.length ? savedModel : @"deepseek-chat"; [v addSubview:_aiModel];
+        _aiModel = [[NSTextField alloc] initWithFrame:NSMakeRect(130, 114, 320, 28)]; [v addSubview:_aiModel];
         [v addSubview:Label(@"API Key", NSMakeRect(24, 78, 100, 22))];
         _aiKey = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(130, 74, 320, 28)]; _aiKey.placeholderString = @"留空表示不修改已保存 Key"; [v addSubview:_aiKey];
-        NSTextField *hint = Label(hasKey ? @"Key 已保存到本地 SQLite；未启用时不会发起网络请求。" : @"Key 为空；保存后仅写入本地 SQLite，不会自动调用。", NSMakeRect(24, 42, 420, 22)); hint.textColor = NSColor.secondaryLabelColor; [v addSubview:hint];
+        _aiKeyHint = Label(@"", NSMakeRect(24, 42, 420, 22)); _aiKeyHint.textColor = NSColor.secondaryLabelColor; [v addSubview:_aiKeyHint];
         NSButton *save = [NSButton buttonWithTitle:@"保存" target:self action:@selector(saveAISettings:)]; save.frame = NSMakeRect(370, 12, 80, 28); [v addSubview:save];
         [_aiSettingsWindow center];
     }
+    // 每次打开都重新读取已保存设置，避免复用窗口时显示旧状态。
+    char *enabledRaw = GoGetAISetting((char *)"deepseek.enabled"); BOOL savedEnabled = [[NSString stringWithUTF8String:enabledRaw ?: ""] isEqualToString:@"true"]; free(enabledRaw);
+    char *keyRaw = GoGetAISetting((char *)"deepseek.api_key"); BOOL hasKey = strlen(keyRaw ?: "") > 0; free(keyRaw);
+    char *baseURLRaw = GoGetAISetting((char *)"deepseek.base_url"); NSString *savedURL = [NSString stringWithUTF8String:baseURLRaw ?: ""]; free(baseURLRaw);
+    char *modelRaw = GoGetAISetting((char *)"deepseek.model"); NSString *savedModel = [NSString stringWithUTF8String:modelRaw ?: ""]; free(modelRaw);
+    _aiEnabledButton.state = savedEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    _aiEnabled = savedEnabled;
+    _aiBaseURL.stringValue = savedURL.length ? savedURL : @"https://api.deepseek.com";
+    _aiModel.stringValue = savedModel.length ? savedModel : @"deepseek-chat";
+    _aiKey.stringValue = @"";
+    _aiKeyHint.stringValue = hasKey ? @"Key 已保存到本地 SQLite；未启用时不会发起网络请求。" : @"Key 为空；保存后仅写入本地 SQLite，不会自动调用。";
     [_aiSettingsWindow makeKeyAndOrderFront:nil];
 }
 
