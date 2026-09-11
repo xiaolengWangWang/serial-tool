@@ -167,12 +167,16 @@ func GoListAnalysisDatabases() *C.char {
 	return C.CString(string(data))
 }
 
-//export GoAnalyzeDatabase
-func GoAnalyzeDatabase(filename, start, end, direction *C.char, limit C.int) *C.char {
+//export GoAnalyzeDatabases
+func GoAnalyzeDatabases(filenamesJSON, start, end, direction *C.char, limit C.int) *C.char {
 	if engine == nil {
 		return C.CString("错误:数据库引擎尚未初始化")
 	}
-	report, err := wincore.AnalyzeDatabase(engine.DataDir(), C.GoString(filename), C.GoString(start), C.GoString(end), C.GoString(direction), int(limit))
+	var filenames []string
+	if err := json.Unmarshal([]byte(C.GoString(filenamesJSON)), &filenames); err != nil {
+		return C.CString("错误:数据库文件列表无效")
+	}
+	report, err := wincore.AnalyzeDatabases(engine.DataDir(), filenames, C.GoString(start), C.GoString(end), C.GoString(direction), int(limit))
 	if err != nil {
 		return C.CString("错误:" + err.Error())
 	}
@@ -275,23 +279,18 @@ func GoAnalyzePacket(transport, hex *C.char) *C.char {
 //export GoStats
 func GoStats() *C.char {
 	st := engine.Stats()
-	state := "● 未连接"
-	switch st.State {
-	case wincore.StateConnecting:
-		state = "● 正在连接..."
-	case wincore.StateConnected:
-		state = "● 已连接"
-	case wincore.StateReconnecting:
-		state = "● 重连中..."
-	case wincore.StateError:
-		state = "● 错误"
+	elapsed := "—"
+	if (st.State == wincore.StateConnected || st.State == wincore.StateReconnecting) && st.StartedAt.UnixNano() > 0 {
+		elapsed = wincore.FormatDuration(time.Since(st.StartedAt))
 	}
-	if st.State == wincore.StateDisconnected {
-		return C.CString(state)
-	}
-	return C.CString(fmt.Sprintf("%s | RX %s | TX %s | 运行 %s | 重连 %d | 错误 %d",
-		state, wincore.FormatBytes(st.RXBytes), wincore.FormatBytes(st.TXBytes),
-		wincore.FormatDuration(time.Since(st.StartedAt)), st.Reconnects, st.Errors))
+	data, _ := json.Marshal(map[string]any{
+		"state": st.State, "mode": st.Mode, "listening": st.Listening, "datagram": st.Datagram,
+		"endpoint": st.Endpoint, "peers": st.Peers, "peer_count": st.PeerCount,
+		"rx":      fmt.Sprintf("%d 条 · %s", st.RXCount, wincore.FormatBytes(st.RXBytes)),
+		"tx":      fmt.Sprintf("%d 条 · %s", st.TXCount, wincore.FormatBytes(st.TXBytes)),
+		"elapsed": elapsed, "reconnects": st.Reconnects, "errors": st.Errors,
+	})
+	return C.CString(string(data))
 }
 
 //export GoFavoriteNames

@@ -37,6 +37,10 @@ int RunLayoutChecks(id delegate, NSString *directory);
     NSBox *_horizontalSeparator;
     NSTabView *_dataView, *_sendView;
     NSView *_leftPane, *_centerPane, *_rightPane;
+    NSScrollView *_connectionScroll;
+    NSStackView *_connectionCards;
+    NSLayoutConstraint *_connectionWidth;
+    NSTextField *_connectionDetail, *_connectionMetrics, *_peerInfo;
     BOOL _analysisVisible;
     NSStackView *_filterRow;
     NSView *_endpointForm, *_serialForm, *_networkForm, *_addressForm, *_protocolField, *_portField;
@@ -54,6 +58,65 @@ int RunLayoutChecks(id delegate, NSString *directory);
 - (void)addPacketWithTS:(NSString *)ts dir:(NSString *)dir hex:(NSString *)hex ascii:(NSString *)ascii kind:(NSString *)kind len:(NSInteger)len;
 - (void)updatePacketStats;
 - (void)loopDone;
+@end
+
+// Draw with semantic AppKit colors so cards also follow dark appearance.
+@interface WorkspaceView : NSView
+@end
+@implementation WorkspaceView
+- (void)drawRect:(NSRect)rect { [NSColor.windowBackgroundColor setFill]; NSRectFill(self.bounds); }
+@end
+
+@interface ConnectionCard : NSView
+@end
+@implementation ConnectionCard
+- (void)drawRect:(NSRect)rect {
+    NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 0.5, 0.5) xRadius:10 yRadius:10];
+    [[NSColor.controlBackgroundColor blendedColorWithFraction:0.025 ofColor:NSColor.systemBlueColor] setFill]; [path fill];
+    [[NSColor.separatorColor colorWithAlphaComponent:0.3] setStroke]; [path stroke];
+}
+@end
+
+// A native table keeps file selection compact even with many rotated captures.
+@interface DatabaseFilePicker : NSScrollView <NSTableViewDataSource> {
+    NSArray *_filenames;
+    NSTableView *_table;
+}
+- (id)initWithFilenames:(NSArray *)filenames;
+- (NSArray *)selectedFilenames;
+@end
+
+@implementation DatabaseFilePicker
+- (NSInteger)tag { return 101; }
+- (id)initWithFilenames:(NSArray *)filenames {
+    self = [super initWithFrame:NSMakeRect(0, 0, 420, 104)];
+    if (self) {
+        _filenames = [filenames copy];
+        self.borderType = NSBezelBorder;
+        self.hasVerticalScroller = YES;
+        _table = [[NSTableView alloc] initWithFrame:self.contentView.bounds];
+        _table.allowsMultipleSelection = YES;
+        _table.allowsEmptySelection = YES;
+        _table.usesAlternatingRowBackgroundColors = YES;
+        _table.rowHeight = 22;
+        _table.headerView = nil;
+        _table.columnAutoresizingStyle = NSTableViewLastColumnOnlyAutoresizingStyle;
+        NSTableColumn *column = [[[NSTableColumn alloc] initWithIdentifier:@"filename"] autorelease];
+        column.width = 400;
+        [_table addTableColumn:column];
+        _table.dataSource = self;
+        [_table setAccessibilityLabel:@"数据库文件，支持多选"];
+        self.documentView = _table;
+        if (filenames.count) [_table selectRowIndexes:[NSIndexSet indexSetWithIndex:filenames.count - 1] byExtendingSelection:NO];
+    }
+    return self;
+}
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)table { return _filenames.count; }
+- (id)tableView:(NSTableView *)table objectValueForTableColumn:(NSTableColumn *)column row:(NSInteger)row { return _filenames[row]; }
+- (NSArray *)selectedFilenames {
+    return [_filenames objectsAtIndexes:_table.selectedRowIndexes];
+}
+- (void)dealloc { _table.dataSource = nil; [_table release]; [_filenames release]; [super dealloc]; }
 @end
 
 static NSTextField *Label(NSString *text, NSRect frame) {
@@ -120,6 +183,33 @@ static NSStackView *Field(NSTextField *label, NSView *input) {
     return Column(@[label, input], 4);
 }
 
+static NSView *Card(NSString *title, NSArray<NSView *> *items) {
+    NSTextField *heading = Label(title, NSZeroRect);
+    heading.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
+    heading.textColor = NSColor.systemBlueColor;
+    NSStackView *content = Column([@[heading] arrayByAddingObjectsFromArray:items], 10);
+    NSView *card = [[[ConnectionCard alloc] initWithFrame:NSZeroRect] autorelease];
+    content.translatesAutoresizingMaskIntoConstraints = NO;
+    [card addSubview:content];
+    [NSLayoutConstraint activateConstraints:@[
+        [content.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:14],
+        [content.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-14],
+        [content.topAnchor constraintEqualToAnchor:card.topAnchor constant:14],
+        [content.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-14]
+    ]];
+    return card;
+}
+
+static NSTextField *StatusLines(NSInteger lines) {
+    NSTextField *label = Label(@"", NSZeroRect);
+    label.font = [NSFont systemFontOfSize:12];
+    label.usesSingleLineMode = NO;
+    label.maximumNumberOfLines = lines;
+    label.lineBreakMode = NSLineBreakByTruncatingTail;
+    [label.heightAnchor constraintEqualToConstant:lines * 18].active = YES;
+    return label;
+}
+
 static NSStackView *FormPair(NSView *first, NSView *second) {
     NSStackView *row = Row(@[first, second]);
     row.alignment = NSLayoutAttributeTop;
@@ -161,15 +251,12 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [_window center];
     // Build against one stable content coordinate system; attaching the toolbar
     // must not resize only part of the controls during construction.
-    NSView *view = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 1280, 700)] autorelease];
+    NSView *view = [[[WorkspaceView alloc] initWithFrame:NSMakeRect(0, 0, 1280, 700)] autorelease];
     view.wantsLayer = YES;
-    view.layer.backgroundColor = [NSColor windowBackgroundColor].CGColor;
 
     // 发送区底色（比窗口背景略深，区分数据区）
-    NSView *sendBg = [[[NSView alloc] initWithFrame:NSMakeRect(310, 0, 710, 272)] autorelease];
+    NSView *sendBg = [[[ConnectionCard alloc] initWithFrame:NSMakeRect(310, 0, 710, 272)] autorelease];
     _sendBackground = sendBg;
-    sendBg.wantsLayer = YES;
-    sendBg.layer.backgroundColor = [[NSColor colorWithWhite:0.94 alpha:1.0] CGColor];
     sendBg.autoresizingMask = NSViewMinXMargin;
     [view addSubview:sendBg];
     // 竖分隔线：左面板 | 右内容
@@ -413,6 +500,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSTableColumn *tc7 = [[[NSTableColumn alloc] initWithIdentifier:@"response"] autorelease];
     tc7.title = @"响应时间"; tc7.width = 80; [_dataTable addTableColumn:tc7];
     dataScroll.documentView = _dataTable;
+    _dataTable.rowHeight = 22;
     NSMenu *tableMenu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
     [tableMenu addItemWithTitle:@"复制 HEX" action:@selector(copyPacketHex:) keyEquivalent:@""];
     [tableMenu addItemWithTitle:@"复制 ASCII" action:@selector(copyPacketASCII:) keyEquivalent:@""];
@@ -485,6 +573,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _send.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
     _send.autoresizingMask = NSViewWidthSizable; sendScroll.documentView = _send; [sendDataContainer addSubview:sendScroll];
     NSButton *sendButton = [NSButton buttonWithTitle:@"发送一次" target:self action:@selector(send:)];
+    sendButton.bezelColor = NSColor.systemBlueColor;
     sendButton.frame = NSMakeRect(605, 68, 95, 54); sendButton.autoresizingMask = NSViewMinXMargin; [sendDataContainer addSubview:sendButton];
     _quickTimerButton = [[NSButton buttonWithTitle:@"开始定时" target:self action:@selector(toggleTimer:)] retain];
     _quickTimerButton.frame = NSMakeRect(605, 8, 95, 54); _quickTimerButton.autoresizingMask = NSViewMinXMargin; [sendDataContainer addSubview:_quickTimerButton];
@@ -614,12 +703,6 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _leftPane.autoresizingMask = NSViewMinYMargin;
     _centerPane.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _rightPane.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
-    for (NSView *pane in @[_leftPane, _centerPane, _rightPane]) {
-        pane.wantsLayer = YES;
-        pane.layer.backgroundColor = [NSColor windowBackgroundColor].CGColor;
-    }
-    _leftPane.layer.backgroundColor = [NSColor controlBackgroundColor].CGColor;
-    _rightPane.layer.backgroundColor = [NSColor controlBackgroundColor].CGColor;
     [view addSubview:_leftPane]; [view addSubview:_centerPane]; [view addSubview:_rightPane];
     NSArray *legacyViews = [[view.subviews copy] autorelease];
     for (NSView *child in legacyViews) {
@@ -646,34 +729,46 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _networkForm = FormPair(_protocolField, Field(_roleLabel, _role));
     _portField = Field(_portLabel, _port);
     _addressForm = FormPair(Field(_ipLabel, _ip), _portField);
-    NSTextField *connectionTitle = Label(@"连接配置", NSZeroRect);
-    connectionTitle.font = [NSFont systemFontOfSize:15 weight:NSFontWeightSemibold];
-    NSStackView *form = Column(@[connectionTitle, Field(modeLabel, _mode), _endpointForm, _serialForm, _networkForm, _addressForm], 16);
-    form.translatesAutoresizingMaskIntoConstraints = NO;
-    [_leftPane addSubview:form];
-    NSTextField *stateTitle = Label(@"连接状态", NSZeroRect);
-    stateTitle.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
     _status.alignment = NSTextAlignmentLeft;
-    _status.font = [NSFont systemFontOfSize:12];
-    _status.lineBreakMode = NSLineBreakByWordWrapping;
-    _connect.bezelColor = NSColor.controlAccentColor;
+    _status.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+    _status.usesSingleLineMode = YES;
+    _status.maximumNumberOfLines = 1;
+    _status.lineBreakMode = NSLineBreakByTruncatingTail;
+    [_status.heightAnchor constraintEqualToConstant:20].active = YES;
+    _connect.bezelColor = NSColor.systemBlueColor;
+    _connect.controlSize = NSControlSizeLarge;
+    _connectionDetail = StatusLines(2);
+    _connectionDetail.textColor = NSColor.secondaryLabelColor;
+    _connectionMetrics = StatusLines(4);
+    _connectionMetrics.font = [NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightRegular];
+    _peerInfo = StatusLines(4);
     addressHint.stringValue = @"选择通信模式，配置参数后连接";
     addressHint.alignment = NSTextAlignmentLeft;
-    NSStackView *connectionActions = Column(@[stateTitle, _status, _connect, _history, addressHint], 10);
-    connectionActions.translatesAutoresizingMaskIntoConstraints = NO;
-    [_leftPane addSubview:connectionActions];
+    _connectionCards = Column(@[
+        Card(@"连接配置", @[Field(modeLabel, _mode), _endpointForm, _serialForm, _networkForm, _addressForm, _connect]),
+        Card(@"连接状态", @[_status, _connectionDetail, _connectionMetrics]),
+        Card(@"对端信息", @[_peerInfo]),
+        Card(@"快捷操作", @[_history, addressHint])
+    ], 10);
+    _connectionScroll = [[[NSScrollView alloc] initWithFrame:_leftPane.bounds] autorelease];
+    _connectionScroll.hasVerticalScroller = YES;
+    _connectionScroll.automaticallyAdjustsContentInsets = NO;
+    _connectionScroll.drawsBackground = NO;
+    NSView *document = [[[NSView alloc] initWithFrame:_leftPane.bounds] autorelease];
+    document.autoresizesSubviews = NO;
+    _connectionCards.translatesAutoresizingMaskIntoConstraints = NO;
+    [document addSubview:_connectionCards];
+    _connectionWidth = [_connectionCards.widthAnchor constraintEqualToConstant:290];
     [NSLayoutConstraint activateConstraints:@[
-        [form.leadingAnchor constraintEqualToAnchor:_leftPane.leadingAnchor constant:20],
-        [form.trailingAnchor constraintEqualToAnchor:_leftPane.trailingAnchor constant:-20],
-        [form.topAnchor constraintEqualToAnchor:_leftPane.topAnchor constant:20],
-        [connectionActions.leadingAnchor constraintEqualToAnchor:form.leadingAnchor],
-        [connectionActions.trailingAnchor constraintEqualToAnchor:form.trailingAnchor],
-        [connectionActions.topAnchor constraintEqualToAnchor:form.bottomAnchor constant:24],
-        [_status.heightAnchor constraintEqualToConstant:50]
+        _connectionWidth,
+        [_connectionCards.leadingAnchor constraintEqualToAnchor:document.leadingAnchor constant:10],
+        [_connectionCards.topAnchor constraintEqualToAnchor:document.topAnchor constant:10]
     ]];
+    _connectionScroll.documentView = document;
+    [_leftPane addSubview:_connectionScroll];
     _window.contentView = view;
     view.autoresizesSubviews = NO;
-    [_window setContentSize:NSMakeSize(1280, 700)];
+    [_window setContentSize:NSMakeSize(1280, 820)];
     PinRow(_filterRow, _centerPane, 60);
     [self layoutMainPanes];
 
@@ -684,6 +779,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [_window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
     [self modeChanged:nil];
+    [self refreshStats:nil];
     [self startStatsTimer];
     [self reloadHistory];
     [self refreshSendHistory];
@@ -715,6 +811,20 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _sendBackground.frame = NSMakeRect(0, 0, centerWidth, 200);
     _horizontalSeparator.frame = NSMakeRect(0, 200, centerWidth, 1);
     _analysisSidebar.frame = NSMakeRect(20, 20, 215, height - 40);
+    [self layoutConnectionPane];
+}
+
+- (void)layoutConnectionPane {
+    if (!_connectionScroll) return;
+    _connectionScroll.frame = _leftPane.bounds;
+    CGFloat width = _connectionScroll.contentSize.width;
+    _connectionWidth.constant = width - 20;
+    [_connectionScroll.documentView layoutSubtreeIfNeeded];
+    CGFloat cardHeight = _connectionCards.fittingSize.height;
+    CGFloat height = MAX(_connectionScroll.contentSize.height, cardHeight + 20);
+    _connectionScroll.documentView.frame = NSMakeRect(0, 0, width, height);
+    [_connectionScroll.documentView layoutSubtreeIfNeeded];
+    [_connectionScroll.documentView scrollPoint:NSMakePoint(0, height)];
 }
 
 - (NSArray *)toolbarAllowedItemIdentifiers:(NSToolbar *)toolbar {
@@ -873,13 +983,13 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 - (NSAlert *)databaseAnalysisDialog:(NSArray *)files {
     NSAlert *dialog = [[[NSAlert alloc] init] autorelease];
     dialog.messageText = @"分析数据库中的通信数据";
-    dialog.informativeText = @"只读查询本地捕获文件，不上传数据。统计包含筛选范围内全部记录，详细解析最多 20 条完整报文；超过记录或 8 MiB 上限会明确提示。";
+    dialog.informativeText = @"合并只读查询所选捕获文件，不上传数据。最近条数为所有文件合计上限，最高 100 万；负载最多 8 MiB，详细展开最多 20 条，省略数量会明确提示。";
     [dialog addButtonWithTitle:@"开始本地分析"];
     [dialog addButtonWithTitle:@"取消"];
-    NSPopUpButton *database = [[[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO] autorelease];
-    [database addItemsWithTitles:files];
-    [database selectItemAtIndex:files.count - 1];
-    database.tag = 101;
+    DatabaseFilePicker *database = [[[DatabaseFilePicker alloc] initWithFilenames:files] autorelease];
+    [database.heightAnchor constraintEqualToConstant:104].active = YES;
+    NSButton *allFiles = [NSButton buttonWithTitle:@"全选文件" target:database.documentView action:@selector(selectAll:)];
+    NSButton *noFiles = [NSButton buttonWithTitle:@"取消选择" target:database.documentView action:@selector(deselectAll:)];
     NSDatePicker *start = [[[NSDatePicker alloc] initWithFrame:NSZeroRect] autorelease];
     NSDatePicker *end = [[[NSDatePicker alloc] initWithFrame:NSZeroRect] autorelease];
     for (NSDatePicker *picker in @[start, end]) {
@@ -892,14 +1002,21 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSPopUpButton *direction = [[[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO] autorelease];
     [direction addItemsWithTitles:@[@"全部方向", @"RX", @"TX"]]; direction.tag = 104;
     NSPopUpButton *count = [[[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO] autorelease];
-    [count addItemsWithTitles:@[@"最近 100 条", @"最近 500 条", @"最近 2000 条"]]; count.tag = 105;
+    for (NSNumber *limit in @[@100, @500, @2000, @10000, @100000, @1000000]) {
+        [count addItemWithTitle:[NSString stringWithFormat:@"最近 %@ 条", limit]];
+        count.lastItem.representedObject = limit;
+    }
+    count.tag = 105;
     NSStackView *form = Column(@[
-        Field(Label(@"数据库文件", NSZeroRect), database),
+        Field(Label(@"数据库文件（⌘ / Shift 多选）", NSZeroRect), database),
+        Row(@[allFiles, noFiles]),
         Field(Label(@"开始时间（本地时间）", NSZeroRect), start),
         Field(Label(@"结束时间（本地时间）", NSZeroRect), end),
-        FormPair(Field(Label(@"方向", NSZeroRect), direction), Field(Label(@"详细分析候选范围", NSZeroRect), count))
+        FormPair(Field(Label(@"方向", NSZeroRect), direction), Field(Label(@"最近条数（所选文件合计）", NSZeroRect), count))
     ], 12);
     [form.widthAnchor constraintEqualToConstant:420].active = YES;
+    // NSAlert sizes its accessory host from the frame before running Auto Layout.
+    form.frame = NSMakeRect(0, 0, 420, form.fittingSize.height);
     dialog.accessoryView = form;
     return dialog;
 }
@@ -919,11 +1036,13 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         NSDatePicker *start = (NSDatePicker *)[form viewWithTag:102];
         NSDatePicker *end = (NSDatePicker *)[form viewWithTag:103];
         if ([start.dateValue compare:end.dateValue] == NSOrderedDescending) { [self alert:@"开始时间不能晚于结束时间"]; return; }
-        NSString *filename = [(NSPopUpButton *)[form viewWithTag:101] titleOfSelectedItem];
+        NSArray *filenames = [(DatabaseFilePicker *)[form viewWithTag:101] selectedFilenames];
+        if (!filenames.count) { [self alert:@"请至少选择一个数据库文件"]; return; }
+        NSData *fileData = [NSJSONSerialization dataWithJSONObject:filenames options:0 error:nil];
+        NSString *filesJSON = [[[NSString alloc] initWithData:fileData encoding:NSUTF8StringEncoding] autorelease];
         NSInteger directionIndex = [(NSPopUpButton *)[form viewWithTag:104] indexOfSelectedItem];
-        NSInteger countIndex = [(NSPopUpButton *)[form viewWithTag:105] indexOfSelectedItem];
         NSString *direction = @[@"ALL", @"RX", @"TX"][directionIndex];
-        int limit = [@[@100, @500, @2000][countIndex] intValue];
+        int limit = [[(NSPopUpButton *)[form viewWithTag:105] selectedItem].representedObject intValue];
         NSISO8601DateFormatter *formatter = [[[NSISO8601DateFormatter alloc] init] autorelease];
         NSString *from = [formatter stringFromDate:start.dateValue];
         NSString *to = [formatter stringFromDate:end.dateValue];
@@ -931,7 +1050,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         [self openAnalysisCenter:nil];
         _analysisResult.string = @"正在只读查询数据库并进行本地分析……\n通信与定时发送不受影响。";
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-            char *report = GoAnalyzeDatabase((char *)filename.UTF8String, (char *)from.UTF8String, (char *)to.UTF8String, (char *)direction.UTF8String, limit);
+            char *report = GoAnalyzeDatabases((char *)filesJSON.UTF8String, (char *)from.UTF8String, (char *)to.UTF8String, (char *)direction.UTF8String, limit);
             NSString *text = [[NSString alloc] initWithUTF8String:report ?: "数据库分析失败"]; free(report);
             dispatch_async(dispatch_get_main_queue(), ^{
                 _databaseBusy = NO;
@@ -1025,7 +1144,43 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     char *raw = GoStats();
     NSString *text = [NSString stringWithUTF8String:raw ?: ""];
     free(raw);
-    if (text.length) _status.stringValue = text;
+    NSDictionary *stats = [NSJSONSerialization JSONObjectWithData:[text dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if ([stats isKindOfClass:NSDictionary.class]) [self applyConnectionStats:stats];
+}
+
+- (void)applyConnectionStats:(NSDictionary *)stats {
+    NSInteger state = [stats[@"state"] integerValue];
+    BOOL ready = state == 2, listening = [stats[@"listening"] boolValue];
+    NSString *mode = stats[@"mode"] ?: @"";
+    BOOL datagram = [stats[@"datagram"] boolValue] || [mode containsString:@"UDP"];
+    NSString *title = @"● 未连接";
+    NSColor *color = NSColor.secondaryLabelColor;
+    if (ready) {
+        title = listening ? @"● 监听中" : (datagram || [mode containsString:@"HTTP"] ? @"● 已就绪" : @"● 已连接");
+        color = NSColor.systemGreenColor;
+    } else if (state == 1 || state == 3) {
+        title = state == 1 ? @"● 正在连接…" : @"● 正在重连…"; color = NSColor.systemOrangeColor;
+    } else if (state == 5) { title = @"● 连接失败"; color = NSColor.systemRedColor; }
+    else if (state == 4) { title = @"● 正在断开…"; }
+    [self setStatus:title color:color];
+    NSString *endpoint = stats[@"endpoint"] ?: @"";
+    if (ready && ([mode containsString:@"串口"] || [mode isEqualToString:@"Serial"])) {
+        endpoint = [NSString stringWithFormat:@"%@ %@", _ports.stringValue, endpoint];
+        mode = [NSString stringWithFormat:@"%@ · %@ / %@ / %@ / %@", mode, _baud.stringValue, _data.stringValue, _parity.stringValue, _stop.stringValue];
+    }
+    _connectionDetail.stringValue = ready || state == 3 ? [NSString stringWithFormat:@"%@\n%@", mode, endpoint] : @"配置参数后建立连接\n统计为本次应用运行累计";
+    _connectionDetail.toolTip = _connectionDetail.stringValue;
+    NSString *elapsed = ready || state == 3 ? (stats[@"elapsed"] ?: @"—") : @"—";
+    _connectionMetrics.stringValue = [NSString stringWithFormat:@"累计 RX  %@\n累计 TX  %@\n运行时间  %@\n重连  %@    错误  %@", stats[@"rx"] ?: @"0 条 · 0 B", stats[@"tx"] ?: @"0 条 · 0 B", elapsed, stats[@"reconnects"] ?: @0, stats[@"errors"] ?: @0];
+    _connectionMetrics.toolTip = _connectionMetrics.stringValue;
+    NSArray *peers = [stats[@"peers"] isKindOfClass:NSArray.class] ? stats[@"peers"] : @[];
+    NSInteger count = [stats[@"peer_count"] integerValue];
+    if (ready && count) {
+        _peerInfo.stringValue = [NSString stringWithFormat:@"%ld 个 TCP 对端%@\n%@", (long)count, count > 3 ? @"（显示前 3 个）" : @"", [peers componentsJoinedByString:@"\n"]];
+    } else {
+        _peerInfo.stringValue = !ready ? @"尚未建立连接" : (listening ? @"等待客户端连接\n监听已启动，尚无客户端" : (datagram ? @"UDP 为无连接通信\n就绪不代表对端在线" : ([mode containsString:@"HTTP"] ? @"等待发送 HTTP 请求\n就绪不代表服务可达" : @"串口设备已打开")));
+    }
+    _peerInfo.toolTip = _peerInfo.stringValue;
 }
 
 - (void)refreshSendHistory {
@@ -1146,6 +1301,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _mode.enabled = YES;
     [self setStatus:@"● 未连接" color:NSColor.secondaryLabelColor];
     [self modeChanged:nil];
+    [self refreshStats:nil];
 }
 
 // 新建实例:用 open -n 强制再启动一个进程(多开)。
@@ -1207,7 +1363,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     else err = GoConnect((char *)endpoint.UTF8String, _baud.intValue, _data.intValue, _stop.intValue,
                          (char *)_parity.stringValue.UTF8String, hex);
     NSString *message = [NSString stringWithUTF8String:err ?: ""]; free(err);
-    if (message.length) { [self alert:message]; return; }
+    if (message.length) { [self refreshStats:nil]; [self alert:message]; return; }
 
     _connected = YES; _mode.enabled = NO;
     _ports.enabled = NO; _refresh.enabled = NO; _ip.enabled = NO; _port.enabled = NO;
@@ -1215,14 +1371,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     for (NSControl *control in _serialControls) control.enabled = NO;
     _connect.title = server ? @"停止监听" : @"断开";
     NSString *modeDesc = net ? [NSString stringWithFormat:@"%@ %@", mode, _role.titleOfSelectedItem] : mode;
-    NSString *state = server ? @"● 监听中" : @"● 已连接";
-    NSString *detail = bridge ? [NSString stringWithFormat:@"%@ ↔ %@", serialName, endpoint]
-                              : [NSString stringWithFormat:@"%@ · %@", modeDesc, endpoint];
-    NSString *params = (serial || bridge)
-        ? [NSString stringWithFormat:@"%@ %@ %@%@ · ", _baud.stringValue, _data.stringValue, _parity.stringValue, _stop.stringValue]
-        : @"";
-    [self setStatus:[NSString stringWithFormat:@"%@\n%@\n%@开始 %@", state, detail, params, [self nowTime]]
-              color:NSColor.systemGreenColor];
+    [self refreshStats:nil];
     if (bridge)
         [self appendText:[NSString stringWithFormat:@"[串口服务器已启动：%@ ↔ %@ %@ %@]\n", serialName,
                           _bridgeProtocol.titleOfSelectedItem, _role.titleOfSelectedItem, endpoint]];
@@ -1357,6 +1506,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _ports.enabled = en; _refresh.enabled = en; _ip.enabled = en; _port.enabled = en;
     _role.enabled = en; _bridgeProtocol.enabled = en;
     for (NSControl *c in _serialControls) c.enabled = en;
+    [self layoutConnectionPane];
 }
 
 - (NSString *)localIP {

@@ -2,6 +2,7 @@ package wincore
 
 import (
 	"fmt"
+	"sort"
 	"sync/atomic"
 	"time"
 )
@@ -46,6 +47,12 @@ const (
 
 // Stats 是通信统计快照。
 type Stats struct {
+	Mode       Mode
+	Listening  bool
+	Datagram   bool
+	Endpoint   string
+	PeerCount  int
+	Peers      []string
 	State      ConnState
 	StartedAt  time.Time
 	RXBytes    uint64
@@ -58,7 +65,10 @@ type Stats struct {
 
 // Stats 返回当前连接状态与通信统计。
 func (e *Engine) Stats() Stats {
-	return Stats{
+	e.Lock()
+	defer e.Unlock()
+	s := Stats{
+		Mode:       e.mode,
 		State:      ConnState(atomic.LoadInt32(&e.state)),
 		StartedAt:  time.Unix(0, atomic.LoadInt64(&e.startedAt)),
 		RXBytes:    atomic.LoadUint64(&e.rxBytes),
@@ -68,4 +78,33 @@ func (e *Engine) Stats() Stats {
 		Reconnects: atomic.LoadUint64(&e.reconnects),
 		Errors:     atomic.LoadUint64(&e.errCount),
 	}
+	if s.State == StateDisconnected || s.State == StateError {
+		return s
+	}
+	if e.listener != nil {
+		s.Listening = true
+		s.Endpoint = e.listener.Addr().String()
+	}
+	for client := range e.clients {
+		s.Peers = append(s.Peers, client.RemoteAddr().String())
+	}
+	sort.Strings(s.Peers)
+	s.PeerCount = len(s.Peers)
+	if s.Endpoint == "" && len(s.Peers) > 0 {
+		s.Endpoint = s.Peers[0]
+	}
+	if len(s.Peers) > 3 {
+		s.Peers = s.Peers[:3]
+	}
+	if e.udp != nil {
+		s.Datagram = true
+		s.Endpoint = e.udp.LocalAddr().String()
+		if e.udpDialed && e.udpPeer != nil {
+			s.Endpoint = e.udpPeer.String()
+		}
+	}
+	if e.httpURL != "" {
+		s.Endpoint = e.httpURL
+	}
+	return s
 }

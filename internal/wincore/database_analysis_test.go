@@ -112,7 +112,7 @@ func TestDatabaseAnalysisEmptyAndInvalid(t *testing.T) {
 		{analysisStart, analysisEnd, "rx", 100},
 		{analysisStart, analysisEnd, "ALL", 0},
 		{analysisStart, analysisEnd, "ALL", -1},
-		{analysisStart, analysisEnd, "ALL", 2001},
+		{analysisStart, analysisEnd, "ALL", 1000001},
 	} {
 		if _, err := AnalyzeDatabase(dir, name, tc.start, tc.end, tc.direction, tc.limit); err == nil {
 			t.Fatalf("accepted invalid options: %+v", tc)
@@ -139,7 +139,7 @@ func TestDatabaseAnalysisSelectionCaps(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireAnalysisContains(t, report, "实际选中：23 条", "实际详细解析：20 条", "选中但未详细解析：3 条")
-	if strings.Count(report, "UDP 报文分析") != 20 || strings.Count(report, "记录 #") != 23 {
+	if strings.Count(report, "UDP 报文分析") != 20 || strings.Count(report, "记录 #") != 20 {
 		t.Fatal(report)
 	}
 	// Length is checked in SQLite before fetching any oversized raw BLOB.
@@ -159,6 +159,32 @@ func TestDatabaseAnalysisSelectionCaps(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireAnalysisContains(t, report, "实际选中：1 条", "选中负载：8388608 字节", "因字节上限省略：23 条", "长度：8388608 字节")
+}
+
+func TestDatabaseAnalysisMillionRecordLimit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("百万条压力测试使用非 short 模式单独验证")
+	}
+	dir, name, db := analysisTestDB(t)
+	// One more than the requested ceiling verifies newest selection, not just
+	// acceptance of the option. Small packets stay below the payload cap.
+	_, err := db.Exec(`WITH RECURSIVE seq(n) AS (
+        VALUES(1) UNION ALL SELECT n+1 FROM seq WHERE n < 1000001
+    ) INSERT INTO received_data(session_id, received_at, source, size_bytes, raw_data)
+      SELECT 2, ?, '发送', 1, x'FF' FROM seq`, analysisStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := AnalyzeDatabase(dir, name, analysisStart, analysisEnd, "ALL", 1000000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireAnalysisContains(t, report, "筛选总计：1000001 条", "实际选中：1000000 条；未选中：1 条",
+		"选中负载：1000000 字节", "实际详细解析：20 条", "选中但未详细解析：999980 条",
+		"记录 #2 |", "记录 #21 |")
+	if strings.Contains(report, "记录 #1 |") || strings.Contains(report, "记录 #22 |") || strings.Count(report, "记录 #") != 20 || len(report) > 32768 {
+		t.Fatal("large query did not keep the report bounded to the oldest 20 selected records")
+	}
 }
 
 func TestDatabaseAnalysisFilesAndReadOnly(t *testing.T) {
@@ -277,4 +303,47 @@ func TestDatabaseAnalysisVirtualSerialDirections(t *testing.T) {
 			requireAnalysisContains(t, report, "记录 #2 | "+analysisStart+" | RX |")
 		}
 	}
+}
+
+func TestDatabaseAnalysisMultipleFiles(t *testing.T) {
+	dir, first, a := analysisTestDB(t)
+	otherDir, otherName, b := analysisTestDB(t)
+	insertAnalysisPacket(t, a, 2, analysisStart, "发送", []byte{0xff})
+	insertAnalysisPacket(t, a, 2, analysisEnd, "接收", []byte{0xfe})
+	insertAnalysisPacket(t, b, 2, "2026-09-10T08:00:01+08:00", "发送", []byte{0xfd})
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second := "serial-data-second.sqlite3"
+	if err := os.Rename(filepath.Join(otherDir, otherName), filepath.Join(dir, second)); err != nil {
+		t.Fatal(err)
+	}
+	report, err := AnalyzeDatabases(dir, []string{first, second, first}, analysisStart, analysisEnd, "ALL", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireAnalysisContains(t, report, "数据库文件：2 个", "筛选总计：3 条；RX：1 条 / 1 字节；TX：2 条 / 2 字节", "实际选中：2 条；未选中：1 条",
+		"来源文件："+second+"\n记录 #1 |", "来源文件："+first+"\n记录 #2 |")
+	if strings.Contains(report, "首字节：0xFF") || strings.Index(report, "来源文件："+second) > strings.Index(report, "来源文件："+first) {
+		t.Fatal("not globally newest two in chronological order")
+	}
+	report, err = AnalyzeDatabases(dir, []string{first, second}, analysisStart, analysisEnd, "TX", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireAnalysisContains(t, report, "筛选总计：2 条；RX：0 条 / 0 字节；TX：2 条 / 2 字节", "实际选中：1 条；未选中：1 条", "首字节：0xFD")
+	for _, names := range [][]string{nil, {}, {first, "serial-data-missing.sqlite3"}, {first, "../" + first}} {
+		if _, err := AnalyzeDatabases(dir, names, analysisStart, analysisEnd, "ALL", 1000000); err == nil {
+			t.Fatalf("invalid selection accepted: %v", names)
+		}
+	}
+	// The shared byte ceiling must not restart at a file boundary.
+	if _, err := a.Exec(`UPDATE received_data SET raw_data=zeroblob(?), size_bytes=? WHERE id=2`, analysisByteLimit, analysisByteLimit); err != nil {
+		t.Fatal(err)
+	}
+	report, err = AnalyzeDatabases(dir, []string{first, second}, analysisStart, analysisEnd, "ALL", 1000000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireAnalysisContains(t, report, "实际选中：1 条；未选中：2 条", "选中负载：8388608 字节", "因字节上限省略：2 条")
 }

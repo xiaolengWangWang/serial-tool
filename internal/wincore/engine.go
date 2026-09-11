@@ -354,9 +354,15 @@ func (e *Engine) HTTPRequest(spec string) error {
 	return nil
 }
 
-func (e *Engine) Connect(cfg Config) error {
+func (e *Engine) Connect(cfg Config) (connectErr error) {
 	e.Disconnect()
 	atomic.StoreInt32(&e.state, int32(StateConnecting))
+	defer func() {
+		if connectErr != nil {
+			atomic.StoreInt32(&e.state, int32(StateError))
+			atomic.AddUint64(&e.errCount, 1)
+		}
+	}()
 	if cfg.Mode == ModeHTTPClient {
 		return e.connectHTTP(cfg)
 	}
