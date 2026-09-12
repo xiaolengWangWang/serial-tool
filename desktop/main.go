@@ -46,11 +46,16 @@ func main() {
 	if err != nil {
 		return
 	}
-	engine, err = wincore.New(filepath.Join(configDir, "CommBox", "data"), onData, onLog)
+	dataDir := os.Getenv("COMMBOX_DATA_DIR")
+	if dataDir == "" {
+		dataDir = filepath.Join(configDir, "CommBox", "data")
+	}
+	engine, err = wincore.New(dataDir, nil, onLog)
 	if err != nil {
 		return
 	}
 	engine.SetOnClosed(onClosed)
+	engine.SetOnPacket(onPacket)
 	defer engine.Close()
 	C.RunApp()
 }
@@ -86,35 +91,70 @@ func packetDisplayFields(ts, dir string, data []byte) packetDisplay {
 	return packetDisplay{ts: ts, dir: dir, hex: fmt.Sprintf("% X", data), ascii: toASCII(data), kind: kind, len: len(data)}
 }
 
-func addPacket(dir string, data []byte) {
-	p := packetDisplayFields(timestamp(), dir, data)
-	ts := C.CString(p.ts)
-	cdir := C.CString(p.dir)
-	hex := C.CString(p.hex)
-	ascii := C.CString(p.ascii)
-	kind := C.CString(p.kind)
-	C.UIAddPacket(ts, cdir, hex, ascii, kind, C.int(p.len))
-	C.free(unsafe.Pointer(ts))
-	C.free(unsafe.Pointer(cdir))
-	C.free(unsafe.Pointer(hex))
-	C.free(unsafe.Pointer(ascii))
-	C.free(unsafe.Pointer(kind))
+func packetModel(packet wincore.Packet) map[string]any {
+	p := packetDisplayFields(packet.Timestamp.Local().Format("15:04:05.000"), packet.Direction, packet.Data)
+	return map[string]any{"id": packet.ID, "session_key": packet.SessionKey,
+		"ts": p.ts, "dir": p.dir, "hex": p.hex, "ascii": p.ascii, "kind": p.kind,
+		"rawLen": p.len, "len": fmt.Sprintf("%d B", p.len), "epoch": float64(packet.Timestamp.UnixNano()) / 1e9,
+		"protocol": packet.Transport, "source": packet.Source, "connection_id": packet.ConnectionID,
+		"endpoint": packet.Endpoint, "leg": packet.Leg, "status": "未分析", "response": "—"}
 }
 
-func onData(_ string, data []byte) {
-	addPacket("RX", data)
-	monLine := C.CString(fmt.Sprintf("[%s 接收] % X\n", timestamp(), data))
-	C.UIMonitorAppend(monLine)
-	C.free(unsafe.Pointer(monLine))
+func onPacket(packet wincore.Packet) {
+	data, _ := json.Marshal(packetModel(packet))
+	raw := C.CString(string(data))
+	C.UIAddPacketJSON(raw)
+	C.free(unsafe.Pointer(raw))
+	line := C.CString(fmt.Sprintf("[%s %s %s %s] % X\n", packet.Timestamp.Local().Format("15:04:05.000"), packet.Direction, packet.ConnectionID, packet.Source, packet.Data))
+	C.UIMonitorAppend(line)
+	C.free(unsafe.Pointer(line))
 }
 
-// logSent 把成功发送的数据加入报文表格。
-func logSent(input string, asHex bool, eol string) {
-	data, err := wincore.ParseData(input, asHex, eol)
-	if err != nil {
-		return
+//export GoConnections
+func GoConnections() *C.char {
+	data, _ := json.Marshal(append(engine.Connections(), engine.UDPPeers()...))
+	return C.CString(string(data))
+}
+
+//export GoDisconnectTarget
+func GoDisconnectTarget(id *C.char) *C.char {
+	if err := engine.DisconnectConnection(C.GoString(id)); err != nil {
+		return C.CString(err.Error())
 	}
-	addPacket("TX", data)
+	return C.CString("")
+}
+
+//export GoSendTarget
+func GoSendTarget(id, address, input *C.char, asHex C.int, eol *C.char) *C.char {
+	data, err := wincore.ParseData(C.GoString(input), asHex != 0, C.GoString(eol))
+	if err == nil {
+		if C.GoString(address) != "" {
+			err = engine.SendToUDP(C.GoString(address), data)
+		} else {
+			err = engine.SendToConnection(C.GoString(id), data)
+		}
+	}
+	if err != nil {
+		return C.CString(err.Error())
+	}
+	return C.CString("")
+}
+
+//export GoConnectionPolicy
+func GoConnectionPolicy(maximum C.int, latest C.int) {
+	engine.SetMaxConnections(int(maximum))
+	engine.SetBridgeReplyLatest(latest != 0)
+}
+
+//export GoValidateSend
+func GoValidateSend(input *C.char, asHex C.int, eol *C.char) *C.char {
+	data, err := wincore.ParseData(C.GoString(input), asHex != 0, C.GoString(eol))
+	out := map[string]any{"bytes": len(data), "hex": fmt.Sprintf("% X", data), "error": ""}
+	if err != nil {
+		out["error"] = err.Error()
+	}
+	raw, _ := json.Marshal(out)
+	return C.CString(string(raw))
 }
 
 func onClosed() { C.UIConnectionClosed() }
@@ -315,9 +355,10 @@ func GoAIAnalyzeReport(report *C.char) *C.char {
 	return C.CString(deepseekChat(prompt))
 }
 
-//export GoAIChat
 // GoAIChat 多轮对话：messagesJSON 是 [{"role":"user|assistant","content":"..."}] 序列，
 // 用于在首次分析后继续追问，保持上下文。
+//
+//export GoAIChat
 func GoAIChat(messagesJSON *C.char) *C.char {
 	var turns []map[string]string
 	if err := json.Unmarshal([]byte(C.GoString(messagesJSON)), &turns); err != nil || len(turns) == 0 {
@@ -326,8 +367,9 @@ func GoAIChat(messagesJSON *C.char) *C.char {
 	return C.CString(deepseekChatMessages(turns))
 }
 
-//export GoSaveAnalysisMarkdown
 // GoSaveAnalysisMarkdown 把分析/对话内容写入数据目录下 ai-analysis/<filename>，返回完整路径或错误串。
+//
+//export GoSaveAnalysisMarkdown
 func GoSaveAnalysisMarkdown(filename, content *C.char) *C.char {
 	if engine == nil {
 		return C.CString("错误:引擎未初始化")
@@ -362,6 +404,7 @@ func GoStats() *C.char {
 	data, _ := json.Marshal(map[string]any{
 		"state": st.State, "mode": st.Mode, "listening": st.Listening, "datagram": st.Datagram,
 		"endpoint": st.Endpoint, "peers": st.Peers, "peer_count": st.PeerCount,
+		"client_ips": st.ClientIPs, "serial_rx": st.SerialRXBytes, "serial_tx": st.SerialTXBytes, "network_rx": st.NetworkRXBytes, "network_tx": st.NetworkTXBytes,
 		"rx":      fmt.Sprintf("%d 条 · %s", st.RXCount, wincore.FormatBytes(st.RXBytes)),
 		"tx":      fmt.Sprintf("%d 条 · %s", st.TXCount, wincore.FormatBytes(st.TXBytes)),
 		"elapsed": elapsed, "reconnects": st.Reconnects, "errors": st.Errors,
@@ -590,7 +633,6 @@ func GoToggleLoop(input *C.char, asHex C.int, eol *C.char, count C.int, interval
 				C.UILoopDone()
 				return
 			}
-			logSent(inp, hex, e)
 			cnt++
 			select {
 			case <-cancel:
@@ -608,7 +650,6 @@ func GoSend(text *C.char, hex C.int, eol *C.char) *C.char {
 	if err := engine.Send(input, asHex, e); err != nil {
 		return C.CString(err.Error())
 	}
-	logSent(input, asHex, e)
 	return C.CString("")
 }
 
@@ -618,7 +659,6 @@ func GoNetworkSend(text *C.char, hex C.int, eol *C.char) *C.char {
 	if err := engine.SendNetwork(input, asHex, e); err != nil {
 		return C.CString(err.Error())
 	}
-	logSent(input, asHex, e)
 	return C.CString("")
 }
 
@@ -628,6 +668,5 @@ func GoUDPSend(text *C.char, hex C.int, eol *C.char) *C.char {
 	if err := engine.SendUDP(input, asHex, e); err != nil {
 		return C.CString(err.Error())
 	}
-	logSent(input, asHex, e)
 	return C.CString("")
 }

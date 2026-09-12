@@ -8,6 +8,12 @@ void UIMonitorAppend(const char *text);
 void UIConnectionClosed(void);
 // Packet display fields: timestamp, direction, HEX, ASCII, type, byte length.
 void UIAddPacket(const char *ts, const char *dir, const char *hex, const char *ascii, const char *kind, int len);
+void UIAddPacketJSON(const char *json);
+char *GoConnections(void);
+char *GoDisconnectTarget(char *id);
+char *GoSendTarget(char *id, char *address, char *input, int asHex, char *eol);
+void GoConnectionPolicy(int maximum, int latest);
+char *GoValidateSend(char *input, int asHex, char *eol);
 void UILoopDone(void);
 char *GoToggleLoop(char *input, int asHex, char *eol, int count, int intervalMs);
 
