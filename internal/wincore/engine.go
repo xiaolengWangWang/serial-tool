@@ -49,15 +49,21 @@ type Engine struct {
 	sync.Mutex
 	port              serial.Port
 	listener          net.Listener
-	clients           map[net.Conn]struct{}
+	clients           map[net.Conn]*trackedConnection
 	udp               *net.UDPConn
 	udpPeer           *net.UDPAddr
+	udpPeers          map[string]*udpPeerState
 	udpDialed         bool
 	bridge            bool
+	bridgeReplyLatest bool
+	latestConnection  string
+	maxConnections    int
+	serialEndpoint    string
 	serialWrite       sync.Mutex
 	networkWrite      sync.Mutex
 	store             *Store
 	onData            func(string, []byte)
+	onPacket          func(Packet)
 	onLog             func(string)
 	onClosed          func()
 	mode              Mode
@@ -76,6 +82,13 @@ type Engine struct {
 	reconnectAddr     string
 	reconnectStop     chan struct{}
 	reconnectInterval time.Duration
+	epoch             uint64
+	idPrefix          string
+	idSeq             uint64
+	serialRXBytes     uint64
+	serialTXBytes     uint64
+	networkRXBytes    uint64
+	networkTXBytes    uint64
 	histMu            sync.Mutex
 	favorites         map[string]string
 	sendHistory       []string
@@ -83,27 +96,67 @@ type Engine struct {
 
 // SetOnClosed 注册"连接被动断开"回调(远端关闭、串口拔出、监听出错等,
 // 不含用户主动 Disconnect)。用于让 UI 同步回未连接状态。
-func (e *Engine) SetOnClosed(fn func()) { e.onClosed = fn }
+func (e *Engine) SetOnClosed(fn func()) {
+	e.Lock()
+	e.onClosed = fn
+	e.Unlock()
+}
 
 func (e *Engine) notifyClosed() {
-	if e.onClosed != nil {
-		e.onClosed()
+	e.Lock()
+	fn := e.onClosed
+	e.Unlock()
+	if fn != nil {
+		fn()
 	}
 }
 
 // recordEvent 把断开等事件报文持久化到数据库(source=断开),
 // 此时会话尚未结束,写入的记录归属当前会话。
 func (e *Engine) recordEvent(message string) {
-	if err := e.store.Received("断开", []byte(message)); err != nil {
+	packet := e.newPacket("EVENT", "", "", "", "断开", "", []byte(message))
+	if err := e.store.Record(packet); err != nil {
 		e.emitLog("SQLite 事件写入失败: " + err.Error())
 	}
 }
 
 // storeSent 把一条成功发送的报文入库(source=发送),一条报文一条记录。
 func (e *Engine) storeSent(data []byte) {
+	e.Lock()
+	mode := e.mode
+	var transport, connectionID, endpoint, leg string
+	switch mode {
+	case ModeSerial, ModeSerialServer:
+		transport, leg, endpoint = "SERIAL", "serial", e.serialEndpoint
+	case ModeTCPClient, ModeTCPServer:
+		transport, leg = "TCP", "network"
+		if len(e.clients) == 1 {
+			for _, c := range e.clients {
+				connectionID, endpoint = c.id, c.conn.RemoteAddr().String()
+			}
+		}
+	case ModeUDPClient, ModeUDPServer:
+		transport, leg = "UDP", "network"
+		if e.udpPeer != nil {
+			endpoint = e.udpPeer.String()
+			if peer := e.udpPeers[endpoint]; peer != nil {
+				connectionID = peer.id
+			}
+		}
+	}
+	e.Unlock()
+	if transport == "TCP" {
+		atomic.AddUint64(&e.txCount, 1)
+		atomic.AddUint64(&e.txBytes, uint64(len(data)))
+		return
+	}
+	e.storeSentPacket(e.newPacket("TX", transport, connectionID, endpoint, "发送", leg, data))
+}
+
+func (e *Engine) storeSentPacket(packet Packet) {
 	atomic.AddUint64(&e.txCount, 1)
-	atomic.AddUint64(&e.txBytes, uint64(len(data)))
-	if err := e.store.Received("发送", data); err != nil {
+	atomic.AddUint64(&e.txBytes, uint64(len(packet.Data)))
+	if err := e.emitPacket(packet); err != nil {
 		e.emitLog("SQLite 发送记录写入失败: " + err.Error())
 	}
 }
@@ -113,7 +166,7 @@ func New(dataDir string, onData func(string, []byte), onLog func(string)) (*Engi
 	if err != nil {
 		return nil, err
 	}
-	e := &Engine{store: store, onData: onData, onLog: onLog, vbridges: map[int]*vBridge{}, favorites: map[string]string{}}
+	e := &Engine{store: store, onData: onData, onLog: onLog, vbridges: map[int]*vBridge{}, favorites: map[string]string{}, idPrefix: randomIDPrefix()}
 	e.LoadFavorites()
 	return e, nil
 }
@@ -356,6 +409,10 @@ func (e *Engine) HTTPRequest(spec string) error {
 
 func (e *Engine) Connect(cfg Config) (connectErr error) {
 	e.Disconnect()
+	e.Lock()
+	captureKey := fmt.Sprintf("%s-%d", e.idPrefix, e.epoch)
+	e.Unlock()
+	e.store.SetCaptureKey(captureKey)
 	atomic.StoreInt32(&e.state, int32(StateConnecting))
 	defer func() {
 		if connectErr != nil {
@@ -382,7 +439,7 @@ func (e *Engine) Connect(cfg Config) (connectErr error) {
 
 	var p serial.Port
 	var listener net.Listener
-	var clients map[net.Conn]struct{}
+	var clients []net.Conn
 	var udp *net.UDPConn
 	var peer *net.UDPAddr
 	var udpDialed bool
@@ -409,12 +466,11 @@ func (e *Engine) Connect(cfg Config) (connectErr error) {
 		if protocol == "TCP" {
 			if role == "服务端" {
 				listener, err = net.Listen("tcp", cfg.Address)
-				clients = make(map[net.Conn]struct{})
 			} else {
 				var client net.Conn
 				client, err = net.Dial("tcp", cfg.Address)
 				if err == nil {
-					clients = map[net.Conn]struct{}{client: {}}
+					clients = append(clients, client)
 				}
 			}
 		} else {
@@ -437,16 +493,19 @@ func (e *Engine) Connect(cfg Config) (connectErr error) {
 		}
 	}
 
-	// Snapshot initial readers before publishing the mutable client map.
-	var initialClients []net.Conn
-	for client := range clients {
-		initialClients = append(initialClients, client)
-	}
 	e.Lock()
-	e.port, e.listener, e.clients = p, listener, clients
+	e.port, e.listener, e.clients = p, listener, make(map[net.Conn]*trackedConnection)
 	e.udp, e.udpPeer, e.udpDialed = udp, peer, udpDialed
+	e.udpPeers = make(map[string]*udpPeerState)
 	e.bridge = cfg.Mode == ModeSerialServer
+	e.serialEndpoint = cfg.SerialName
+	e.latestConnection = ""
 	e.mode = cfg.Mode
+	epoch := e.epoch
+	initialClients := make([]*trackedConnection, 0, len(clients))
+	for _, client := range clients {
+		initialClients = append(initialClients, e.addTCPConnection(client, epoch))
+	}
 	if cfg.Mode == ModeTCPClient && cfg.AutoReconnect {
 		e.reconnectAddr = cfg.Address
 		e.reconnectStop = make(chan struct{})
@@ -456,6 +515,9 @@ func (e *Engine) Connect(cfg Config) (connectErr error) {
 		e.reconnectStop = nil
 	}
 	e.Unlock()
+	if udp != nil && peer != nil {
+		e.udpPeerFor(peer.String(), udp.LocalAddr().String())
+	}
 	endpoint := cfg.Address
 	if cfg.Mode == ModeSerial {
 		endpoint = cfg.SerialName
@@ -468,16 +530,16 @@ func (e *Engine) Connect(cfg Config) (connectErr error) {
 	atomic.StoreInt64(&e.startedAt, time.Now().UnixNano())
 	atomic.StoreInt32(&e.state, int32(StateConnected))
 	if p != nil {
-		go e.readSerial(p)
+		go e.readSerial(p, epoch)
 	}
 	if listener != nil {
-		go e.acceptLoop(listener)
+		go e.acceptLoop(listener, epoch)
 	}
 	for _, client := range initialClients {
 		go e.readTCP(client)
 	}
 	if udp != nil {
-		go e.readUDP(udp)
+		go e.readUDP(udp, epoch)
 	}
 	e.emitLog(fmt.Sprintf("已启动 %s %s", cfg.Mode, endpoint))
 	return nil
@@ -500,12 +562,15 @@ func serialMode(cfg Config) *serial.Mode {
 func (e *Engine) Disconnect() {
 	atomic.StoreInt32(&e.state, int32(StateDisconnected))
 	e.Lock()
+	e.epoch++
 	stop := e.reconnectStop
 	e.reconnectStop = nil
 	e.reconnectAddr = ""
 	p, listener, clients, udp := e.port, e.listener, e.clients, e.udp
-	e.port, e.listener, e.clients, e.udp, e.udpPeer = nil, nil, nil, nil, nil
+	e.port, e.listener, e.clients, e.udp, e.udpPeer, e.udpPeers = nil, nil, nil, nil, nil, nil
 	e.udpDialed, e.bridge = false, false
+	e.serialEndpoint = ""
+	e.latestConnection = ""
 	e.httpURL, e.httpClient = "", nil
 	e.Unlock()
 	if stop != nil {
@@ -583,29 +648,34 @@ func (e *Engine) SendNetwork(input string, asHex bool, eol string) error {
 		return err
 	}
 	e.rememberSend(input)
-	e.storeSent(data)
+	atomic.AddUint64(&e.txCount, 1)
+	atomic.AddUint64(&e.txBytes, uint64(len(data)))
 	return nil
 }
-
 func (e *Engine) SendUDP(input string, asHex bool, eol string) error {
 	data, err := ParseData(input, asHex, eol)
 	if err != nil {
 		return err
 	}
-	if err = e.sendUDP(data, true); err != nil {
+	e.Lock()
+	peer := e.udpPeer
+	e.Unlock()
+	if peer == nil {
+		return errors.New("暂无 UDP 对端")
+	}
+	if err = e.SendToUDP(peer.String(), data); err != nil {
 		return err
 	}
 	e.rememberSend(input)
-	e.storeSent(data)
 	return nil
 }
 
-func (e *Engine) acceptLoop(listener net.Listener) {
+func (e *Engine) acceptLoop(listener net.Listener, epoch uint64) {
 	for {
 		client, err := listener.Accept()
 		if err != nil {
 			e.Lock()
-			active := e.listener == listener
+			active := e.listener == listener && e.epoch == epoch
 			e.Unlock()
 			if active {
 				msg := "TCP 监听错误: " + err.Error()
@@ -616,26 +686,39 @@ func (e *Engine) acceptLoop(listener net.Listener) {
 			return
 		}
 		e.Lock()
-		if e.clients == nil {
+		if e.clients == nil || e.listener != listener || e.epoch != epoch {
 			e.Unlock()
 			_ = client.Close()
 			return
 		}
-		e.clients[client] = struct{}{}
+		if e.maxConnections > 0 && len(e.clients) >= e.maxConnections {
+			e.Unlock()
+			_ = client.Close()
+			e.emitLog("TCP 客户端已拒绝(达到最大连接数): " + client.RemoteAddr().String())
+			continue
+		}
+		connection := e.addTCPConnection(client, epoch)
 		e.Unlock()
 		e.emitLog("TCP 客户端已连接: " + client.RemoteAddr().String())
-		go e.readTCP(client)
+		go e.readTCP(connection)
 	}
 }
 
-func (e *Engine) readTCP(client net.Conn) {
+func (e *Engine) readTCP(connection *trackedConnection) {
+	client := connection.conn
 	defer func() {
 		_ = client.Close()
 		e.Lock()
-		_, active := e.clients[client]
-		delete(e.clients, client)
+		active := e.clients != nil && e.clients[client] == connection && e.epoch == connection.epoch
+		if active {
+			delete(e.clients, client)
+			if e.latestConnection == connection.id {
+				e.latestConnection = ""
+			}
+		}
 		mode := e.mode
-		reconnect := e.reconnectAddr != ""
+		reconnect := e.reconnectAddr != "" && atomic.LoadUint32(&connection.manualClose) == 0
+		stop := e.reconnectStop
 		e.Unlock()
 		if active {
 			msg := "TCP 客户端已断开: " + client.RemoteAddr().String()
@@ -646,7 +729,7 @@ func (e *Engine) readTCP(client net.Conn) {
 					// 被动断开,自动重连(指数退避);UI 通过状态栏观察状态
 					atomic.StoreInt32(&e.state, int32(StateReconnecting))
 					e.emitLog("TCP 连接断开,自动重连中...")
-					go e.reconnectTCP()
+					go e.reconnectTCP(connection.epoch, stop)
 				} else {
 					e.notifyClosed()
 				}
@@ -657,13 +740,24 @@ func (e *Engine) readTCP(client net.Conn) {
 	for {
 		n, err := client.Read(buf)
 		if n > 0 {
-			e.receive("TCP "+client.RemoteAddr().String(), buf[:n])
 			e.Lock()
-			bridge := e.bridge
-			e.Unlock()
+			active := e.clients != nil && e.clients[client] == connection && e.epoch == connection.epoch
+			bridge := active && e.bridge
 			if bridge {
-				if writeErr := e.writeSerial(buf[:n]); writeErr != nil {
+				e.latestConnection = connection.id
+			}
+			e.Unlock()
+			if active {
+				atomic.AddUint64(&connection.rxCount, 1)
+				atomic.AddUint64(&connection.rxBytes, uint64(n))
+				atomic.AddUint64(&e.networkRXBytes, uint64(n))
+				e.receivePacket(connection.epoch, e.newPacket("RX", "TCP", connection.id, client.RemoteAddr().String(), "TCP "+client.RemoteAddr().String(), "network", buf[:n]))
+			}
+			if bridge && active {
+				if writeErr := e.writeSerialAt(buf[:n], connection.epoch); writeErr != nil {
 					e.emitLog("串口写入错误: " + writeErr.Error())
+				} else {
+					e.recordPacketAt(connection.epoch, e.newPacket("TX", "SERIAL", connection.id, e.serialAddress(), "NET→SERIAL", "serial", buf[:n]))
 				}
 			}
 		}
@@ -673,25 +767,37 @@ func (e *Engine) readTCP(client net.Conn) {
 	}
 }
 
-func (e *Engine) readUDP(conn *net.UDPConn) {
+func (e *Engine) readUDP(conn *net.UDPConn, epoch uint64) {
 	buf := make([]byte, 65535)
 	for {
 		n, peer, err := conn.ReadFromUDP(buf)
 		if n > 0 {
 			e.Lock()
-			e.udpPeer = peer
-			bridge := e.bridge
+			active := e.udp == conn && e.epoch == epoch
+			if active {
+				e.udpPeer = peer
+			}
+			bridge := active && e.bridge
 			e.Unlock()
-			e.receive("UDP "+peer.String(), buf[:n])
-			if bridge {
-				if writeErr := e.writeSerial(buf[:n]); writeErr != nil {
+			if active {
+				state := e.udpPeerFor(peer.String(), conn.LocalAddr().String())
+				atomic.AddUint64(&state.rxCount, 1)
+				atomic.AddUint64(&state.rxBytes, uint64(n))
+				atomic.AddUint64(&e.networkRXBytes, uint64(n))
+				e.receivePacket(epoch, e.newPacket("RX", "UDP", state.id, peer.String(), "UDP "+peer.String(), "network", buf[:n]))
+			}
+			if bridge && active {
+				if writeErr := e.writeSerialAt(buf[:n], epoch); writeErr != nil {
 					e.emitLog("串口写入错误: " + writeErr.Error())
+				} else {
+					state := e.udpPeerFor(peer.String(), conn.LocalAddr().String())
+					e.recordPacketAt(epoch, e.newPacket("TX", "SERIAL", state.id, e.serialAddress(), "NET→SERIAL", "serial", buf[:n]))
 				}
 			}
 		}
 		if err != nil {
 			e.Lock()
-			active := e.udp == conn
+			active := e.udp == conn && e.epoch == epoch
 			if active {
 				e.udp, e.udpPeer, e.udpDialed = nil, nil, false
 			}
@@ -707,24 +813,28 @@ func (e *Engine) readUDP(conn *net.UDPConn) {
 	}
 }
 
-func (e *Engine) readSerial(p serial.Port) {
+func (e *Engine) readSerial(p serial.Port, epoch uint64) {
 	buf := make([]byte, 4096)
 	for {
 		n, err := p.Read(buf)
 		if n > 0 {
-			e.receive("串口", buf[:n])
 			e.Lock()
-			bridge := e.bridge
+			active := e.port == p && e.epoch == epoch
+			bridge := active && e.bridge
 			e.Unlock()
-			if bridge {
-				if writeErr := e.forwardNetwork(buf[:n]); writeErr != nil {
+			if active {
+				atomic.AddUint64(&e.serialRXBytes, uint64(n))
+				e.receivePacket(epoch, e.newPacket("RX", "SERIAL", "", e.serialAddress(), "串口", "serial", buf[:n]))
+			}
+			if bridge && active {
+				if writeErr := e.forwardNetwork(buf[:n], epoch); writeErr != nil {
 					e.emitLog("网络写入错误: " + writeErr.Error())
 				}
 			}
 		}
 		if err != nil {
 			e.Lock()
-			active := e.port == p
+			active := e.port == p && e.epoch == epoch
 			if active {
 				e.port = nil
 			}
@@ -741,68 +851,176 @@ func (e *Engine) readSerial(p serial.Port) {
 }
 
 func (e *Engine) receive(source string, data []byte) {
+	e.Lock()
+	epoch := e.epoch
+	e.Unlock()
+	e.receivePacket(epoch, e.newPacket("RX", "", "", "", source, "", data))
+}
+
+func (e *Engine) receivePacket(epoch uint64, packet Packet) {
+	packet.epoch = epoch
+	packet.SessionKey = fmt.Sprintf("%s-%d", e.idPrefix, epoch)
+	e.Lock()
+	if e.epoch != epoch {
+		e.Unlock()
+		return
+	}
+	onData := e.onData
+	e.Unlock()
 	atomic.AddUint64(&e.rxCount, 1)
-	atomic.AddUint64(&e.rxBytes, uint64(len(data)))
-	copyOfData := append([]byte(nil), data...)
-	if err := e.store.Received(source, copyOfData); err != nil {
+	atomic.AddUint64(&e.rxBytes, uint64(len(packet.Data)))
+	if err := e.emitPacket(packet); err != nil {
 		e.emitLog("SQLite 写入失败: " + err.Error())
 	}
-	if e.onData != nil {
-		e.onData(source, copyOfData)
+	if onData != nil {
+		onData(packet.Source, append([]byte(nil), packet.Data...))
 	}
+}
+
+func (e *Engine) recordPacketAt(epoch uint64, packet Packet) {
+	packet.epoch = epoch
+	packet.SessionKey = fmt.Sprintf("%s-%d", e.idPrefix, epoch)
+	e.recordPacket(packet)
+}
+
+func (e *Engine) recordPacket(packet Packet) {
+	if err := e.emitPacket(packet); err != nil {
+		e.emitLog("SQLite 写入失败: " + err.Error())
+	}
+}
+
+func (e *Engine) emitPacket(packet Packet) error {
+	e.Lock()
+	active := packet.epoch == e.epoch
+	e.Unlock()
+	if !active {
+		return nil
+	}
+	stored := packet
+	stored.Data = append([]byte(nil), packet.Data...)
+	err := e.store.Record(stored)
+	e.Lock()
+	fn := e.onPacket
+	e.Unlock()
+	if fn != nil {
+		callback := packet
+		callback.Data = append([]byte(nil), packet.Data...)
+		fn(callback)
+	}
+	return err
+}
+
+func (e *Engine) serialAddress() string {
+	e.Lock()
+	address := e.serialEndpoint
+	e.Unlock()
+	return address
 }
 
 func (e *Engine) writeSerial(data []byte) error {
 	e.Lock()
-	p := e.port
+	epoch := e.epoch
 	e.Unlock()
-	if p == nil {
-		return errors.New("串口未连接")
-	}
+	return e.writeSerialAt(data, epoch)
+}
+func (e *Engine) writeSerialAt(data []byte, epoch uint64) error {
 	e.serialWrite.Lock()
 	defer e.serialWrite.Unlock()
-	_, err := p.Write(data)
+	e.Lock()
+	p, active := e.port, e.epoch == epoch
+	e.Unlock()
+	if p == nil || !active {
+		return errors.New("串口未连接")
+	}
+	n, err := p.Write(data)
+	if n > 0 {
+		atomic.AddUint64(&e.serialTXBytes, uint64(n))
+	}
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	return err
+}
+func (e *Engine) forwardNetwork(data []byte, epoch uint64) error {
+	e.Lock()
+	if e.epoch != epoch {
+		e.Unlock()
+		return nil
+	}
+	hasTCP, udp, latest, latestOnly := len(e.clients) > 0, e.udp, e.latestConnection, e.bridgeReplyLatest
+	e.Unlock()
+	if hasTCP {
+		if latestOnly {
+			c := e.connectionByID(latest)
+			if c == nil || c.epoch != epoch {
+				return nil
+			}
+			if err := e.writeTCP(c, data); err != nil {
+				return err
+			}
+			e.recordPacketAt(epoch, e.newPacket("TX", "TCP", c.id, c.conn.RemoteAddr().String(), "SERIAL→NET", "network", data))
+			return nil
+		}
+		return e.broadcastPackets(data, false, "SERIAL→NET", epoch)
+	}
+	if udp != nil {
+		return e.sendUDPBridge(data, epoch)
+	}
+	return nil
+}
+func (e *Engine) broadcast(data []byte, requireClient bool) error {
+	e.Lock()
+	epoch := e.epoch
+	e.Unlock()
+	return e.broadcastPackets(data, requireClient, "发送", epoch)
+}
+func (e *Engine) broadcastPackets(data []byte, requireClient bool, source string, epoch uint64) error {
+	e.Lock()
+	clients := make([]*trackedConnection, 0, len(e.clients))
+	if e.epoch == epoch {
+		for _, c := range e.clients {
+			clients = append(clients, c)
+		}
+	}
+	e.Unlock()
+	if requireClient && len(clients) == 0 {
+		return errors.New("暂无 TCP 客户端连接")
+	}
+	var result error
+	for _, c := range clients {
+		if err := e.writeTCP(c, data); err != nil {
+			result = errors.Join(result, err)
+			continue
+		}
+		e.recordPacketAt(epoch, e.newPacket("TX", "TCP", c.id, c.conn.RemoteAddr().String(), source, "network", data))
+	}
+	return result
+}
+
+func (e *Engine) writeTCP(connection *trackedConnection, data []byte) error {
+	if !e.isActiveConnection(connection) {
+		return errors.New("TCP Connection 已断开")
+	}
+	connection.writeMu.Lock()
+	defer connection.writeMu.Unlock()
+	_ = connection.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	n, err := connection.conn.Write(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	if n > 0 {
+		atomic.AddUint64(&e.networkTXBytes, uint64(n))
+	}
+	if err == nil {
+		atomic.AddUint64(&connection.txCount, 1)
+		atomic.AddUint64(&connection.txBytes, uint64(n))
+	}
 	return err
 }
 
-func (e *Engine) forwardNetwork(data []byte) error {
-	e.Lock()
-	hasTCP, udp := len(e.clients) > 0, e.udp
-	e.Unlock()
-	if hasTCP {
-		return e.broadcast(data, false)
-	}
-	if udp != nil {
-		return e.sendUDP(data, false)
-	}
-	return nil
-}
-
-func (e *Engine) broadcast(data []byte, requireClient bool) error {
-	e.networkWrite.Lock()
-	defer e.networkWrite.Unlock()
-	e.Lock()
-	clients := make([]net.Conn, 0, len(e.clients))
-	for client := range e.clients {
-		clients = append(clients, client)
-	}
-	e.Unlock()
-	if len(clients) == 0 && requireClient {
-		return errors.New("暂无 TCP 客户端连接")
-	}
-	for _, client := range clients {
-		if _, err := client.Write(data); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (e *Engine) sendUDP(data []byte, requirePeer bool) error {
-	e.networkWrite.Lock()
-	defer e.networkWrite.Unlock()
 	e.Lock()
-	conn, peer, dialed := e.udp, e.udpPeer, e.udpDialed
+	conn, peer, epoch := e.udp, e.udpPeer, e.epoch
 	e.Unlock()
 	if conn == nil {
 		return errors.New("UDP 未连接")
@@ -813,16 +1031,66 @@ func (e *Engine) sendUDP(data []byte, requirePeer bool) error {
 		}
 		return nil
 	}
-	if dialed {
-		_, err := conn.Write(data)
+	return e.writeUDP(conn, epoch, peer, data)
+}
+
+func (e *Engine) sendUDPBridge(data []byte, epoch uint64) error {
+	e.Lock()
+	conn, peer := e.udp, e.udpPeer
+	if e.epoch != epoch {
+		e.Unlock()
+		return nil
+	}
+	e.Unlock()
+	if conn == nil || peer == nil {
+		return nil
+	}
+	if err := e.writeUDP(conn, epoch, peer, data); err != nil {
 		return err
 	}
-	_, err := conn.WriteToUDP(data, peer)
+	state := e.udpPeerFor(peer.String(), conn.LocalAddr().String())
+	e.recordPacket(e.newPacket("TX", "UDP", state.id, peer.String(), "SERIAL→NET", "network", data))
+	return nil
+}
+
+func (e *Engine) writeUDP(conn *net.UDPConn, epoch uint64, peer *net.UDPAddr, data []byte) error {
+	e.networkWrite.Lock()
+	defer e.networkWrite.Unlock()
+	e.Lock()
+	active, dialed := e.udp == conn && e.epoch == epoch, e.udpDialed
+	e.Unlock()
+	if !active {
+		return errors.New("UDP 已断开")
+	}
+	var n int
+	var err error
+	if dialed {
+		if conn.RemoteAddr().String() != peer.String() {
+			return errors.New("UDP 客户端只能发送到配置的目标；选择服务端模式可发送到任意对端")
+		}
+		n, err = conn.Write(data)
+	} else {
+		n, err = conn.WriteToUDP(data, peer)
+	}
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	if n > 0 {
+		atomic.AddUint64(&e.networkTXBytes, uint64(n))
+	}
+	if err == nil {
+		state := e.udpPeerFor(peer.String(), conn.LocalAddr().String())
+		atomic.AddUint64(&state.txCount, 1)
+		atomic.AddUint64(&state.txBytes, uint64(n))
+	}
 	return err
 }
 
 func (e *Engine) emitLog(text string) {
-	if e.onLog != nil {
-		e.onLog(text)
+	e.Lock()
+	fn := e.onLog
+	e.Unlock()
+	if fn != nil {
+		fn(text)
 	}
 }

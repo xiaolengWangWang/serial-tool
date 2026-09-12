@@ -2,6 +2,7 @@ package wincore
 
 import (
 	"fmt"
+	"net"
 	"sort"
 	"sync/atomic"
 	"time"
@@ -47,20 +48,25 @@ const (
 
 // Stats 是通信统计快照。
 type Stats struct {
-	Mode       Mode
-	Listening  bool
-	Datagram   bool
-	Endpoint   string
-	PeerCount  int
-	Peers      []string
-	State      ConnState
-	StartedAt  time.Time
-	RXBytes    uint64
-	TXBytes    uint64
-	RXCount    uint64
-	TXCount    uint64
-	Reconnects uint64
-	Errors     uint64
+	Mode           Mode
+	Listening      bool
+	Datagram       bool
+	Endpoint       string
+	PeerCount      int
+	Peers          []string
+	State          ConnState
+	StartedAt      time.Time
+	RXBytes        uint64
+	TXBytes        uint64
+	RXCount        uint64
+	TXCount        uint64
+	Reconnects     uint64
+	Errors         uint64
+	SerialRXBytes  uint64
+	SerialTXBytes  uint64
+	NetworkRXBytes uint64
+	NetworkTXBytes uint64
+	ClientIPs      int
 }
 
 // Stats 返回当前连接状态与通信统计。
@@ -68,15 +74,19 @@ func (e *Engine) Stats() Stats {
 	e.Lock()
 	defer e.Unlock()
 	s := Stats{
-		Mode:       e.mode,
-		State:      ConnState(atomic.LoadInt32(&e.state)),
-		StartedAt:  time.Unix(0, atomic.LoadInt64(&e.startedAt)),
-		RXBytes:    atomic.LoadUint64(&e.rxBytes),
-		TXBytes:    atomic.LoadUint64(&e.txBytes),
-		RXCount:    atomic.LoadUint64(&e.rxCount),
-		TXCount:    atomic.LoadUint64(&e.txCount),
-		Reconnects: atomic.LoadUint64(&e.reconnects),
-		Errors:     atomic.LoadUint64(&e.errCount),
+		Mode:           e.mode,
+		SerialRXBytes:  atomic.LoadUint64(&e.serialRXBytes),
+		SerialTXBytes:  atomic.LoadUint64(&e.serialTXBytes),
+		NetworkRXBytes: atomic.LoadUint64(&e.networkRXBytes),
+		NetworkTXBytes: atomic.LoadUint64(&e.networkTXBytes),
+		State:          ConnState(atomic.LoadInt32(&e.state)),
+		StartedAt:      time.Unix(0, atomic.LoadInt64(&e.startedAt)),
+		RXBytes:        atomic.LoadUint64(&e.rxBytes),
+		TXBytes:        atomic.LoadUint64(&e.txBytes),
+		RXCount:        atomic.LoadUint64(&e.rxCount),
+		TXCount:        atomic.LoadUint64(&e.txCount),
+		Reconnects:     atomic.LoadUint64(&e.reconnects),
+		Errors:         atomic.LoadUint64(&e.errCount),
 	}
 	if s.State == StateDisconnected || s.State == StateError {
 		return s
@@ -85,9 +95,13 @@ func (e *Engine) Stats() Stats {
 		s.Listening = true
 		s.Endpoint = e.listener.Addr().String()
 	}
+	uniqueIPs := map[string]bool{}
 	for client := range e.clients {
+		host, _, _ := net.SplitHostPort(client.RemoteAddr().String())
+		uniqueIPs[host] = true
 		s.Peers = append(s.Peers, client.RemoteAddr().String())
 	}
+	s.ClientIPs = len(uniqueIPs)
 	sort.Strings(s.Peers)
 	s.PeerCount = len(s.Peers)
 	if s.Endpoint == "" && len(s.Peers) > 0 {

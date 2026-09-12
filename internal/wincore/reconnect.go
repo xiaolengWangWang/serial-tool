@@ -1,54 +1,74 @@
 package wincore
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sync/atomic"
 	"time"
 )
 
-// backoffDelay 返回第 attempt 次重连的等待时长(基于 base 指数退避,封顶 30s)。
 func backoffDelay(base time.Duration, attempt int) time.Duration {
 	if base <= 0 {
 		base = 2 * time.Second
 	}
-	d := time.Duration(1<<uint(attempt)) * base
-	if d > 30*time.Second {
-		d = 30 * time.Second
+	if base >= 30*time.Second {
+		return 30 * time.Second
 	}
-	return d
+	for i := 0; i < attempt; i++ {
+		if base >= 15*time.Second {
+			return 30 * time.Second
+		}
+		base *= 2
+	}
+	return base
 }
 
-// reconnectTCP 在 TCP 客户端被动断开后,以指数退避自动重连,直到重连成功或用户断开。
-func (e *Engine) reconnectTCP() {
-	addr := e.reconnectAddr
-	if addr == "" {
+func (e *Engine) reconnectTCP(epoch uint64, stop chan struct{}) {
+	e.Lock()
+	addr, interval := e.reconnectAddr, e.reconnectInterval
+	e.Unlock()
+	if addr == "" || stop == nil {
 		return
 	}
-	attempt := 0
-	for {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
 		select {
-		case <-e.reconnectStop:
-			return
-		case <-time.After(backoffDelay(e.reconnectInterval, attempt)):
+		case <-stop:
+			cancel()
+		case <-ctx.Done():
 		}
-		conn, err := net.Dial("tcp", addr)
+	}()
+	for attempt := 0; ; attempt++ {
+		timer := time.NewTimer(backoffDelay(interval, attempt))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", addr)
 		if err != nil {
-			attempt++
+			if ctx.Err() != nil {
+				return
+			}
 			atomic.AddUint64(&e.errCount, 1)
 			e.emitLog(fmt.Sprintf("TCP 重连 %s 失败: %v", addr, err))
 			continue
 		}
 		e.Lock()
-		if e.clients == nil {
-			e.clients = map[net.Conn]struct{}{}
+		if e.epoch != epoch || e.reconnectStop != stop {
+			e.Unlock()
+			conn.Close()
+			return
 		}
-		e.clients[conn] = struct{}{}
-		e.Unlock()
+		tracked := e.addTCPConnection(conn, epoch)
 		atomic.AddUint64(&e.reconnects, 1)
 		atomic.StoreInt32(&e.state, int32(StateConnected))
+		e.Unlock()
 		e.emitLog(fmt.Sprintf("TCP 已重连 %s", addr))
-		go e.readTCP(conn)
+		go e.readTCP(tracked)
 		return
 	}
 }
