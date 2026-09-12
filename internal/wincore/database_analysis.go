@@ -4,7 +4,6 @@ import (
 	"container/heap"
 	"context"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
@@ -266,14 +265,11 @@ func AnalyzeDatabases(dir string, filenames []string, start, end, direction stri
 	for _, s := range sources {
 		fmt.Fprintf(&out, "文件：%s；筛选 %d 条；RX %d 条 / %d 字节；TX %d 条 / %d 字节\n", s.name, s.total, s.rxCount, s.rxBytes, s.txCount, s.txBytes)
 	}
-	out.WriteString("各文件独立只读快照，不保证采集中多个文件处于同一瞬间；同名选择已去重，不同文件中的重复采集记录不去重。\n")
 	fmt.Fprintf(&out, "筛选总计：%d 条；RX：%d 条 / %d 字节；TX：%d 条 / %d 字节\n", total, rxCount, rxBytes, txCount, txBytes)
-	out.WriteString("总量字节依据 size_bytes；已排除 source=断开；普通发送与虚拟串口发送为 TX，其余为 RX。\n")
 	fmt.Fprintf(&out, "最新记录上限：%d 条（所有文件合计）；候选：%d 条；实际选中：%d 条；未选中：%d 条\n", limit, candidates, selectedCount, total-int64(selectedCount))
 	fmt.Fprintf(&out, "原始负载上限：8 MiB（%d 字节）；选中负载：%d 字节；字节上限触发：%t\n", analysisByteLimit, rawBytes, byteCapped)
-	fmt.Fprintf(&out, "因记录上限省略：%d 条；因字节上限省略：%d 条（从首条超限记录起停止选取，不截断报文）。\n", total-candidates, candidates-int64(selectedCount))
-	fmt.Fprintf(&out, "详细解析上限：%d 条；实际详细解析：%d 条；选中但未详细解析：%d 条\n", analysisDetailLimit, details, selectedCount-details)
-	out.WriteString("仅展开选中范围时间正序前 20 条详情，其余只计入统计，不生成逐条列表。相同时间按文件名、记录 ID 排序。解析完整 raw_data，不使用界面 HEX 或 text_data。\n单条存储记录可能是半包或多包；协议识别及 CRC 提示来自单条解析器，仅作候选，不推断请求响应匹配或通信故障。\n")
+	fmt.Fprintf(&out, "因记录上限省略：%d 条；因字节上限省略：%d 条\n", total-candidates, candidates-int64(selectedCount))
+	fmt.Fprintf(&out, "详细解析上限：%d 条；实际详细解析：%d 条；选中但未详细解析：%d 条（仅展开时间正序前 %d 条）\n", analysisDetailLimit, details, selectedCount-details, analysisDetailLimit)
 	if total == 0 {
 		out.WriteString("没有符合条件的报文。\n")
 	}
@@ -287,10 +283,14 @@ func AnalyzeDatabases(dir string, filenames []string, start, end, direction stri
 		if int64(len(raw)) != p.size {
 			return "", fmt.Errorf("记录 %d 原始负载长度不一致", p.id)
 		}
-		// 附上原始 HEX，便于 AI/人工据字节判定协议，而不只看派生解析。
-		fmt.Fprintf(&out, "HEX：% X\n", raw)
-		out.WriteString(AnalyzeTransportPacket(analysisTransport(p.mode), hex.EncodeToString(raw)))
-		out.WriteByte('\n')
+		// 只输出原始 HEX，由 AI 据字节自行判定，不再附带可能误导的派生解析；
+		// 大包仅预览前若干字节，避免报告膨胀。
+		const hexPreview = 512
+		if len(raw) > hexPreview {
+			fmt.Fprintf(&out, "HEX（前 %d/%d 字节）：% X …\n", hexPreview, len(raw), raw[:hexPreview])
+		} else {
+			fmt.Fprintf(&out, "HEX：% X\n", raw)
+		}
 	}
 	return out.String(), nil
 }

@@ -72,7 +72,7 @@ func TestDatabaseAnalysisFilteringAndRawProtocol(t *testing.T) {
 			}
 			requireAnalysisContains(t, report, tc.counts)
 			if tc.direction == "ALL" {
-				requireAnalysisContains(t, report, "Modbus TCP：事务标识 0x0001", "Modbus CRC：通过", "UDP 报文分析", "首字节：0xFF", "实际详细解析：3 条")
+				requireAnalysisContains(t, report, "HEX：", "实际详细解析：3 条")
 				if strings.Index(report, "记录 #2 |") > strings.Index(report, "记录 #3 |") || strings.Index(report, "记录 #3 |") > strings.Index(report, "记录 #1 |") {
 					t.Fatal("not chronological")
 				}
@@ -139,7 +139,7 @@ func TestDatabaseAnalysisSelectionCaps(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireAnalysisContains(t, report, "实际选中：23 条", "实际详细解析：20 条", "选中但未详细解析：3 条")
-	if strings.Count(report, "UDP 报文分析") != 20 || strings.Count(report, "记录 #") != 20 {
+	if strings.Count(report, "HEX") != 20 || strings.Count(report, "记录 #") != 20 {
 		t.Fatal(report)
 	}
 	// Length is checked in SQLite before fetching any oversized raw BLOB.
@@ -158,7 +158,7 @@ func TestDatabaseAnalysisSelectionCaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireAnalysisContains(t, report, "实际选中：1 条", "选中负载：8388608 字节", "因字节上限省略：23 条", "长度：8388608 字节")
+	requireAnalysisContains(t, report, "实际选中：1 条", "选中负载：8388608 字节", "因字节上限省略：23 条", "HEX（前 512/8388608 字节）")
 }
 
 func TestDatabaseAnalysisMillionRecordLimit(t *testing.T) {
@@ -331,7 +331,7 @@ func TestDatabaseAnalysisMultipleFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireAnalysisContains(t, report, "筛选总计：2 条；RX：0 条 / 0 字节；TX：2 条 / 2 字节", "实际选中：1 条；未选中：1 条", "首字节：0xFD")
+	requireAnalysisContains(t, report, "筛选总计：2 条；RX：0 条 / 0 字节；TX：2 条 / 2 字节", "实际选中：1 条；未选中：1 条", "HEX：FD")
 	for _, names := range [][]string{nil, {}, {first, "serial-data-missing.sqlite3"}, {first, "../" + first}} {
 		if _, err := AnalyzeDatabases(dir, names, analysisStart, analysisEnd, "ALL", 1000000); err == nil {
 			t.Fatalf("invalid selection accepted: %v", names)

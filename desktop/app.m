@@ -53,6 +53,10 @@ int RunLayoutChecks(id delegate, NSString *directory);
     NSButton *_aiEnabledButton;
     NSTextField *_aiKeyHint;
     NSString *_lastDatabaseReport;
+    NSMutableArray *_aiMessages;         // 多轮对话消息（不含 system）
+    NSMutableString *_aiDisplayMarkdown; // 展示与存档用的对话转写
+    NSString *_aiMarkdownName;           // 本次会话存档文件名
+    NSTextView *_aiActiveView;           // 当前对话输出到的视图
 }
 - (void)appendText:(NSString *)text;
 - (void)appendMonitorText:(NSString *)text;
@@ -969,6 +973,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     Item(actionMenu, @"虚拟串口映射", @selector(openVSerialManager:), @"v", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Item(actionMenu, @"工具箱", @selector(openToolbox:), @"b", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Item(actionMenu, @"AI 增强分析设置", @selector(openAISettings:), @"i", NSEventModifierFlagCommand | NSEventModifierFlagShift);
+    Item(actionMenu, @"继续追问 AI", @selector(aiFollowUp:), @"k", NSEventModifierFlagCommand | NSEventModifierFlagShift);
+    Item(actionMenu, @"打开 AI 存档目录", @selector(openAIArchiveFolder:), @"", 0);
     Submenu(mainMenu, @"操作", actionMenu);
 
     NSMenu *editMenu = [[[NSMenu alloc] initWithTitle:@"编辑"] autorelease];
@@ -1224,6 +1230,65 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     return [[tv.string copy] autorelease];
 }
 
+- (NSString *)newAIMarkdownName {
+    NSDateFormatter *fmt = [[[NSDateFormatter alloc] init] autorelease];
+    fmt.dateFormat = @"yyyyMMdd-HHmmss";
+    return [NSString stringWithFormat:@"analysis-%@.md", [fmt stringFromDate:[NSDate date]]];
+}
+
+- (void)persistAIMarkdown {
+    if (!_aiMarkdownName.length || !_aiDisplayMarkdown.length) return;
+    char *r = GoSaveAnalysisMarkdown((char *)_aiMarkdownName.UTF8String, (char *)_aiDisplayMarkdown.UTF8String);
+    NSString *res = [NSString stringWithUTF8String:r ?: ""]; free(r);
+    if ([res hasPrefix:@"错误"]) [self appendText:[NSString stringWithFormat:@"[AI 存档失败：%@]\n", res]];
+}
+
+// aiFirstTurn 用首次分析结果开启一段可继续追问的对话，并写入本地 Markdown 存档。
+- (void)aiFirstTurn:(NSString *)reply userContent:(NSString *)content title:(NSString *)title view:(NSTextView *)view {
+    [_aiMessages release];
+    _aiMessages = [[NSMutableArray alloc] init];
+    [_aiMessages addObject:@{@"role": @"user", @"content": content ?: @""}];
+    [_aiMessages addObject:@{@"role": @"assistant", @"content": reply ?: @""}];
+    [_aiDisplayMarkdown release];
+    _aiDisplayMarkdown = [[NSMutableString alloc] initWithFormat:@"# %@\n\n%@\n", title, reply ?: @""];
+    [_aiMarkdownName release];
+    _aiMarkdownName = [[self newAIMarkdownName] retain];
+    _aiActiveView = view;
+    [view.textStorage setAttributedString:mdPretty(_aiDisplayMarkdown)];
+    [self persistAIMarkdown];
+}
+
+- (void)aiFollowUp:(id)sender {
+    if (!_aiMessages.count) { [self alert:@"请先做一次 AI 深度分析，再继续追问。"]; return; }
+    NSString *q = [self editableSendContent:@"" title:@"继续追问 AI（可编辑）"];
+    if (!q.length) return;
+    [_aiMessages addObject:@{@"role": @"user", @"content": q}];
+    [_aiDisplayMarkdown appendFormat:@"\n\n---\n\n## 追问\n\n%@\n\n## 回答\n\n（请求中……）\n", q];
+    NSTextView *view = _aiActiveView ?: _analysisResult;
+    [view.textStorage setAttributedString:mdPretty(_aiDisplayMarkdown)];
+    NSData *msgData = [NSJSONSerialization dataWithJSONObject:_aiMessages options:0 error:nil];
+    NSString *msgJSON = [[[NSString alloc] initWithData:msgData encoding:NSUTF8StringEncoding] autorelease];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        char *raw = GoAIChat((char *)msgJSON.UTF8String);
+        NSString *reply = [[NSString alloc] initWithUTF8String:raw ?: "AI 分析失败"]; free(raw);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [_aiMessages addObject:@{@"role": @"assistant", @"content": reply}];
+            NSRange ph = [_aiDisplayMarkdown rangeOfString:@"（请求中……）" options:NSBackwardsSearch];
+            if (ph.location != NSNotFound) [_aiDisplayMarkdown replaceCharactersInRange:ph withString:reply];
+            [view.textStorage setAttributedString:mdPretty(_aiDisplayMarkdown)];
+            [self persistAIMarkdown];
+            [reply release];
+        });
+    });
+}
+
+- (void)openAIArchiveFolder:(id)sender {
+    char *dir = GoDatabaseInfo();
+    NSString *arch = [[NSString stringWithUTF8String:dir ?: ""] stringByAppendingPathComponent:@"ai-analysis"]; free(dir);
+    [[NSFileManager defaultManager] createDirectoryAtPath:arch withIntermediateDirectories:YES attributes:nil error:nil];
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:arch isDirectory:YES]];
+}
+
 - (void)runAIAnalysis:(NSButton *)sender {
     char *enabled = GoGetAISetting((char *)"deepseek.enabled");
     char *key = GoGetAISetting((char *)"deepseek.api_key");
@@ -1239,7 +1304,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             char *raw = GoAIAnalyzeReport((char *)report.UTF8String);
             NSString *result = [[NSString alloc] initWithUTF8String:raw ?: "AI 分析失败"]; free(raw);
-            dispatch_async(dispatch_get_main_queue(), ^{ [_analysisResult.textStorage setAttributedString:mdPretty([NSString stringWithFormat:@"# 数据库 AI 深度分析\n\n%@\n\n---\n本次发送内容含报文、传输类型与连接信息（IP:端口）；发送前可在弹窗中编辑或删减。", result])]; sender.enabled = YES; [result release]; [report release]; });
+            dispatch_async(dispatch_get_main_queue(), ^{ [self aiFirstTurn:result userContent:report title:@"数据库 AI 深度分析" view:_analysisResult]; sender.enabled = YES; [result release]; [report release]; });
         });
         return;
     }
@@ -1256,7 +1321,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         char *raw = GoAIAnalyze((char *)transport.UTF8String, (char *)edited.UTF8String);
         NSString *result = [[NSString alloc] initWithUTF8String:raw ?: "AI 分析失败"]; free(raw);
-        dispatch_async(dispatch_get_main_queue(), ^{ [_analysisResult.textStorage setAttributedString:mdPretty([NSString stringWithFormat:@"%@\n\n%@\n\n---\n本次发送内容含报文、传输类型与连接信息（IP:端口）；发送前可在弹窗中编辑或删减。", _analysisStats.stringValue, result])]; sender.enabled = YES; [result release]; [transport release]; });
+        dispatch_async(dispatch_get_main_queue(), ^{ [self aiFirstTurn:result userContent:edited title:@"AI 深度分析" view:_analysisResult]; sender.enabled = YES; [result release]; [transport release]; });
     });
 }
 
@@ -2104,7 +2169,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         NSString *result = [[NSString alloc] initWithUTF8String:raw ?: "AI 分析失败"];
         free(raw);
         dispatch_async(dispatch_get_main_queue(), ^{
-            [_detailView.textStorage setAttributedString:mdPretty([NSString stringWithFormat:@"# AI 深度分析（仅本次主动调用）\n\n%@\n\n---\n本次发送内容含报文、传输类型与连接信息（IP:端口）；发送前可在弹窗中编辑或删减。", result])];
+            [self aiFirstTurn:result userContent:edited title:@"AI 深度分析（选中报文）" view:_detailView];
             button.enabled = YES;
             [result release];
             [transport release];

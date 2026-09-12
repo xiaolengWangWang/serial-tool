@@ -38,6 +38,8 @@ char *GoGetAISetting(char *key);
 char *GoSetAISetting(char *key, char *value);
 char *GoAIAnalyze(char *transport, char *hex);
 char *GoAIAnalyzeReport(char *report);
+char *GoAIChat(char *messagesJSON);
+char *GoSaveAnalysisMarkdown(char *filename, char *content);
 char *GoStats(void);
 char *GoFavoriteNames(void);
 char *GoSaveFavorite(char *name, char *value);

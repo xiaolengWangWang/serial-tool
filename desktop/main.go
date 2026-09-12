@@ -206,9 +206,14 @@ func GoSetAISetting(key, value *C.char) *C.char {
 	return C.CString("")
 }
 
-// deepseekChat 用已保存的 DeepSeek 配置发起一次对话，返回助手回复；出错时返回中文错误串。
-// 由 GoAIAnalyze（实时报文）与 GoAIAnalyzeReport（数据库报告）共用。
+// deepseekChat 单轮对话（一个 user 消息）。
 func deepseekChat(userPrompt string) string {
+	return deepseekChatMessages([]map[string]string{{"role": "user", "content": userPrompt}})
+}
+
+// deepseekChatMessages 发起一次可多轮对话；turns 为不含 system 的用户/助手消息序列，
+// 系统提示（分析指南）由本函数统一前置。出错时返回中文错误串。
+func deepseekChatMessages(turns []map[string]string) string {
 	if engine == nil || engine.GetSetting("deepseek.enabled") != "true" {
 		return "AI 未启用，请先在 AI 增强分析设置中启用"
 	}
@@ -242,7 +247,8 @@ func deepseekChat(userPrompt string) string {
 	if system == "" {
 		system = "你是工业通信现场诊断助手。结论仅作排查建议，优先建议查阅设备协议文档。"
 	}
-	body, _ := json.Marshal(map[string]any{"model": model, "temperature": 0.1, "messages": []map[string]string{{"role": "system", "content": system}, {"role": "user", "content": userPrompt}}})
+	messages := append([]map[string]string{{"role": "system", "content": system}}, turns...)
+	body, _ := json.Marshal(map[string]any{"model": model, "temperature": 0.1, "messages": messages})
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base, bytes.NewReader(body))
@@ -307,6 +313,38 @@ func GoAIAnalyzeReport(report *C.char) *C.char {
 	}
 	prompt := fmt.Sprintf("以下是本地 SQLite 采集数据的分析报告，含统计与逐条 HEX 报文解析。请据此做协议识别、异常定位、风险评估与现场排查建议；只依据报告内容，不确定时明确说明，不臆测未给出的参数。\n\n%s", text)
 	return C.CString(deepseekChat(prompt))
+}
+
+//export GoAIChat
+// GoAIChat 多轮对话：messagesJSON 是 [{"role":"user|assistant","content":"..."}] 序列，
+// 用于在首次分析后继续追问，保持上下文。
+func GoAIChat(messagesJSON *C.char) *C.char {
+	var turns []map[string]string
+	if err := json.Unmarshal([]byte(C.GoString(messagesJSON)), &turns); err != nil || len(turns) == 0 {
+		return C.CString("对话内容无效")
+	}
+	return C.CString(deepseekChatMessages(turns))
+}
+
+//export GoSaveAnalysisMarkdown
+// GoSaveAnalysisMarkdown 把分析/对话内容写入数据目录下 ai-analysis/<filename>，返回完整路径或错误串。
+func GoSaveAnalysisMarkdown(filename, content *C.char) *C.char {
+	if engine == nil {
+		return C.CString("错误:引擎未初始化")
+	}
+	name := filepath.Base(C.GoString(filename))
+	if name == "" || name == "." || name == "/" || strings.ContainsAny(name, "/\\\x00") {
+		return C.CString("错误:文件名无效")
+	}
+	dir := filepath.Join(engine.DataDir(), "ai-analysis")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return C.CString("错误:" + err.Error())
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(C.GoString(content)), 0o644); err != nil {
+		return C.CString("错误:" + err.Error())
+	}
+	return C.CString(path)
 }
 
 //export GoAnalyzePacket
