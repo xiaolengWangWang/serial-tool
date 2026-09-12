@@ -99,7 +99,7 @@ func (s *Store) EndSession() {
 	s.mode, s.endpoint, s.parameters = "", "", ""
 }
 
-// ponytail: synchronous inserts preserve every raw read; batch transactions if sustained throughput proves too slow.
+// synchronous inserts preserve every raw read; batch transactions if sustained throughput proves too slow.
 func (s *Store) Received(source string, data []byte) error {
 	s.Lock()
 	defer s.Unlock()
