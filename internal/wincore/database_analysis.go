@@ -65,7 +65,11 @@ func openAnalysisDatabase(dir, filename string) (*sql.DB, error) {
 	q := url.Values{}
 	q.Add("_pragma", "busy_timeout(5000)")
 	q.Add("_pragma", "query_only(true)")
-	uri := url.URL{Scheme: "file", Path: path, RawQuery: q.Encode()}
+	uriPath := filepath.ToSlash(path)
+	if !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath
+	}
+	uri := url.URL{Scheme: "file", Path: uriPath, RawQuery: q.Encode()}
 	db, err := sql.Open("sqlite", uri.String())
 	if err != nil {
 		return nil, err
