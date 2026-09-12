@@ -33,6 +33,7 @@ type Store struct {
 	mode       string
 	endpoint   string
 	parameters string
+	captureKey string
 }
 
 func OpenStore(dir string) (*Store, error) {
@@ -233,6 +234,10 @@ func (s *Store) openFileLocked(now time.Time, forceNew bool) error {
 		CREATE INDEX IF NOT EXISTS idx_received_time ON received_data(received_at);
 		CREATE INDEX IF NOT EXISTS idx_received_session ON received_data(session_id);
 	`); err != nil {
+		_ = db.Close()
+		return err
+	}
+	if err := migratePacketColumns(db); err != nil {
 		_ = db.Close()
 		return err
 	}

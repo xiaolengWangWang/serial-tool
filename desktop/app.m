@@ -41,6 +41,12 @@ int RunLayoutChecks(id delegate, NSString *directory);
     NSStackView *_connectionCards;
     NSLayoutConstraint *_connectionWidth;
     NSTextField *_connectionDetail, *_connectionMetrics, *_peerInfo;
+    NSWindow *_connectionsWindow;
+    NSTableView *_connectionsTable;
+    NSMutableArray *_connectionsList;
+    NSTextField *_connTargetInput, *_connValidateLabel, *_maxConnField;
+    NSPopUpButton *_connEol;
+    NSButton *_connHexCheck, *_replyLatestCheck;
     BOOL _analysisVisible;
     NSStackView *_filterRow;
     NSView *_endpointForm, *_serialForm, *_networkForm, *_addressForm, *_protocolField, *_portField;
@@ -48,6 +54,9 @@ int RunLayoutChecks(id delegate, NSString *directory);
     NSInteger _rxCount, _txCount;
     BOOL _connected;
     BOOL _monitorPaused;
+    BOOL _displayPaused;              // 暂停显示：只冻结表格，接收与入库继续
+    NSButton *_displayPauseButton;
+    NSInteger _displayBufferedCount;  // 暂停期间新到报文数量
     BOOL _aiEnabled;
     NSTextField *_aiBaseURL, *_aiModel, *_aiKey;
     NSButton *_aiEnabledButton;
@@ -63,6 +72,8 @@ int RunLayoutChecks(id delegate, NSString *directory);
 - (NSString *)sendCurrentData;
 - (void)stopTimer;
 - (void)addPacketWithTS:(NSString *)ts dir:(NSString *)dir hex:(NSString *)hex ascii:(NSString *)ascii kind:(NSString *)kind len:(NSInteger)len;
+- (void)addPacketModel:(NSDictionary *)model;
+- (void)reloadConnections;
 - (void)updatePacketStats;
 - (void)loopDone;
 @end
@@ -508,7 +519,11 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [searchLabel removeFromSuperview];
     [filterBtn removeFromSuperview];
     clearFilterBtn.title = @"重置";
-    _filterRow = Row(@[_searchField, _dirFilter, _typeFilter, _lengthFilter, _timeFilter, clearFilterBtn]);
+    _displayPauseButton = [[NSButton buttonWithTitle:@"暂停显示" target:self action:@selector(toggleDisplayPause:)] retain];
+    _displayPauseButton.toolTip = @"仅冻结表格显示；接收与入库继续运行";
+    _displayPauseButton.autoresizingMask = NSViewMinYMargin;
+    _filterRow = Row(@[_searchField, _dirFilter, _typeFilter, _lengthFilter, _timeFilter, _displayPauseButton, clearFilterBtn]);
+    [_displayPauseButton.widthAnchor constraintEqualToConstant:96].active = YES;
     [_searchField.widthAnchor constraintEqualToConstant:160].active = YES;
     for (NSPopUpButton *filter in @[_dirFilter, _typeFilter, _lengthFilter, _timeFilter]) {
         [filter.widthAnchor constraintEqualToConstant:96].active = YES;
@@ -594,6 +609,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     tc2.title = @"HEX"; tc2.width = 300; [_dataTable addTableColumn:tc2];
     NSTableColumn *tc3 = [[[NSTableColumn alloc] initWithIdentifier:@"ascii"] autorelease];
     tc3.title = @"ASCII"; tc3.width = 180; [_dataTable addTableColumn:tc3];
+    NSTableColumn *tcSrc = [[[NSTableColumn alloc] initWithIdentifier:@"endpoint"] autorelease];
+    tcSrc.title = @"来源"; tcSrc.width = 140; [_dataTable addTableColumn:tcSrc];
     NSTableColumn *tc4 = [[[NSTableColumn alloc] initWithIdentifier:@"len"] autorelease];
     tc4.title = @"长度"; tc4.width = 65; [_dataTable addTableColumn:tc4];
     NSTableColumn *tc5 = [[[NSTableColumn alloc] initWithIdentifier:@"protocol"] autorelease];
@@ -878,7 +895,6 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     if (getenv("COMMBOX_LAYOUT_CHECK_DIR")) {
         exit(RunLayoutChecks(self, [NSString stringWithUTF8String:getenv("COMMBOX_LAYOUT_CHECK_DIR")]));
     }
-
     [_window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
     [self modeChanged:nil];
@@ -971,6 +987,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     Item(actionMenu, @"定时发送开关", @selector(toggleTimer:), @"t", NSEventModifierFlagCommand);
     Item(actionMenu, @"刷新串口", @selector(refresh:), @"r", NSEventModifierFlagCommand);
     Item(actionMenu, @"虚拟串口映射", @selector(openVSerialManager:), @"v", NSEventModifierFlagCommand | NSEventModifierFlagShift);
+    Item(actionMenu, @"连接管理", @selector(openConnectionsManager:), @"c", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Item(actionMenu, @"工具箱", @selector(openToolbox:), @"b", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Item(actionMenu, @"AI 增强分析设置", @selector(openAISettings:), @"i", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Item(actionMenu, @"继续追问 AI", @selector(aiFollowUp:), @"k", NSEventModifierFlagCommand | NSEventModifierFlagShift);
@@ -1370,6 +1387,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     free(raw);
     NSDictionary *stats = [NSJSONSerialization JSONObjectWithData:[text dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
     if ([stats isKindOfClass:NSDictionary.class]) [self applyConnectionStats:stats];
+    if (_connectionsWindow.isVisible) [self reloadConnections];
 }
 
 - (void)applyConnectionStats:(NSDictionary *)stats {
@@ -1512,6 +1530,179 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     char *raw = GoChecksum((char *)kind.UTF8String, (char *)_toolboxInput.stringValue.UTF8String);
     NSString *result = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
     _toolboxOutput.stringValue = result;
+}
+
+- (void)openConnectionsManager:(id)sender {
+    if (!_connectionsWindow) {
+        _connectionsWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 600, 400)
+            styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
+            backing:NSBackingStoreBuffered defer:NO];
+        _connectionsWindow.title = @"连接管理";
+        _connectionsWindow.releasedWhenClosed = NO;
+        _connectionsWindow.delegate = self;
+        NSView *v = _connectionsWindow.contentView;
+        _connectionsList = [[NSMutableArray alloc] init];
+
+        NSScrollView *scroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(16, 190, 568, 194)] autorelease];
+        scroll.borderType = NSBezelBorder; scroll.hasVerticalScroller = YES;
+        scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        _connectionsTable = [[NSTableView alloc] initWithFrame:scroll.contentView.bounds];
+        _connectionsTable.font = [NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightRegular];
+        _connectionsTable.usesAlternatingRowBackgroundColors = YES;
+        _connectionsTable.dataSource = self;
+        NSArray *ids = @[@"id", @"transport", @"remote", @"rx", @"tx"];
+        NSArray *titles = @[@"连接 ID", @"类型", @"远端", @"RX", @"TX"];
+        NSArray *widths = @[@148, @52, @150, @78, @78];
+        for (NSUInteger i = 0; i < ids.count; i++) {
+            NSTableColumn *c = [[[NSTableColumn alloc] initWithIdentifier:ids[i]] autorelease];
+            c.title = titles[i]; c.width = [widths[i] doubleValue];
+            [_connectionsTable addTableColumn:c];
+        }
+        scroll.documentView = _connectionsTable;
+        NSMenu *menu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
+        [menu addItemWithTitle:@"向此连接发送" action:@selector(sendToClickedConnection:) keyEquivalent:@""];
+        [menu addItemWithTitle:@"断开此连接" action:@selector(disconnectClickedConnection:) keyEquivalent:@""];
+        [menu addItemWithTitle:@"复制连接 ID" action:@selector(copyClickedConnectionID:) keyEquivalent:@""];
+        _connectionsTable.menu = menu;
+        [v addSubview:scroll];
+
+        [v addSubview:Label(@"向选中连接发送（TCP 服务端可点单个客户端；UDP 为选中对端）", NSMakeRect(16, 164, 560, 18))];
+        _connTargetInput = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 134, 350, 26)];
+        _connTargetInput.placeholderString = @"输入要发送的数据"; _connTargetInput.delegate = self;
+        _connTargetInput.autoresizingMask = NSViewWidthSizable; [v addSubview:_connTargetInput];
+        _connHexCheck = [[NSButton checkboxWithTitle:@"HEX" target:self action:@selector(validateTargetSendAction:)] retain];
+        _connHexCheck.state = NSControlStateValueOn;
+        _connHexCheck.frame = NSMakeRect(374, 134, 58, 26); _connHexCheck.autoresizingMask = NSViewMinXMargin; [v addSubview:_connHexCheck];
+        _connEol = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(436, 132, 78, 28) pullsDown:NO];
+        [_connEol addItemsWithTitles:@[@"无", @"LF", @"CR", @"CRLF"]];
+        _connEol.target = self; _connEol.action = @selector(validateTargetSendAction:);
+        _connEol.autoresizingMask = NSViewMinXMargin; [v addSubview:_connEol];
+        NSButton *sendBtn = [NSButton buttonWithTitle:@"发送" target:self action:@selector(sendToSelectedConnection:)];
+        sendBtn.frame = NSMakeRect(518, 132, 66, 30); sendBtn.autoresizingMask = NSViewMinXMargin; [v addSubview:sendBtn];
+
+        _connValidateLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 106, 568, 18)];
+        _connValidateLabel.editable = NO; _connValidateLabel.bordered = NO; _connValidateLabel.drawsBackground = NO;
+        _connValidateLabel.textColor = NSColor.secondaryLabelColor;
+        _connValidateLabel.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+        _connValidateLabel.autoresizingMask = NSViewWidthSizable; [v addSubview:_connValidateLabel];
+
+        NSBox *sep = [[[NSBox alloc] initWithFrame:NSMakeRect(16, 92, 568, 1)] autorelease];
+        sep.boxType = NSBoxSeparator; sep.autoresizingMask = NSViewWidthSizable; [v addSubview:sep];
+
+        [v addSubview:Label(@"最大连接数(0=不限)", NSMakeRect(16, 56, 130, 22))];
+        _maxConnField = [[NSTextField alloc] initWithFrame:NSMakeRect(150, 54, 60, 26)];
+        _maxConnField.stringValue = @"0"; _maxConnField.alignment = NSTextAlignmentRight; [v addSubview:_maxConnField];
+        _replyLatestCheck = [[NSButton checkboxWithTitle:@"串口回复最新请求的连接（服务器模式）" target:nil action:nil] retain];
+        _replyLatestCheck.frame = NSMakeRect(224, 54, 268, 26); [v addSubview:_replyLatestCheck];
+        NSButton *applyBtn = [NSButton buttonWithTitle:@"应用策略" target:self action:@selector(applyConnectionPolicy:)];
+        applyBtn.frame = NSMakeRect(500, 52, 84, 30); applyBtn.autoresizingMask = NSViewMinXMargin; [v addSubview:applyBtn];
+
+        [v addSubview:Label(@"提示：接收与入库始终由引擎完成；此窗口每秒自动刷新。", NSMakeRect(16, 20, 568, 18))];
+        [_connectionsWindow center];
+    }
+    [self reloadConnections];
+    [self validateTargetSend];
+    [_connectionsWindow makeKeyAndOrderFront:nil];
+}
+
+- (NSInteger)clickedConnectionRow {
+    NSInteger row = _connectionsTable.clickedRow;
+    return row >= 0 ? row : _connectionsTable.selectedRow;
+}
+
+- (void)reloadConnections {
+    if (!_connectionsTable) return;
+    char *raw = GoConnections();
+    NSString *text = [NSString stringWithUTF8String:raw ?: "[]"]; free(raw);
+    NSArray *arr = [NSJSONSerialization JSONObjectWithData:[text dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSInteger selected = _connectionsTable.selectedRow;
+    NSString *selectedID = (selected >= 0 && selected < (NSInteger)_connectionsList.count) ? _connectionsList[selected][@"id"] : nil;
+    [_connectionsList removeAllObjects];
+    if ([arr isKindOfClass:NSArray.class]) {
+        for (NSDictionary *c in arr) {
+            if (![c isKindOfClass:NSDictionary.class]) continue;
+            [_connectionsList addObject:@{
+                @"id": c[@"id"] ?: @"",
+                @"transport": c[@"transport"] ?: @"",
+                @"remote": c[@"remote_address"] ?: @"",
+                @"rx": [NSString stringWithFormat:@"%@ · %@ B", c[@"rx_count"] ?: @0, c[@"rx_bytes"] ?: @0],
+                @"tx": [NSString stringWithFormat:@"%@ · %@ B", c[@"tx_count"] ?: @0, c[@"tx_bytes"] ?: @0],
+            }];
+        }
+    }
+    [_connectionsTable reloadData];
+    if (selectedID.length) {
+        [_connectionsList enumerateObjectsUsingBlock:^(NSDictionary *c, NSUInteger idx, BOOL *stop) {
+            if ([c[@"id"] isEqualToString:selectedID]) {
+                [_connectionsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:idx] byExtendingSelection:NO];
+                *stop = YES;
+            }
+        }];
+    }
+}
+
+- (void)sendConnectionRow:(NSInteger)row {
+    if (row < 0 || row >= (NSInteger)_connectionsList.count) { [self alert:@"请先选择一个连接"]; return; }
+    NSString *input = _connTargetInput.stringValue;
+    if (!input.length) { [self alert:@"请输入要发送的数据"]; return; }
+    NSDictionary *c = _connectionsList[row];
+    BOOL udp = [c[@"transport"] isEqualToString:@"UDP"];
+    NSString *cid = udp ? @"" : c[@"id"];
+    NSString *addr = udp ? c[@"remote"] : @"";
+    int hex = _connHexCheck.state == NSControlStateValueOn ? 1 : 0;
+    NSString *eol = _connEol.titleOfSelectedItem ?: @"无";
+    char *raw = GoSendTarget((char *)cid.UTF8String, (char *)addr.UTF8String, (char *)input.UTF8String, hex, (char *)eol.UTF8String);
+    NSString *err = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
+    if (err.length) { [self alert:err]; return; }
+    [self reloadConnections];
+}
+- (void)sendToSelectedConnection:(id)sender { [self sendConnectionRow:_connectionsTable.selectedRow]; }
+- (void)sendToClickedConnection:(id)sender { [self sendConnectionRow:[self clickedConnectionRow]]; }
+
+- (void)disconnectClickedConnection:(id)sender {
+    NSInteger row = [self clickedConnectionRow];
+    if (row < 0 || row >= (NSInteger)_connectionsList.count) return;
+    NSDictionary *c = _connectionsList[row];
+    if ([c[@"transport"] isEqualToString:@"UDP"]) { [self alert:@"UDP 为无连接通信，无连接可断开"]; return; }
+    char *raw = GoDisconnectTarget((char *)[c[@"id"] UTF8String]);
+    NSString *err = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
+    if (err.length) { [self alert:err]; return; }
+    [self reloadConnections];
+}
+
+- (void)copyClickedConnectionID:(id)sender {
+    NSInteger row = [self clickedConnectionRow];
+    if (row < 0 || row >= (NSInteger)_connectionsList.count) return;
+    [[NSPasteboard generalPasteboard] clearContents];
+    [[NSPasteboard generalPasteboard] setString:_connectionsList[row][@"id"] forType:NSPasteboardTypeString];
+}
+
+- (void)applyConnectionPolicy:(id)sender {
+    int maximum = _maxConnField.intValue;
+    if (maximum < 0) { maximum = 0; _maxConnField.stringValue = @"0"; }
+    int latest = _replyLatestCheck.state == NSControlStateValueOn ? 1 : 0;
+    GoConnectionPolicy(maximum, latest);
+    _connValidateLabel.textColor = NSColor.secondaryLabelColor;
+    _connValidateLabel.stringValue = [NSString stringWithFormat:@"已应用：最大连接数 %d，串口回复%@", maximum, latest ? @"最新请求连接" : @"全部连接（广播）"];
+}
+
+- (void)validateTargetSendAction:(id)sender { [self validateTargetSend]; }
+- (void)validateTargetSend {
+    if (!_connTargetInput) return;
+    int hex = _connHexCheck.state == NSControlStateValueOn ? 1 : 0;
+    NSString *eol = _connEol.titleOfSelectedItem ?: @"无";
+    char *raw = GoValidateSend((char *)_connTargetInput.stringValue.UTF8String, hex, (char *)eol.UTF8String);
+    NSString *text = [NSString stringWithUTF8String:raw ?: "{}"]; free(raw);
+    NSDictionary *val = [NSJSONSerialization JSONObjectWithData:[text dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if (![val isKindOfClass:NSDictionary.class]) return;
+    NSString *err = val[@"error"];
+    if ([err isKindOfClass:NSString.class] && err.length) {
+        _connValidateLabel.textColor = NSColor.systemRedColor;
+        _connValidateLabel.stringValue = [@"✗ " stringByAppendingString:err];
+    } else {
+        _connValidateLabel.textColor = NSColor.secondaryLabelColor;
+        _connValidateLabel.stringValue = [NSString stringWithFormat:@"✓ %@ 字节   %@", val[@"bytes"] ?: @0, val[@"hex"] ?: @""];
+    }
 }
 
 - (void)resetToDisconnected {
@@ -1907,11 +2098,13 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
     if (tableView == _vsTable) return (NSInteger)_vsList.count;
     if (tableView == _dataTable) return (NSInteger)_visiblePackets.count;
+    if (tableView == _connectionsTable) return (NSInteger)_connectionsList.count;
     return 0;
 }
 - (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
     if (tableView == _vsTable) return _vsList[row][col.identifier];
     if (tableView == _dataTable) return _visiblePackets[row][col.identifier];
+    if (tableView == _connectionsTable) return _connectionsList[row][col.identifier];
     return nil;
 }
 - (void)tableViewSelectionDidChange:(NSNotification *)notification {
@@ -1928,9 +2121,10 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSInteger row = _dataTable.selectedRow;
     if (row < 0 || row >= (NSInteger)_visiblePackets.count) { _detailView.string = @""; return; }
     NSDictionary *p = _visiblePackets[row];
-    NSString *detail = [NSString stringWithFormat:@"[%@] %@  %@  %@\n协议：%@  状态：%@  响应：%@\nHEX:   %@\nASCII: %@",
+    NSString *detail = [NSString stringWithFormat:@"[%@] %@  %@  %@\n协议：%@  状态：%@  响应：%@\nID：%@  来源：%@  连接：%@  链路：%@\nHEX:   %@\nASCII: %@",
         p[@"ts"] ?: @"", p[@"dir"] ?: @"", p[@"len"] ?: @"",
         p[@"kind"] ?: @"", p[@"protocol"] ?: @"", p[@"status"] ?: @"正常", p[@"response"] ?: @"-",
+        p[@"id"] ?: @"-", p[@"endpoint"] ?: @"-", p[@"connection_id"] ?: @"-", p[@"leg"] ?: @"-",
         p[@"hex"] ?: @"", p[@"ascii"] ?: @""];
     _detailView.string = detail;
 }
@@ -2011,6 +2205,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     [_dataTable deselectAll:nil];
     [self tableViewSelectionDidChange:[NSNotification notificationWithName:@"selection" object:_dataTable]];
     _rxCount = 0; _txCount = 0;
+    _displayBufferedCount = 0;
+    if (_displayPaused) _displayPauseButton.title = @"继续显示";
     [self updatePacketStats];
 }
 - (void)saveText:(NSString *)text prefix:(NSString *)prefix window:(NSWindow *)window {
@@ -2090,6 +2286,7 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 }
 - (void)controlTextDidChange:(NSNotification *)notification {
     if (notification.object == _searchField) [self applyFilter];
+    else if (notification.object == _connTargetInput) [self validateTargetSend];
 }
 - (void)updatePacketStats {
     if (!_statsLabel) return;
@@ -2117,6 +2314,38 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
         [_packets removeObjectsInRange:NSMakeRange(0, _packets.count - 8000)];
     }
     [self applyFilter];
+}
+
+// 结构化报文直接来自引擎回调，已含 id / 连接来源 / 协议等字段。
+- (void)addPacketModel:(NSDictionary *)model {
+    if (model.count == 0) return;
+    NSString *dir = model[@"dir"];
+    if ([dir isEqualToString:@"RX"]) _rxCount++;
+    else if ([dir isEqualToString:@"TX"]) _txCount++;
+    [self updatePacketStats];
+    [_packets addObject:model];
+    if (_packets.count > 10000) {
+        [_packets removeObjectsInRange:NSMakeRange(0, _packets.count - 8000)];
+    }
+    // 暂停显示时仅冻结表格：报文仍进入 _packets（接收与入库由引擎保证继续）。
+    if (_displayPaused) {
+        _displayBufferedCount++;
+        _displayPauseButton.title = [NSString stringWithFormat:@"继续显示(%ld)", (long)_displayBufferedCount];
+        return;
+    }
+    [self applyFilter];
+}
+
+- (void)toggleDisplayPause:(NSButton *)sender {
+    _displayPaused = !_displayPaused;
+    if (_displayPaused) {
+        _displayBufferedCount = 0;
+        _displayPauseButton.title = @"继续显示";
+    } else {
+        _displayBufferedCount = 0;
+        _displayPauseButton.title = @"暂停显示";
+        [self applyFilter];  // 恢复后一次性补齐暂停期间到达的报文
+    }
 }
 
 - (void)copyPacketHex:(id)sender {
@@ -2221,6 +2450,16 @@ void UIAddPacket(const char *ts, const char *dir, const char *hex, const char *a
     dispatch_async(dispatch_get_main_queue(), ^{
         [(AppDelegate *)NSApp.delegate addPacketWithTS:nts dir:ndir hex:nhex ascii:nascii kind:nkind len:nlen];
         [nts release]; [ndir release]; [nhex release]; [nascii release]; [nkind release];
+    });
+}
+
+void UIAddPacketJSON(const char *json) {
+    NSData *data = [[NSData alloc] initWithBytes:(json ?: "") length:(json ? strlen(json) : 0)];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSDictionary *model = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+        if ([model isKindOfClass:[NSDictionary class]])
+            [(AppDelegate *)NSApp.delegate addPacketModel:model];
+        [data release];
     });
 }
 

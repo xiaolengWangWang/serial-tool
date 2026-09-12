@@ -18,7 +18,7 @@ type vBridge struct {
 	addr      string
 	link      string
 	master    io.ReadWriteCloser // 应用读写端
-	close     func()              // 关闭并清理设备
+	close     func()             // 关闭并清理设备
 	mu        sync.Mutex
 	conn      net.Conn
 	stop      chan struct{}
@@ -155,6 +155,11 @@ func (e *Engine) vDialLoop(b *vBridge) {
 		default:
 		}
 		e.emitLog(fmt.Sprintf("虚拟串口 #%d 到 %s 的连接断开,重连中...", b.id, b.addr))
+		select {
+		case <-b.stop:
+			return
+		case <-time.After(2 * time.Second):
+		}
 	}
 }
 

@@ -175,11 +175,11 @@ func AnalyzeDatabases(dir string, filenames []string, start, end, direction stri
 	sort.Strings(names)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	const filter = ` FROM (SELECT *, CASE WHEN source = '发送' OR source GLOB '虚拟串口 #[0-9]* 发送'
-        THEN 'TX' ELSE 'RX' END AS direction FROM received_data) r JOIN sessions s ON s.id = r.session_id
+	const filter = ` FROM (SELECT *, CASE WHEN source IN ('发送','NET→SERIAL','SERIAL→NET') OR source GLOB '虚拟串口 #[0-9]* 发送'
+        THEN 'TX' ELSE 'RX' END AS capture_direction FROM received_data) r JOIN sessions s ON s.id = r.session_id
 		WHERE r.source <> '断开'
 		AND julianday(r.received_at) BETWEEN julianday(?) AND julianday(?)
-		AND (? = 'ALL' OR r.direction = ?)`
+		AND (? = 'ALL' OR r.capture_direction = ?)`
 	args := []any{from.UTC().Format(time.RFC3339Nano), to.UTC().Format(time.RFC3339Nano), direction, direction}
 	var total, rxCount, txCount, rxBytes, txBytes int64
 	var sources []*analysisSource
@@ -197,10 +197,10 @@ func AnalyzeDatabases(dir string, filenames []string, start, end, direction stri
 		defer tx.Rollback()
 		s := &analysisSource{name: name, tx: tx}
 		err = tx.QueryRowContext(ctx, `SELECT COUNT(*),
-		COALESCE(SUM(CASE WHEN r.direction = 'RX' THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN r.direction = 'TX' THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN r.direction = 'RX' THEN r.size_bytes ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN r.direction = 'TX' THEN r.size_bytes ELSE 0 END), 0)`+filter, args...).Scan(
+		COALESCE(SUM(CASE WHEN r.capture_direction = 'RX' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN r.capture_direction = 'TX' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN r.capture_direction = 'RX' THEN r.size_bytes ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN r.capture_direction = 'TX' THEN r.size_bytes ELSE 0 END), 0)`+filter, args...).Scan(
 			&s.total, &s.rxCount, &s.txCount, &s.rxBytes, &s.txBytes)
 		if err != nil {
 			return "", fmt.Errorf("统计数据库 %s 失败（请检查存储 schema）：%w", name, err)
@@ -211,7 +211,7 @@ func AnalyzeDatabases(dir string, filenames []string, start, end, direction stri
 		rxBytes += s.rxBytes
 		txBytes += s.txBytes
 		// Fetch lengths before BLOBs; each file contributes at most the global limit.
-		s.rows, err = tx.QueryContext(ctx, `SELECT r.id, r.received_at, r.direction, s.mode, s.endpoint, length(r.raw_data), julianday(r.received_at)`+filter+
+		s.rows, err = tx.QueryContext(ctx, `SELECT r.id, r.received_at, r.capture_direction, s.mode, s.endpoint, length(r.raw_data), julianday(r.received_at)`+filter+
 			` ORDER BY julianday(r.received_at) DESC, r.id DESC LIMIT ?`, append(args, limit)...)
 		if err != nil {
 			return "", fmt.Errorf("读取数据库 %s 失败：%w", name, err)
