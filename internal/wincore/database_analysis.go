@@ -97,10 +97,10 @@ type analysisSource struct {
 }
 
 type analysisPacket struct {
-	source              *analysisSource
-	id, size            int64
-	at, direction, mode string
-	order               float64
+	source                        *analysisSource
+	id, size                      int64
+	at, direction, mode, endpoint string
+	order                         float64
 }
 
 // Only one head per file is kept while merging, never a million Go records.
@@ -125,7 +125,7 @@ func (s *analysisSource) next() (analysisPacket, bool, error) {
 	if !s.rows.Next() {
 		return p, false, s.rows.Err()
 	}
-	if err := s.rows.Scan(&p.id, &p.at, &p.direction, &p.mode, &p.size, &p.order); err != nil {
+	if err := s.rows.Scan(&p.id, &p.at, &p.direction, &p.mode, &p.endpoint, &p.size, &p.order); err != nil {
 		return p, false, err
 	}
 	if p.size < 0 {
@@ -212,7 +212,7 @@ func AnalyzeDatabases(dir string, filenames []string, start, end, direction stri
 		rxBytes += s.rxBytes
 		txBytes += s.txBytes
 		// Fetch lengths before BLOBs; each file contributes at most the global limit.
-		s.rows, err = tx.QueryContext(ctx, `SELECT r.id, r.received_at, r.direction, s.mode, length(r.raw_data), julianday(r.received_at)`+filter+
+		s.rows, err = tx.QueryContext(ctx, `SELECT r.id, r.received_at, r.direction, s.mode, s.endpoint, length(r.raw_data), julianday(r.received_at)`+filter+
 			` ORDER BY julianday(r.received_at) DESC, r.id DESC LIMIT ?`, append(args, limit)...)
 		if err != nil {
 			return "", fmt.Errorf("读取数据库 %s 失败：%w", name, err)
@@ -279,7 +279,7 @@ func AnalyzeDatabases(dir string, filenames []string, start, end, direction stri
 	}
 	for i := selectedCount - 1; i >= selectedCount-details; i-- {
 		p := selected[i%analysisDetailLimit]
-		fmt.Fprintf(&out, "\n来源文件：%s\n记录 #%d | %s | %s | %s | %d 字节\n", p.source.name, p.id, p.at, p.direction, analysisTransport(p.mode), p.size)
+		fmt.Fprintf(&out, "\n来源文件：%s\n记录 #%d | %s | %s | %s（连接 %s %s）| %d 字节\n", p.source.name, p.id, p.at, p.direction, analysisTransport(p.mode), p.mode, p.endpoint, p.size)
 		var raw []byte
 		if err := p.source.tx.QueryRowContext(ctx, `SELECT raw_data FROM received_data WHERE id = ?`, p.id).Scan(&raw); err != nil {
 			return "", fmt.Errorf("读取数据库 %s 记录 %d 原始负载失败：%w", p.source.name, p.id, err)
@@ -287,6 +287,8 @@ func AnalyzeDatabases(dir string, filenames []string, start, end, direction stri
 		if int64(len(raw)) != p.size {
 			return "", fmt.Errorf("记录 %d 原始负载长度不一致", p.id)
 		}
+		// 附上原始 HEX，便于 AI/人工据字节判定协议，而不只看派生解析。
+		fmt.Fprintf(&out, "HEX：% X\n", raw)
 		out.WriteString(AnalyzeTransportPacket(analysisTransport(p.mode), hex.EncodeToString(raw)))
 		out.WriteByte('\n')
 	}

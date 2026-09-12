@@ -121,18 +121,28 @@ GET /api/v1/health
 本 macOS 开发线仅同步和发布 macOS/Linux 构建产物；本工作流不修改、不构建或上传 Windows 产物。
 
 ```bash
-# 命令行(多平台,纯 Go)
-CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X main.version=0.3.0' -o commbox .
+# 命令行(多平台,纯 Go);发布 Linux amd64
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+  -ldflags='-s -w -X main.version=0.7.8' -o commbox-linux-amd64 .
 
 # Windows 桌面版(可交叉编译)
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath \
   -ldflags='-s -w -H windowsgui' -o build/windows/CommBox.exe ./windows
 
-# macOS 桌面版(需在 macOS 上用 CGo 构建)
-mkdir -p 'build/CommBox.app/Contents/MacOS'
-cp desktop/Info.plist 'build/CommBox.app/Contents/Info.plist'
-go build -trimpath -ldflags='-s -w' -o 'build/CommBox.app/Contents/MacOS/CommBox' ./desktop
-codesign --force --deep --sign - 'build/CommBox.app'
+# macOS 桌面版(需在 macOS 上用 CGo 构建;按芯片分别出包,-s -w 瘦身)
+# 对每个 ARCH ∈ {arm64(M 芯片), amd64(Intel)}：
+for ARCH in arm64 amd64; do
+  APP="build/$ARCH/CommBox.app"
+  mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+  cp desktop/Info.plist "$APP/Contents/Info.plist"
+  cp desktop/resources/CommBox.icns "$APP/Contents/Resources/CommBox.icns"
+  CGO_ENABLED=1 GOARCH=$ARCH go build -trimpath -ldflags='-s -w' -o "$APP/Contents/MacOS/CommBox" ./desktop
+  codesign --force --deep --sign - "$APP"
+  # 直接分发软件：打成 dmg(双击挂载即用,拖入 Applications),无需解压
+  ln -sf /Applications "build/$ARCH/Applications"
+  NAME=$([ "$ARCH" = arm64 ] && echo AppleSilicon || echo Intel)
+  hdiutil create -volname CommBox -srcfolder "build/$ARCH" -ov -format UDZO "CommBox-macOS-$NAME.dmg"
+done
 ```
 
 运行测试:`go test ./...`

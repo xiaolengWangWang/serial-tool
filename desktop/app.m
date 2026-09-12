@@ -1188,6 +1188,42 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     _analysisResult.string = report;
 }
 
+// connectionInfoLine 返回当前连接的诊断上下文（模式 + IP:端口 + 对端），未连接时返回空串。
+- (NSString *)connectionInfoLine {
+    char *raw = GoStats();
+    NSString *json = [NSString stringWithUTF8String:raw ?: "{}"]; free(raw);
+    NSDictionary *st = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if (![st isKindOfClass:[NSDictionary class]]) return @"";
+    NSString *mode = [st[@"mode"] isKindOfClass:[NSString class]] ? st[@"mode"] : @"";
+    NSString *endpoint = [st[@"endpoint"] isKindOfClass:[NSString class]] ? st[@"endpoint"] : @"";
+    NSArray *peers = [st[@"peers"] isKindOfClass:[NSArray class]] ? st[@"peers"] : nil;
+    NSMutableString *line = [NSMutableString string];
+    if (mode.length || endpoint.length) [line appendFormat:@"连接信息：%@ %@", mode, endpoint];
+    if (peers.count) [line appendFormat:@"；对端：%@", [peers componentsJoinedByString:@", "]];
+    return line;
+}
+
+// editableSendContent 弹出可编辑对话框，返回确认后（可能已修改）的发送内容；取消返回 nil。
+- (NSString *)editableSendContent:(NSString *)content title:(NSString *)title {
+    NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+    alert.messageText = title;
+    alert.informativeText = @"以下内容将发送到 DeepSeek（含报文、传输类型与连接信息 IP:端口），可在发送前编辑或删减。";
+    NSScrollView *scroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 480, 260)] autorelease];
+    scroll.hasVerticalScroller = YES; scroll.borderType = NSBezelBorder;
+    NSTextView *tv = [[[NSTextView alloc] initWithFrame:scroll.contentView.bounds] autorelease];
+    tv.string = content ?: @"";
+    tv.editable = YES; tv.richText = NO;
+    tv.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+    tv.autoresizingMask = NSViewWidthSizable;
+    tv.verticallyResizable = YES; tv.horizontallyResizable = NO;
+    tv.textContainer.widthTracksTextView = YES;
+    scroll.documentView = tv;
+    alert.accessoryView = scroll;
+    [alert addButtonWithTitle:@"确认并发送"]; [alert addButtonWithTitle:@"取消"];
+    if ([alert runModal] != NSAlertFirstButtonReturn) return nil;
+    return [[tv.string copy] autorelease];
+}
+
 - (void)runAIAnalysis:(NSButton *)sender {
     char *enabled = GoGetAISetting((char *)"deepseek.enabled");
     char *key = GoGetAISetting((char *)"deepseek.api_key");
@@ -1197,18 +1233,13 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 
     // 当前展示的是数据库分析报告时，直接让 AI 深度分析这份数据库数据。
     if (_lastDatabaseReport.length > 0 && [_analysisResult.string isEqualToString:_lastDatabaseReport]) {
-        NSString *report = [_lastDatabaseReport copy];
-        NSString *preview = [report substringToIndex:MIN((NSUInteger)600, report.length)];
-        NSAlert *confirm = [[[NSAlert alloc] init] autorelease];
-        confirm.messageText = @"确认把数据库分析报告发送到 DeepSeek？";
-        confirm.informativeText = [NSString stringWithFormat:@"将发送本次数据库分析报告（%lu 字符，预览最多 600 字符）：\n%@\n\n不会发送 IP、设备名或主机名。", (unsigned long)report.length, preview];
-        [confirm addButtonWithTitle:@"确认并发送"]; [confirm addButtonWithTitle:@"取消"];
-        if ([confirm runModal] != NSAlertFirstButtonReturn) { [report release]; return; }
+        NSString *report = [[self editableSendContent:_lastDatabaseReport title:@"发送数据库分析报告到 DeepSeek（可编辑）"] retain];
+        if (!report) return;
         sender.enabled = NO; _analysisResult.string = @"AI 正在分析数据库报告……\n\n本地通信不会被阻塞。";
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             char *raw = GoAIAnalyzeReport((char *)report.UTF8String);
             NSString *result = [[NSString alloc] initWithUTF8String:raw ?: "AI 分析失败"]; free(raw);
-            dispatch_async(dispatch_get_main_queue(), ^{ [_analysisResult.textStorage setAttributedString:mdPretty([NSString stringWithFormat:@"# 数据库 AI 深度分析\n\n%@", result])]; sender.enabled = YES; [result release]; [report release]; });
+            dispatch_async(dispatch_get_main_queue(), ^{ [_analysisResult.textStorage setAttributedString:mdPretty([NSString stringWithFormat:@"# 数据库 AI 深度分析\n\n%@\n\n---\n本次发送内容含报文、传输类型与连接信息（IP:端口）；发送前可在弹窗中编辑或删减。", result])]; sender.enabled = YES; [result release]; [report release]; });
         });
         return;
     }
@@ -1216,18 +1247,16 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSArray *packets = [self analysisPackets];
     if (!packets.count) { _analysisResult.string = @"没有可分析的数据。先点“开始本地分析”或“分析数据库…”，再点 AI 深度分析。"; return; }
     NSMutableString *input = [NSMutableString string];
+    NSString *conn = [self connectionInfoLine];
+    if (conn.length) [input appendFormat:@"%@\n\n", conn];
     for (NSDictionary *p in packets) [input appendFormat:@"%@ %@\n", p[@"dir"] ?: @"", p[@"hex"] ?: @""];
-    NSString *preview = [input substringToIndex:MIN((NSUInteger)600, input.length)];
-    NSAlert *confirm = [[[NSAlert alloc] init] autorelease];
-    confirm.messageText = @"确认发送到 DeepSeek？";
-    confirm.informativeText = [NSString stringWithFormat:@"将发送当前范围的 %ld 条报文，预览（最多 600 字符）：\n%@\n\n不会发送 IP、设备名或主机名。", (long)packets.count, preview];
-    [confirm addButtonWithTitle:@"确认并发送"]; [confirm addButtonWithTitle:@"取消"];
-    if ([confirm runModal] != NSAlertFirstButtonReturn) return;
+    NSString *edited = [self editableSendContent:input title:@"发送报文到 DeepSeek（可编辑）"];
+    if (!edited) return;
     NSString *transport = [_mode.titleOfSelectedItem copy]; sender.enabled = NO; _analysisResult.string = @"AI 分析请求中……\n\n本地通信不会被阻塞。";
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        char *raw = GoAIAnalyze((char *)transport.UTF8String, (char *)input.UTF8String);
+        char *raw = GoAIAnalyze((char *)transport.UTF8String, (char *)edited.UTF8String);
         NSString *result = [[NSString alloc] initWithUTF8String:raw ?: "AI 分析失败"]; free(raw);
-        dispatch_async(dispatch_get_main_queue(), ^{ [_analysisResult.textStorage setAttributedString:mdPretty([NSString stringWithFormat:@"%@\n\n%@", _analysisStats.stringValue, result])]; sender.enabled = YES; [result release]; [transport release]; });
+        dispatch_async(dispatch_get_main_queue(), ^{ [_analysisResult.textStorage setAttributedString:mdPretty([NSString stringWithFormat:@"%@\n\n%@\n\n---\n本次发送内容含报文、传输类型与连接信息（IP:端口）；发送前可在弹窗中编辑或删减。", _analysisStats.stringValue, result])]; sender.enabled = YES; [result release]; [transport release]; });
     });
 }
 
@@ -2059,19 +2088,23 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSIndexSet *rows = _dataTable.selectedRowIndexes;
     if (!rows.count) { [self alert:@"请先选择报文"]; return; }
     NSMutableString *input = [NSMutableString string];
+    NSString *conn = [self connectionInfoLine];
+    if (conn.length) [input appendFormat:@"%@\n\n", conn];
     [rows enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
         [input appendFormat:@"%@ %@\n", _visiblePackets[idx][@"dir"] ?: @"", _visiblePackets[idx][@"hex"] ?: @""];
     }];
+    NSString *edited = [self editableSendContent:input title:@"发送选中报文到 DeepSeek（可编辑）"];
+    if (!edited) return;
     NSString *transport = [_mode.titleOfSelectedItem copy];
     NSButton *button = (NSButton *)sender;
     button.enabled = NO;
     _detailView.string = @"AI 深度分析请求中……\n\n本地通信不会被阻塞。";
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        char *raw = GoAIAnalyze((char *)transport.UTF8String, (char *)input.UTF8String);
+        char *raw = GoAIAnalyze((char *)transport.UTF8String, (char *)edited.UTF8String);
         NSString *result = [[NSString alloc] initWithUTF8String:raw ?: "AI 分析失败"];
         free(raw);
         dispatch_async(dispatch_get_main_queue(), ^{
-            [_detailView.textStorage setAttributedString:mdPretty([NSString stringWithFormat:@"# AI 深度分析（仅本次主动调用）\n\n%@", result])];
+            [_detailView.textStorage setAttributedString:mdPretty([NSString stringWithFormat:@"# AI 深度分析（仅本次主动调用）\n\n%@\n\n---\n本次发送内容含报文、传输类型与连接信息（IP:端口）；发送前可在弹窗中编辑或删减。", result])];
             button.enabled = YES;
             [result release];
             [transport release];
