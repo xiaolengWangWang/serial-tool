@@ -48,7 +48,8 @@ func (w *assistantPanel) widget() Widget {
 	quick := func(text string) Widget {
 		return PushButton{Text: text, Image: uiIcon("check"), OnClicked: func() { w.analyze(text) }}
 	}
-	return Composite{AssignTo: &w.panel, Visible: false, MinSize: Size{Width: 330}, MaxSize: Size{Width: 350}, Background: SolidColorBrush{Color: walk.RGB(239, 244, 255)}, Layout: VBox{Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}}, Children: []Widget{
+	// 宽度对齐 mac 的 255px（app.m layoutMainPanes），把省下的横向空间还给数据表。
+	return Composite{AssignTo: &w.panel, Visible: false, MinSize: Size{Width: 250}, MaxSize: Size{Width: 270}, Background: SolidColorBrush{Color: walk.RGB(239, 244, 255)}, Layout: VBox{Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}}, Children: []Widget{
 		Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{Label{Text: "AI 通信助手", Font: Font{Family: "Microsoft YaHei UI", PointSize: 12, Bold: true}, TextColor: walk.RGB(84, 66, 170)}, HSpacer{}, PushButton{Text: "×", MaxSize: Size{Width: 28}, OnClicked: w.app.toggleAssistant}}},
 		Label{AssignTo: &w.status, Text: "AI 未启用 · 可使用本地分析"},
 		TabWidget{AssignTo: &w.tabs, StretchFactor: 1, Pages: []TabPage{

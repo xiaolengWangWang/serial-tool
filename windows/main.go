@@ -86,6 +86,8 @@ type application struct {
 	udpTarget                             *walk.LineEdit
 	targets                               []wincore.ConnectionInfo
 	detailsLabel, sendPreview             *walk.Label
+	selectionLabel                        *walk.Label
+	detailColumns                         *walk.Action
 	connecting, sending                   bool
 	closed                                atomic.Bool
 }
@@ -1065,7 +1067,8 @@ func (a *application) updatePacketStats() {
 			txB += p.Length
 		}
 	}
-	_ = a.statsLabel.SetText(fmt.Sprintf("RX %d/%s  TX %d/%s",
+	_ = a.statsLabel.SetText(fmt.Sprintf("· 共 %d 条 · RX %d/%s · TX %d/%s",
+		rxCnt+txCnt,
 		rxCnt, wincore.FormatBytes(uint64(rxB)),
 		txCnt, wincore.FormatBytes(uint64(txB))))
 }
