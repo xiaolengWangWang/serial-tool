@@ -77,8 +77,15 @@ func (a *application) refreshConnections() {
 		selected = len(peers)
 	}
 	a.targets = peers
-	a.sendTarget.SetModel(labels)
-	a.sendTarget.SetCurrentIndex(selected)
+	// 本函数每秒被 statsLoop 调用一次。SetModel 会重排布局，而重排会让
+	// 展开中的下拉列表立刻收起——用户来不及选就被还原。因此仅在内容变化时才写。
+	if !sameStrings(a.lastTargetLabels, labels) {
+		a.lastTargetLabels = labels
+		a.sendTarget.SetModel(labels)
+		a.sendTarget.SetCurrentIndex(selected)
+	} else if a.sendTarget.CurrentIndex() != selected {
+		a.sendTarget.SetCurrentIndex(selected)
+	}
 	if a.peerList != nil {
 		old := a.peerList.CurrentIndex()
 		list := []string{}
@@ -87,12 +94,31 @@ func (a *application) refreshConnections() {
 				list = append(list, p.RemoteAddress)
 			}
 		}
-		a.peerList.SetModel(list)
-		if old >= 0 && old < len(list) {
-			a.peerList.SetCurrentIndex(old)
+		if !sameStrings(a.lastPeerLabels, list) {
+			a.lastPeerLabels = list
+			a.peerList.SetModel(list)
+			if old >= 0 && old < len(list) {
+				a.peerList.SetCurrentIndex(old)
+			}
 		}
-		a.peerTitle.SetText(fmt.Sprintf("客户端 / 对端 (%d)", len(list)))
+		if title := fmt.Sprintf("客户端 / 对端 (%d)", len(list)); title != a.lastPeerTitle {
+			a.lastPeerTitle = title
+			a.peerTitle.SetText(title)
+		}
 	}
+}
+
+// sameStrings 判断两次刷新拿到的列表是否一致,用于跳过无意义的控件重建。
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *application) selectedPeer() (wincore.ConnectionInfo, bool) {

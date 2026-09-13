@@ -37,7 +37,7 @@ func TestPacketFiltersKeepSourceAndTimeConstraints(t *testing.T) {
 func TestPacketRetentionAndInvalidRows(t *testing.T) {
 	m := new(packetTableModel)
 	for i := 0; i < 10010; i++ {
-		m.add(Packet{Direction: "RX", TS: time.Now()}, "", "全部")
+		m.add(Packet{Direction: "RX", TS: time.Now()}, "", dirAll)
 	}
 	if len(m.all) > 10000 || len(m.visible) > len(m.all) {
 		t.Fatalf("retention inconsistent: %d/%d", len(m.all), len(m.visible))

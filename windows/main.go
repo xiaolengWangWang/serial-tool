@@ -24,7 +24,6 @@ var modes = []string{"串口", "TCP", "UDP", "串口服务器", "HTTP 客户端"
 
 type application struct {
 	loadingRecent                        bool
-	modeButtons                          [4]*walk.PushButton
 	peerList                             *walk.ListBox
 	peerTitle, footer                    *walk.Label
 	displayMode                          *walk.ComboBox
@@ -48,8 +47,9 @@ type application struct {
 	connectButton, timerButton            *walk.PushButton
 	status, statusDot                     *walk.Label
 	addressLabel, portLabel               *walk.Label
-	receiveEdit, sendEdit, logEdit        *walk.TextEdit
-	hexView, hexSend                      *walk.CheckBox
+	roleLabel, protocolLabel              *walk.Label
+	sendEdit, logEdit                     *walk.TextEdit
+	hexSend                               *walk.CheckBox
 	monitorWindow                         *walk.MainWindow
 	monitorEdit                           *walk.TextEdit
 	monitorPaused                         bool
@@ -66,7 +66,6 @@ type application struct {
 	dirFilter                             *walk.ComboBox
 	packetTable                           *walk.TableView
 	packetModel                           *packetTableModel
-	loopSend                              *walk.CheckBox
 	loopCount                             *walk.LineEdit
 	loopButton                            *walk.PushButton
 	loopMu                                sync.Mutex
@@ -88,8 +87,13 @@ type application struct {
 	detailsLabel, sendPreview             *walk.Label
 	selectionLabel                        *walk.Label
 	detailColumns                         *walk.Action
-	connecting, sending                   bool
-	closed                                atomic.Bool
+	// 每秒刷新的上一次结果。只有内容真正变化时才写回控件：
+	// 无条件 SetModel/SetText 会触发重排，而重排会把展开中的下拉列表强制收起。
+	lastTargetLabels, lastPeerLabels []string
+	lastFooter, lastPeerTitle        string
+	lastDetails, lastStatusText      string
+	connecting, sending              bool
+	closed                           atomic.Bool
 }
 
 // vserialEntry 与 vserialModel 是虚拟串口管理窗口的表格数据。
@@ -189,7 +193,7 @@ func (m *packetTableModel) matches(p Packet, kw, dir string, since time.Time) bo
 	if !since.IsZero() && p.TS.Before(since) {
 		return false
 	}
-	if dir != "" && dir != "全部" && p.Direction != dir {
+	if dir != "" && dir != dirAll && p.Direction != dir {
 		return false
 	}
 	if kw != "" {
@@ -330,32 +334,19 @@ func (a *application) updateMode() {
 		}
 		_ = a.protocol.SetCurrentIndex(idx)
 	}
-	a.role.SetVisible(a.mode.Text() == "TCP" || a.mode.Text() == "UDP" || a.mode.Text() == "串口服务器")
-	a.protocol.SetVisible(a.mode.Text() == "串口服务器")
+	// 标签与控件成对显隐：网络参数用两列栅格,只隐藏控件会在行内留下空标签。
+	showRole := a.mode.Text() == "TCP" || a.mode.Text() == "UDP" || a.mode.Text() == "串口服务器"
+	showProto := a.mode.Text() == "串口服务器"
+	a.role.SetVisible(showRole)
+	a.protocol.SetVisible(showProto)
+	if a.roleLabel != nil {
+		a.roleLabel.SetVisible(showRole)
+	}
+	if a.protocolLabel != nil {
+		a.protocolLabel.SetVisible(showProto)
+	}
 	if a.udpTarget != nil {
 		a.udpTarget.SetVisible(a.mode.Text() == "UDP")
-	}
-	labels := []string{"TCP 客户端", "TCP 服务端", "UDP", "串口"}
-	active := -1
-	switch a.uiMode() {
-	case wincore.ModeTCPClient:
-		active = 0
-	case wincore.ModeTCPServer:
-		active = 1
-	case wincore.ModeUDPClient, wincore.ModeUDPServer:
-		active = 2
-	case wincore.ModeSerial:
-		active = 3
-	}
-	for i, b := range a.modeButtons {
-		if b != nil {
-			text := labels[i]
-			if i == active {
-				text = "● " + text
-			}
-			b.SetText(text)
-			b.SetEnabled(!a.connected && !a.connecting)
-		}
 	}
 	if !a.connected {
 		text := map[bool]string{true: "启动监听", false: "连接"}[a.isServer()]
@@ -466,11 +457,6 @@ func (a *application) toggleConnection() {
 	a.mode.SetEnabled(false)
 	a.serialGroup.SetEnabled(false)
 	a.networkGroup.SetEnabled(false)
-	for _, b := range a.modeButtons {
-		if b != nil {
-			b.SetEnabled(false)
-		}
-	}
 	a.connectButton.SetEnabled(false)
 	a.setConnStatus(colorYellow, "正在连接...")
 	go func() {
@@ -721,7 +707,7 @@ func (a *application) onPacket(raw wincore.Packet) {
 		if a.closed.Load() || a.mw.IsDisposed() {
 			return
 		}
-		kw, dir := "", "全部"
+		kw, dir := "", dirAll
 		if a.searchEdit != nil {
 			kw = a.searchEdit.Text()
 		}
@@ -815,7 +801,7 @@ func (a *application) applyFilter() {
 		a.packetModel.connection = strings.TrimSpace(a.connectionFilter.Text())
 	}
 	kw := strings.TrimSpace(a.searchEdit.Text())
-	dir := "全部"
+	dir := dirAll
 	if a.dirFilter != nil {
 		dir = a.dirFilter.Text()
 	}
@@ -834,7 +820,7 @@ func (a *application) clearFilter() {
 		_ = a.timeFilter.SetCurrentIndex(0)
 	}
 	if a.packetModel != nil {
-		a.packetModel.refilter("", "全部", time.Time{})
+		a.packetModel.refilter("", dirAll, time.Time{})
 	}
 }
 
@@ -854,7 +840,7 @@ func (a *application) openMonitor() {
 					PushButton{Text: "清空", OnClicked: func() { _ = a.monitorEdit.SetText("") }},
 					PushButton{Text: "导出", OnClicked: func() { a.exportText(a.monitorEdit.Text(), "monitor-data", a.monitorWindow) }},
 				}},
-				TextEdit{AssignTo: &a.monitorEdit, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: "Consolas", PointSize: 10}},
+				TextEdit{AssignTo: &a.monitorEdit, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: fontMono, PointSize: sizeMono}},
 			},
 		}).Create()
 		if err != nil {
@@ -869,16 +855,36 @@ func (a *application) openMonitor() {
 	a.monitorWindow.Show()
 }
 
+// 字体阶梯：正文与标题只差 1pt,避免分区标题过分抢眼;HEX 一律同字号,
+// 便于把数据表里的报文和发送框内容直接对照。
+const (
+	fontUI    = "Microsoft YaHei UI"
+	fontMono  = "Consolas"
+	sizeBody  = 9
+	sizeTitle = 10
+	sizeMono  = 9
+)
+
+// dirAll 同时是方向筛选下拉框的首项文案和“不过滤”的判定值,
+// 两者必须一致,否则筛选会把每一条报文都排除掉。
+const dirAll = "全部方向"
+
+// 状态色降饱和,蓝色只保留一种作主色,避免此前深蓝/灰蓝/亮蓝三种并存。
 var (
 	colorGray   = walk.RGB(140, 140, 140)
-	colorGreen  = walk.RGB(40, 180, 60)
-	colorYellow = walk.RGB(210, 150, 0)
-	colorRed    = walk.RGB(210, 50, 50)
-	colorBlue   = walk.RGB(30, 120, 220)
+	colorGreen  = walk.RGB(34, 140, 58)
+	colorYellow = walk.RGB(186, 132, 8)
+	colorRed    = walk.RGB(190, 48, 48)
+	colorBlue   = walk.RGB(28, 78, 140)
+	colorMuted  = walk.RGB(96, 108, 120)
 )
 
 // setConnStatus 同时更新灯颜色与文字。
 func (a *application) setConnStatus(color walk.Color, text string) {
+	if text == a.lastStatusText {
+		return
+	}
+	a.lastStatusText = text
 	if a.statusDot != nil {
 		a.statusDot.SetTextColor(color)
 	}
@@ -939,7 +945,10 @@ func (a *application) updateStatus(st wincore.Stats) {
 	if len(a.targets) > 0 && a.targets[0].Active {
 		address = "本地 " + a.targets[0].LocalAddress + " → " + a.targets[0].RemoteAddress
 	}
-	a.footer.SetText(fmt.Sprintf("%s %s  |  %s  |  RX %s  TX %s  |  %s/s  |  %s", a.uiMode(), label, address, wincore.FormatBytes(st.RXBytes), wincore.FormatBytes(st.TXBytes), wincore.FormatBytes(rate), elapsed))
+	if footer := fmt.Sprintf("%s %s  |  %s  |  RX %s  TX %s  |  %s/s  |  %s", a.uiMode(), label, address, wincore.FormatBytes(st.RXBytes), wincore.FormatBytes(st.TXBytes), wincore.FormatBytes(rate), elapsed); footer != a.lastFooter {
+		a.lastFooter = footer
+		a.footer.SetText(footer)
+	}
 	if a.timeFilter.CurrentIndex() > 0 {
 		a.applyFilter()
 	}
@@ -1124,15 +1133,6 @@ func (a *application) newInstance() {
 	}
 	if err := exec.Command(exe).Start(); err != nil {
 		a.showError(err)
-	}
-}
-
-func (a *application) toggleHexView() {
-	if a.hexView == nil {
-		return
-	}
-	if a.hexView != nil {
-		a.hexView.SetChecked(!a.hexView.Checked())
 	}
 }
 
