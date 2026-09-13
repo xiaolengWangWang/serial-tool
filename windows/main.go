@@ -5,6 +5,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,13 +23,27 @@ import (
 var modes = []string{"串口", "TCP", "UDP", "串口服务器", "HTTP 客户端"}
 
 type application struct {
+	loadingRecent                        bool
+	modeButtons                          [4]*walk.PushButton
+	peerList                             *walk.ListBox
+	peerTitle, footer                    *walk.Label
+	displayMode                          *walk.ComboBox
+	autoScroll, showTime, clearAfterSend *walk.CheckBox
+	assistant                            *assistantPanel
+	peerBaseline                         map[string]wincore.ConnectionInfo
+	maxConnections                       int
+	bridgeLatest                         bool
+	lastStatsBytes                       uint64
+	lastStatsAt                          time.Time
+
 	mw                                    *walk.MainWindow
 	mode, ports, baud, data, parity, stop *walk.ComboBox
 	protocol, role, eol                   *walk.ComboBox
-	sendHistory, favorites               *walk.ComboBox
-	autoReconnect                        *walk.CheckBox
-	reconnectInterval                    *walk.LineEdit
-	netIP, netPort, interval             *walk.LineEdit
+	sendHistory, favorites                *walk.ComboBox
+	autoReconnect                         *walk.CheckBox
+	reconnectInterval                     *walk.LineEdit
+	netIP                                 *walk.ComboBox
+	netPort, interval                     *walk.LineEdit
 	serialGroup, networkGroup             *walk.GroupBox
 	connectButton, timerButton            *walk.PushButton
 	status, statusDot                     *walk.Label
@@ -65,6 +80,14 @@ type application struct {
 	vsPort                                *walk.LineEdit
 	vsTable                               *walk.TableView
 	vsModel                               *vserialModel
+	protocolFilter                        *walk.ComboBox
+	connectionFilter                      *walk.LineEdit
+	sendTarget                            *walk.ComboBox
+	udpTarget                             *walk.LineEdit
+	targets                               []wincore.ConnectionInfo
+	detailsLabel, sendPreview             *walk.Label
+	connecting, sending                   bool
+	closed                                atomic.Bool
 }
 
 // vserialEntry 与 vserialModel 是虚拟串口管理窗口的表格数据。
@@ -91,6 +114,7 @@ func (m *vserialModel) Value(row, col int) interface{} {
 
 // Packet is a captured data frame shown in the packet table.
 type Packet struct {
+	Raw       wincore.Packet
 	TS        time.Time
 	Direction string // "RX" or "TX"
 	Hex       string
@@ -100,14 +124,16 @@ type Packet struct {
 
 type packetTableModel struct {
 	walk.TableModelBase
-	all     []Packet
-	visible []Packet
+	all                   []Packet
+	visible               []Packet
+	since                 time.Time
+	transport, connection string
 }
 
 func (m *packetTableModel) RowCount() int { return len(m.visible) }
 
 func (m *packetTableModel) Value(row, col int) interface{} {
-	if row >= len(m.visible) {
+	if row < 0 || row >= len(m.visible) {
 		return ""
 	}
 	p := m.visible[row]
@@ -122,6 +148,12 @@ func (m *packetTableModel) Value(row, col int) interface{} {
 		return p.ASCII
 	case 4:
 		return fmt.Sprintf("%d B", p.Length)
+	case 5:
+		return p.Raw.Transport
+	case 6:
+		return p.Raw.Endpoint
+	case 7:
+		return p.Raw.ConnectionID
 	}
 	return ""
 }
@@ -130,8 +162,10 @@ func (m *packetTableModel) add(p Packet, kw, dir string) {
 	m.all = append(m.all, p)
 	if len(m.all) > 10000 {
 		m.all = m.all[len(m.all)-8000:]
+		m.refilter(kw, dir, m.since)
+		return
 	}
-	if m.matches(p, kw, dir, time.Time{}) {
+	if m.matches(p, kw, dir, m.since) {
 		m.visible = append(m.visible, p)
 		if len(m.visible) > 10000 {
 			m.visible = m.visible[len(m.visible)-8000:]
@@ -141,6 +175,15 @@ func (m *packetTableModel) add(p Packet, kw, dir string) {
 }
 
 func (m *packetTableModel) matches(p Packet, kw, dir string, since time.Time) bool {
+	if m.transport != "" && m.transport != "全部协议" && p.Raw.Transport != m.transport {
+		return false
+	}
+	if strings.HasPrefix(m.connection, "id:") && p.Raw.ConnectionID != strings.TrimPrefix(m.connection, "id:") {
+		return false
+	}
+	if m.connection != "" && !strings.HasPrefix(m.connection, "id:") && !strings.Contains(strings.ToLower(p.Raw.ConnectionID+" "+p.Raw.Endpoint), strings.ToLower(m.connection)) {
+		return false
+	}
 	if !since.IsZero() && p.TS.Before(since) {
 		return false
 	}
@@ -150,7 +193,7 @@ func (m *packetTableModel) matches(p Packet, kw, dir string, since time.Time) bo
 	if kw != "" {
 		kl := strings.ToLower(kw)
 		if !strings.Contains(strings.ToLower(p.Hex), kl) &&
-			!strings.Contains(strings.ToLower(p.ASCII), kl) {
+			!strings.Contains(strings.ToLower(p.ASCII+" "+p.Raw.ConnectionID+" "+p.Raw.Endpoint+" "+p.Raw.Source+" "+p.Raw.Transport), kl) {
 			return false
 		}
 	}
@@ -158,6 +201,7 @@ func (m *packetTableModel) matches(p Packet, kw, dir string, since time.Time) bo
 }
 
 func (m *packetTableModel) refilter(kw, dir string, since time.Time) {
+	m.since = since
 	m.visible = m.visible[:0]
 	for _, p := range m.all {
 		if m.matches(p, kw, dir, since) {
@@ -170,7 +214,7 @@ func (m *packetTableModel) refilter(kw, dir string, since time.Time) {
 func (m *packetTableModel) exportText() string {
 	var b strings.Builder
 	for _, p := range m.visible {
-		b.WriteString(fmt.Sprintf("[%s %s] %s\r\n", p.TS.Format("15:04:05.000"), p.Direction, p.Hex))
+		b.WriteString(fmt.Sprintf("[%s %s %s %s %s] %s\r\n", p.TS.Format("2006-01-02 15:04:05.000"), p.Direction, p.Raw.Transport, p.Raw.ConnectionID, p.Raw.Endpoint, p.Hex))
 	}
 	return b.String()
 }
@@ -189,20 +233,21 @@ func main() {
 		return
 	}
 	dataDir := filepath.Join(configDir, "CommBox", "data")
-	app.engine, err = wincore.New(dataDir, app.onData, app.onLog)
+	app.engine, err = wincore.New(dataDir, nil, app.onLog)
 	if err != nil {
 		walk.MsgBox(nil, "SQLite 初始化失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
 	app.engine.SetOnClosed(app.onClosed)
+	app.engine.SetOnPacket(app.onPacket)
 	defer app.engine.Close()
 	app.packetModel = new(packetTableModel)
 	if err = app.createWindow(); err != nil {
 		walk.MsgBox(nil, "界面初始化失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
-	if icon, err := walk.NewIconFromResourceId(1); err == nil {
-		_ = app.mw.SetIcon(icon)
+	if icon := uiIcon("app"); icon != nil {
+		app.mw.SetIcon(icon)
 	}
 	app.setupTray()
 	app.refreshPorts()
@@ -213,195 +258,18 @@ func main() {
 	app.refreshRecentConn()
 	app.appendLog("SQLite 数据目录: " + app.engine.DataDir())
 	go app.statsLoop()
+	app.mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
+		if !*canceled {
+			app.assistant.stop()
+			app.closed.Store(true)
+			app.stopTimer(false)
+			app.stopLoop()
+		}
+	})
 	app.mw.Run()
+	app.closed.Store(true)
 	app.stopTimer(false)
-}
-
-func (a *application) createWindow() error {
-	return (MainWindow{
-		AssignTo: &a.mw,
-		Title:    "CommBox v" + wincore.Version + " - Windows",
-		MinSize:  Size{Width: 1000, Height: 680},
-		Size:     Size{Width: 1180, Height: 760},
-		MenuItems: []MenuItem{
-			Menu{
-				Text: "操作",
-				Items: []MenuItem{
-					Action{Text:"新建实例", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyN}, OnTriggered: a.newInstance},
-					Action{Text:"连接 / 断开", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyL}, OnTriggered: a.toggleConnection},
-					Action{Text:"发送一次", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyReturn}, OnTriggered: func() { a.sendOnce(false) }},
-					Action{Text:"定时发送开关", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyT}, OnTriggered: a.toggleTimer},
-					Action{Text:"刷新串口", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyR}, OnTriggered: a.refreshPorts},
-					Action{Text:"虚拟串口映射", Shortcut: Shortcut{Modifiers: walk.ModControl | walk.ModShift, Key: walk.KeyV}, OnTriggered: a.openVSerial},
-				},
-			},
-			Menu{
-				Text: "视图",
-				Items: []MenuItem{
-					Action{Text:"清空接收区", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyK}, OnTriggered: func() {
-						if a.packetModel != nil { a.packetModel.clear(); a.updatePacketStats() }
-					}},
-					Action{Text:"导出接收数据", Shortcut: Shortcut{Modifiers: walk.ModControl, Key: walk.KeyE}, OnTriggered: func() {
-						if a.packetModel != nil { a.exportText(a.packetModel.exportText(), "serial-log", a.mw) }
-					}},
-					Action{Text:"ASCII 列开关", Shortcut: Shortcut{Modifiers: walk.ModControl | walk.ModShift, Key: walk.KeyH}, OnTriggered: a.toggleHexView},
-					Action{Text:"监控窗口", Shortcut: Shortcut{Modifiers: walk.ModControl | walk.ModShift, Key: walk.KeyM}, OnTriggered: a.openMonitor},
-				},
-			},
-		},
-		Layout:   HBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}},
-		Children: []Widget{
-			Composite{
-				MinSize: Size{Width: 240}, MaxSize: Size{Width: 260}, Layout: VBox{},
-				Font: Font{PointSize: 10},
-				Children: []Widget{
-					Label{Text: "工作模式", Font: Font{PointSize: 10}},
-					ComboBox{AssignTo: &a.mode, Model: modes, CurrentIndex: 0, OnCurrentIndexChanged: a.updateMode, Font: Font{PointSize: 10}},
-					GroupBox{
-						AssignTo: &a.serialGroup, Title: "串口参数", Layout: VBox{},
-						Font: Font{PointSize: 10},
-						Children: []Widget{
-							Composite{Layout: HBox{}, Children: []Widget{
-								Label{Text: "端口", MinSize: Size{Width: 45}, Font: Font{PointSize: 10}},
-								ComboBox{AssignTo: &a.ports, Editable: true, StretchFactor: 1, Font: Font{PointSize: 10}},
-								PushButton{Text: "刷新", OnClicked: a.refreshPorts, Font: Font{PointSize: 10}},
-							}},
-							Composite{Layout: HBox{}, Children: []Widget{
-								Label{Text: "波特率", MinSize: Size{Width: 55}, Font: Font{PointSize: 10}},
-								ComboBox{AssignTo: &a.baud, Editable: true, Model: []string{"1200", "2400", "4800", "9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"}, CurrentIndex: 7, Font: Font{PointSize: 10}},
-								Label{Text: "数据位", Font: Font{PointSize: 10}}, ComboBox{AssignTo: &a.data, Model: []string{"5", "6", "7", "8"}, CurrentIndex: 3, Font: Font{PointSize: 10}},
-							}},
-							Composite{Layout: HBox{}, Children: []Widget{
-								Label{Text: "校验", MinSize: Size{Width: 55}, Font: Font{PointSize: 10}}, ComboBox{AssignTo: &a.parity, Model: []string{"无校验", "奇校验", "偶校验"}, CurrentIndex: 0, Font: Font{PointSize: 10}},
-								Label{Text: "停止位", Font: Font{PointSize: 10}}, ComboBox{AssignTo: &a.stop, Model: []string{"1", "2"}, CurrentIndex: 0, Font: Font{PointSize: 10}},
-							}},
-						},
-					},
-					GroupBox{
-						AssignTo: &a.networkGroup, Title: "网络参数", Layout: VBox{},
-						Font: Font{PointSize: 10},
-						Children: []Widget{
-							Composite{Layout: HBox{}, Children: []Widget{
-								Label{AssignTo: &a.addressLabel, Text: "服务器 IP", MinSize: Size{Width: 65}, Font: Font{PointSize: 10}},
-								LineEdit{AssignTo: &a.netIP, StretchFactor: 1, CueBanner: "IP 地址", Font: Font{PointSize: 10}},
-							}},
-							Composite{Layout: HBox{}, Children: []Widget{
-								Label{AssignTo: &a.portLabel, Text: "端口", MinSize: Size{Width: 65}, Font: Font{PointSize: 10}},
-								LineEdit{AssignTo: &a.netPort, Text: "9000", MinSize: Size{Width: 90}, MaxSize: Size{Width: 120}, Font: Font{PointSize: 10}},
-							}},
-							Composite{Layout: HBox{}, Children: []Widget{
-								Label{Text: "协议", MinSize: Size{Width: 45}, Font: Font{PointSize: 10}}, ComboBox{AssignTo: &a.protocol, Model: []string{"TCP", "UDP"}, CurrentIndex: 0, Font: Font{PointSize: 10}},
-								Label{Text: "角色", Font: Font{PointSize: 10}}, ComboBox{AssignTo: &a.role, Model: []string{"服务端", "客户端"}, CurrentIndex: 0, OnCurrentIndexChanged: a.updateMode, Font: Font{PointSize: 10}},
-							}},
-							Composite{Layout: HBox{}, Children: []Widget{
-								CheckBox{AssignTo: &a.autoReconnect, Text: "自动重连", Checked: true, Font: Font{PointSize: 10}},
-								Label{Text: "重连间隔(秒)", Font: Font{PointSize: 10}},
-								LineEdit{AssignTo: &a.reconnectInterval, Text: "2", MinSize: Size{Width: 50}, Font: Font{PointSize: 10}},
-							}},
-						},
-					},
-					VSpacer{},
-					Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{
-						Label{Text: "最近", Font: Font{PointSize: 9}, MinSize: Size{Width: 30}},
-						ComboBox{AssignTo: &a.recentConn, StretchFactor: 1, Font: Font{PointSize: 9},
-							OnCurrentIndexChanged: a.onRecentConnSelected},
-					}},
-					Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{
-						Label{AssignTo: &a.statusDot, Text: "●", MinSize: Size{Width: 18}, Font: Font{PointSize: 13}},
-						Label{AssignTo: &a.status, Text: "未连接", Font: Font{PointSize: 11}},
-					}},
-					PushButton{AssignTo: &a.connectButton, Text: "连接", MinSize: Size{Height: 42}, OnClicked: a.toggleConnection, Font: Font{PointSize: 11}},
-					Label{Text: "数据库按日期和 100 MiB 自动分文件", Font: Font{PointSize: 9}},
-				},
-			},
-			Composite{
-				StretchFactor: 1, Layout: VBox{},
-				Children: []Widget{
-					Composite{Layout: HBox{}, Children: []Widget{
-						Label{Text: "接收数据"}, HSpacer{},
-						Label{AssignTo: &a.statsLabel, Text: "", Font: Font{PointSize: 9}},
-						CheckBox{AssignTo: &a.hexView, Text: "ASCII 列", Checked: true, OnCheckedChanged: func() {
-							if a.packetTable != nil {
-								col := a.packetTable.Columns().At(3)
-								if a.hexView.Checked() {
-									_ = col.SetWidth(200)
-								} else {
-									_ = col.SetWidth(0)
-								}
-							}
-						}},
-						PushButton{Text: "新建实例", OnClicked: a.newInstance},
-						PushButton{Text: "监控窗口", OnClicked: a.openMonitor},
-						PushButton{Text: "虚拟串口", OnClicked: a.openVSerial},
-						PushButton{Text: "工具箱", OnClicked: a.openToolbox},
-						PushButton{Text: "导出", OnClicked: func() {
-							if a.packetModel != nil { a.exportText(a.packetModel.exportText(), "serial-log", a.mw) }
-						}},
-						PushButton{Text: "清空", OnClicked: func() {
-							if a.packetModel != nil { a.packetModel.clear(); a.updatePacketStats() }
-						}},
-					}},
-					Composite{Layout: HBox{}, Children: []Widget{
-						Label{Text: "搜索"},
-						LineEdit{AssignTo: &a.searchEdit, StretchFactor: 1},
-						ComboBox{AssignTo: &a.dirFilter, Model: []string{"全部", "RX", "TX"}, CurrentIndex: 0, MinSize: Size{Width: 72}, OnCurrentIndexChanged: a.applyFilter},
-						ComboBox{AssignTo: &a.timeFilter, Model: []string{"全部", "1分钟", "5分钟", "30分钟"}, CurrentIndex: 0, MinSize: Size{Width: 88}, OnCurrentIndexChanged: a.applyFilter},
-						PushButton{Text: "过滤", OnClicked: a.applyFilter},
-						PushButton{Text: "清除", OnClicked: a.clearFilter},
-					}},
-					TabWidget{
-						StretchFactor: 6,
-						Pages: []TabPage{
-							TabPage{Title: "数据", Layout: VBox{}, Children: []Widget{
-								TableView{
-									AssignTo: &a.packetTable, Model: a.packetModel,
-									StretchFactor: 1, AlternatingRowBG: true, LastColumnStretched: true,
-									Font: Font{Family: "Consolas", PointSize: 9},
-									Columns: []TableViewColumn{
-										{Title: "时间", Width: 100},
-										{Title: "方向", Width: 48},
-										{Title: "HEX", Width: 300},
-										{Title: "ASCII", Width: 200},
-										{Title: "长度", Width: 70},
-									},
-									ContextMenuItems: []MenuItem{
-										Action{Text: "复制 HEX", OnTriggered: func() { a.copyPacketField("hex") }},
-										Action{Text: "复制 ASCII", OnTriggered: func() { a.copyPacketField("ascii") }},
-										Action{Text: "复制整行", OnTriggered: func() { a.copyPacketField("all") }},
-									},
-								},
-							}},
-							TabPage{Title: "日志", Layout: VBox{}, Children: []Widget{
-								TextEdit{AssignTo: &a.logEdit, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: "Consolas", PointSize: 10}},
-							}},
-						},
-					},
-					Composite{Layout: HBox{}, Children: []Widget{
-						Label{Text: "发送数据"}, HSpacer{},
-						CheckBox{AssignTo: &a.hexSend, Text: "HEX 发送", Checked: true},
-						CheckBox{AssignTo: &a.loopSend, Text: "循环"},
-						Label{Text: "次(0=一直)"}, LineEdit{AssignTo: &a.loopCount, Text: "0", MinSize: Size{Width: 52}, MaxSize: Size{Width: 65}},
-						Label{Text: "行尾"}, ComboBox{AssignTo: &a.eol, Model: []string{"无", "LF", "CR", "CRLF"}, CurrentIndex: 0, MinSize: Size{Width: 75}},
-						Label{Text: "间隔(ms)"}, LineEdit{AssignTo: &a.interval, Text: "1000", MinSize: Size{Width: 75}, MaxSize: Size{Width: 90}},
-					}},
-					Composite{Layout: HBox{}, Children: []Widget{
-						Label{Text: "历史"}, ComboBox{AssignTo: &a.sendHistory, Editable: true, MinSize: Size{Width: 150}, OnCurrentIndexChanged: a.onSendHistorySelected},
-						Label{Text: "收藏"}, ComboBox{AssignTo: &a.favorites, Editable: true, MinSize: Size{Width: 150}, OnCurrentIndexChanged: a.onFavoriteSelected},
-						PushButton{Text: "收藏当前", OnClicked: a.saveFavorite},
-						PushButton{Text: "删除收藏", OnClicked: a.deleteFavorite},
-					}},
-					Composite{Layout: HBox{}, StretchFactor: 1, Children: []Widget{
-						TextEdit{AssignTo: &a.sendEdit, VScroll: true, HScroll: true, StretchFactor: 1, Font: Font{Family: "Consolas", PointSize: 10}},
-						Composite{MinSize: Size{Width: 100}, MaxSize: Size{Width: 110}, Layout: VBox{}, Children: []Widget{
-							PushButton{Text: "发送一次", StretchFactor: 1, OnClicked: func() { a.sendOnce(false) }},
-							PushButton{AssignTo: &a.loopButton, Text: "循环发送", StretchFactor: 1, OnClicked: a.toggleLoopSend},
-							PushButton{AssignTo: &a.timerButton, Text: "开始定时", StretchFactor: 1, OnClicked: a.toggleTimer},
-						}},
-					}},
-				},
-			},
-		},
-	}).Create()
+	app.stopLoop()
 }
 
 func (a *application) refreshPorts() {
@@ -423,7 +291,7 @@ func (a *application) refreshPorts() {
 }
 
 func (a *application) updateMode() {
-	if a.mode == nil || a.serialGroup == nil {
+	if a.mode == nil || a.serialGroup == nil || a.role == nil || a.connectButton == nil || a.networkGroup == nil {
 		return
 	}
 	spec := wincore.SpecOf(a.uiMode())
@@ -460,9 +328,39 @@ func (a *application) updateMode() {
 		}
 		_ = a.protocol.SetCurrentIndex(idx)
 	}
-	a.updateAddressDefault()
+	a.role.SetVisible(a.mode.Text() == "TCP" || a.mode.Text() == "UDP" || a.mode.Text() == "串口服务器")
+	a.protocol.SetVisible(a.mode.Text() == "串口服务器")
+	if a.udpTarget != nil {
+		a.udpTarget.SetVisible(a.mode.Text() == "UDP")
+	}
+	labels := []string{"TCP 客户端", "TCP 服务端", "UDP", "串口"}
+	active := -1
+	switch a.uiMode() {
+	case wincore.ModeTCPClient:
+		active = 0
+	case wincore.ModeTCPServer:
+		active = 1
+	case wincore.ModeUDPClient, wincore.ModeUDPServer:
+		active = 2
+	case wincore.ModeSerial:
+		active = 3
+	}
+	for i, b := range a.modeButtons {
+		if b != nil {
+			text := labels[i]
+			if i == active {
+				text = "● " + text
+			}
+			b.SetText(text)
+			b.SetEnabled(!a.connected && !a.connecting)
+		}
+	}
 	if !a.connected {
-		a.connectButton.SetText(map[bool]string{true: "开始监听", false: "连接"}[a.isServer()])
+		text := map[bool]string{true: "启动监听", false: "连接"}[a.isServer()]
+		if a.uiMode() == wincore.ModeSerial {
+			text = "打开串口"
+		}
+		a.connectButton.SetText(text)
 	}
 }
 
@@ -527,7 +425,7 @@ func (a *application) config() (wincore.Config, error) {
 	case ip == "":
 		address = ":" + port // 服务端：监听所有接口
 	default:
-		address = ip + ":" + port
+		address = net.JoinHostPort(strings.Trim(ip, "[]"), port)
 	}
 	autoReconnect := a.autoReconnect.Checked()
 	interval := 2
@@ -543,8 +441,12 @@ func (a *application) config() (wincore.Config, error) {
 }
 
 func (a *application) toggleConnection() {
+	if a.connecting {
+		return
+	}
 	if a.connected {
 		a.stopTimer(true)
+		a.stopLoop()
 		a.engine.Disconnect()
 		a.connected = false
 		a.mode.SetEnabled(true)
@@ -558,13 +460,32 @@ func (a *application) toggleConnection() {
 		a.showError(err)
 		return
 	}
+	a.connecting = true
+	a.mode.SetEnabled(false)
+	a.serialGroup.SetEnabled(false)
+	a.networkGroup.SetEnabled(false)
+	for _, b := range a.modeButtons {
+		if b != nil {
+			b.SetEnabled(false)
+		}
+	}
 	a.connectButton.SetEnabled(false)
 	a.setConnStatus(colorYellow, "正在连接...")
 	go func() {
 		err := a.engine.Connect(cfg)
+		if a.closed.Load() {
+			a.engine.Disconnect()
+			return
+		}
 		a.mw.Synchronize(func() {
+			if a.closed.Load() {
+				return
+			}
+			a.connecting = false
 			a.connectButton.SetEnabled(true)
 			if err != nil {
+				a.updateMode()
+				a.mode.SetEnabled(true)
 				a.setConnStatus(colorRed, "连接失败")
 				a.showError(err)
 				return
@@ -573,65 +494,53 @@ func (a *application) toggleConnection() {
 			a.mode.SetEnabled(false)
 			a.serialGroup.SetEnabled(false)
 			a.networkGroup.SetEnabled(false)
-			a.connectButton.SetText(map[bool]string{true: "停止监听", false: "断开"}[a.isServer()])
+			a.updateMode()
+			a.connectButton.SetText(map[bool]string{true: "停止监听", false: "断开连接"}[a.isServer()])
+			if cfg.Mode == wincore.ModeSerial {
+				a.connectButton.SetText("关闭串口")
+			}
 			if a.isServer() {
 				a.setConnStatus(colorBlue, "监听中")
 			} else {
 				a.setConnStatus(colorGreen, "已连接")
 			}
-				a.refreshRecentConn()
+			a.refreshRecentConn()
 		})
 	}()
 }
 
 func (a *application) sendOnce(fromTimer bool) {
-	input, asHex := a.sendEdit.Text(), a.hexSend.Checked()
-	err := a.engine.Send(input, asHex, a.eol.Text())
-	if err != nil {
-		if fromTimer {
-			a.stopTimer(true)
-		}
-		a.showError(err)
+	if a.sending {
 		return
 	}
-	a.refreshSendHistory()
-	if a.mode.Text() != "HTTP 客户端" {
-		var txData []byte
-		if data, e := wincore.ParseData(input, asHex, a.eol.Text()); e == nil {
-			txData = data
-		} else {
-			txData = []byte(input)
+	if !a.connected {
+		a.sendPreview.SetText("请先连接或启动监听")
+		return
+	}
+	input, asHex, eol := a.sendEdit.Text(), a.hexSend.Checked(), a.eol.Text()
+	id, address := a.selectedSendTarget()
+	a.sending = true
+	go func() {
+		err := a.sendCaptured(input, asHex, eol, id, address)
+		if a.closed.Load() {
+			return
 		}
-		txHex := fmt.Sprintf("% X", txData)
-		var txASCII strings.Builder
-		for _, b := range txData {
-			if b >= 32 && b < 127 {
-				txASCII.WriteByte(b)
-			} else {
-				txASCII.WriteByte('.')
-			}
-		}
-		p := Packet{TS: time.Now(), Direction: "TX", Hex: txHex, ASCII: txASCII.String(), Length: len(txData)}
 		a.mw.Synchronize(func() {
-			if a.packetModel == nil {
+			a.sending = false
+			if err != nil {
+				if fromTimer {
+					a.stopTimer(true)
+				}
+				a.showError(err)
 				return
 			}
-			kw, dir := "", "全部"
-			if a.searchEdit != nil {
-				kw = a.searchEdit.Text()
+			a.refreshSendHistory()
+			if a.clearAfterSend != nil && a.clearAfterSend.Checked() && a.sendEdit.Text() == input {
+				a.sendEdit.SetText("")
 			}
-			if a.dirFilter != nil {
-				dir = a.dirFilter.Text()
-			}
-			a.packetModel.add(p, kw, dir)
-			if a.packetTable != nil {
-				a.packetTable.EnsureItemVisible(a.packetModel.RowCount() - 1)
-			}
-			a.updatePacketStats()
 		})
-	}
+	}()
 }
-
 func (a *application) toggleTimer() {
 	a.timerMu.Lock()
 	running := a.timerCancel != nil
@@ -650,6 +559,11 @@ func (a *application) toggleTimer() {
 		return
 	}
 	input, asHex, eol := a.sendEdit.Text(), a.hexSend.Checked(), a.eol.Text()
+	id, address := a.selectedSendTarget()
+	if _, err := wincore.ParseData(input, asHex, eol); err != nil {
+		a.showError(err)
+		return
+	}
 	if input == "" && (asHex || eol == "无") {
 		a.showError(fmt.Errorf("请输入要发送的数据"))
 		return
@@ -669,7 +583,7 @@ func (a *application) toggleTimer() {
 			case <-cancel:
 				return
 			case <-ticker.C:
-				if err := a.engine.Send(input, asHex, eol); err != nil {
+				if err := a.sendCaptured(input, asHex, eol, id, address); err != nil {
 					a.mw.Synchronize(func() {
 						a.stopTimer(true)
 						a.showError(fmt.Errorf("定时发送已停止: %w", err))
@@ -699,107 +613,126 @@ func (a *application) stopTimer(logIt bool) {
 	}
 }
 
+func (a *application) stopLoop() {
+	a.loopMu.Lock()
+	if a.loopCancel != nil {
+		close(a.loopCancel)
+		a.loopCancel = nil
+	}
+	a.loopMu.Unlock()
+	if a.loopButton != nil && !a.loopButton.IsDisposed() {
+		a.loopButton.SetText("循环发送")
+	}
+}
+
 func (a *application) toggleLoopSend() {
 	a.loopMu.Lock()
 	running := a.loopCancel != nil
 	a.loopMu.Unlock()
 	if running {
-		a.loopMu.Lock()
-		close(a.loopCancel)
-		a.loopCancel = nil
-		a.loopMu.Unlock()
-		if a.loopButton != nil {
-			a.loopButton.SetText("循环发送")
-		}
-		a.appendLog("循环发送已停止")
+		a.stopLoop()
 		return
 	}
 	if !a.connected {
 		a.showError(fmt.Errorf("请先连接"))
 		return
 	}
-	n := 0
-	if a.loopCount != nil {
-		if v, err := strconv.Atoi(strings.TrimSpace(a.loopCount.Text())); err == nil && v >= 0 {
-			n = v
-		}
+	n, err := strconv.Atoi(strings.TrimSpace(a.loopCount.Text()))
+	if err != nil || n < 0 {
+		a.showError(fmt.Errorf("循环次数应为非负整数"))
+		return
 	}
-	ms := 0
-	if v, err := strconv.Atoi(strings.TrimSpace(a.interval.Text())); err == nil && v >= 0 {
-		ms = v
+	ms, err := strconv.Atoi(strings.TrimSpace(a.interval.Text()))
+	if err != nil || ms < 10 {
+		a.showError(fmt.Errorf("发送间隔不能小于 10 ms"))
+		return
+	}
+	input, asHex, eol := a.sendEdit.Text(), a.hexSend.Checked(), a.eol.Text()
+	id, address := a.selectedSendTarget()
+	if _, err := wincore.ParseData(input, asHex, eol); err != nil {
+		a.showError(err)
+		return
 	}
 	cancel := make(chan struct{})
 	a.loopMu.Lock()
 	a.loopCancel = cancel
 	a.loopMu.Unlock()
-	if a.loopButton != nil {
-		a.loopButton.SetText("停止循环")
-	}
-	a.appendLog(fmt.Sprintf("循环发送已开始: %d 次, 间隔 %d ms", n, ms))
+	a.loopButton.SetText("停止循环")
 	go func() {
-		count := 0
-		for {
+		var sendErr error
+		defer func() {
+			if !a.closed.Load() {
+				a.mw.Synchronize(func() {
+					a.loopMu.Lock()
+					current := a.loopCancel == cancel
+					if current {
+						a.loopCancel = nil
+					}
+					a.loopMu.Unlock()
+					if current {
+						a.loopButton.SetText("循环发送")
+						if sendErr != nil {
+							a.showError(sendErr)
+						} else {
+							a.appendLog("循环发送完成")
+						}
+					}
+				})
+			}
+		}()
+		for count := 0; n == 0 || count < n; count++ {
 			select {
 			case <-cancel:
 				return
 			default:
 			}
-			if n > 0 && count >= n {
-				a.mw.Synchronize(func() {
-					a.loopMu.Lock()
-					if a.loopCancel == cancel {
-						a.loopCancel = nil
-					}
-					a.loopMu.Unlock()
-					if a.loopButton != nil {
-						a.loopButton.SetText("循环发送")
-					}
-					a.appendLog("循环发送完成")
-				})
+			if sendErr = a.sendCaptured(input, asHex, eol, id, address); sendErr != nil {
 				return
 			}
-			a.sendOnce(true)
-			count++
-			if ms > 0 {
-				select {
-				case <-cancel:
-					return
-				case <-time.After(time.Duration(ms) * time.Millisecond):
-				}
+			select {
+			case <-cancel:
+				return
+			case <-time.After(time.Duration(ms) * time.Millisecond):
 			}
 		}
 	}()
 }
-
-func (a *application) onData(source string, data []byte) {
-	hex := fmt.Sprintf("% X", data)
-	var asciiB strings.Builder
-	for _, b := range data {
+func packetFromCore(raw wincore.Packet) Packet {
+	raw.Data = append([]byte(nil), raw.Data...)
+	var ascii strings.Builder
+	for _, b := range raw.Data {
 		if b >= 32 && b < 127 {
-			asciiB.WriteByte(b)
+			ascii.WriteByte(b)
 		} else {
-			asciiB.WriteByte('.')
+			ascii.WriteByte('.')
 		}
 	}
-	p := Packet{TS: time.Now(), Direction: "RX", Hex: hex, ASCII: asciiB.String(), Length: len(data)}
+	return Packet{Raw: raw, TS: raw.Timestamp, Direction: raw.Direction, Hex: fmt.Sprintf("% X", raw.Data), ASCII: ascii.String(), Length: len(raw.Data)}
+}
+
+func (a *application) onPacket(raw wincore.Packet) {
+	if a.mw == nil || a.closed.Load() {
+		return
+	}
+	p := packetFromCore(raw)
 	a.mw.Synchronize(func() {
-		if a.packetModel != nil {
-			kw, dir := "", "全部"
-			if a.searchEdit != nil {
-				kw = a.searchEdit.Text()
-			}
-			if a.dirFilter != nil {
-				dir = a.dirFilter.Text()
-			}
-			a.packetModel.add(p, kw, dir)
-			if a.packetTable != nil {
-				a.packetTable.EnsureItemVisible(a.packetModel.RowCount() - 1)
-			}
-			a.updatePacketStats()
+		if a.closed.Load() || a.mw.IsDisposed() {
+			return
 		}
-		if a.monitorEdit != nil {
-			text := fmt.Sprintf("[%s 接收] %s\r\n", p.TS.Format("15:04:05.000"), hex)
-			a.appendDisplay(a.monitorEdit, text)
+		kw, dir := "", "全部"
+		if a.searchEdit != nil {
+			kw = a.searchEdit.Text()
+		}
+		if a.dirFilter != nil {
+			dir = a.dirFilter.Text()
+		}
+		a.packetModel.add(p, kw, dir)
+		if a.packetTable != nil && a.autoScroll.Checked() && a.packetModel.RowCount() > 0 {
+			a.packetTable.EnsureItemVisible(a.packetModel.RowCount() - 1)
+		}
+		a.updatePacketStats()
+		if a.monitorEdit != nil && !a.monitorEdit.IsDisposed() {
+			a.appendDisplay(a.monitorEdit, fmt.Sprintf("[%s %s %s %s] %s\r\n", p.TS.Format("15:04:05.000"), p.Direction, p.Raw.Transport, p.Raw.Endpoint, p.Hex))
 			if !a.monitorPaused {
 				a.monitorEdit.ScrollToCaret()
 			}
@@ -809,11 +742,18 @@ func (a *application) onData(source string, data []byte) {
 
 // onClosed 在被动断开(远端关闭等)时把界面同步回未连接状态。
 func (a *application) onClosed() {
+	if a.mw == nil || a.closed.Load() {
+		return
+	}
 	a.mw.Synchronize(func() {
+		if a.closed.Load() {
+			return
+		}
 		if !a.connected {
 			return
 		}
 		a.stopTimer(false)
+		a.stopLoop()
 		a.engine.Disconnect()
 		a.connected = false
 		a.mode.SetEnabled(true)
@@ -826,14 +766,19 @@ func (a *application) onClosed() {
 func (a *application) onLog(text string) { a.appendLog(text) }
 
 func (a *application) appendLog(text string) {
-	if a.mw == nil {
+	if a.mw == nil || a.closed.Load() {
 		return
 	}
-	a.mw.Synchronize(func() { a.appendDisplay(a.logEdit, "\r\n["+text+"]\r\n") })
+	a.mw.Synchronize(func() {
+		if a.closed.Load() {
+			return
+		}
+		a.appendDisplay(a.logEdit, "\r\n["+text+"]\r\n")
+	})
 }
 
 func (a *application) appendDisplay(edit *walk.TextEdit, text string) {
-	if edit == nil {
+	if edit == nil || edit.IsDisposed() {
 		return
 	}
 	if edit.TextLength()+len(text) > 4500000 {
@@ -858,8 +803,14 @@ func (a *application) sinceTime() time.Time {
 }
 
 func (a *application) applyFilter() {
-	if a.packetModel == nil {
+	if a.packetModel == nil || a.searchEdit == nil {
 		return
+	}
+	if a.protocolFilter != nil {
+		a.packetModel.transport = a.protocolFilter.Text()
+	}
+	if a.connectionFilter != nil {
+		a.packetModel.connection = strings.TrimSpace(a.connectionFilter.Text())
 	}
 	kw := strings.TrimSpace(a.searchEdit.Text())
 	dir := "全部"
@@ -867,9 +818,12 @@ func (a *application) applyFilter() {
 		dir = a.dirFilter.Text()
 	}
 	a.packetModel.refilter(kw, dir, a.sinceTime())
+	a.updatePacketStats()
 }
 
 func (a *application) clearFilter() {
+	a.protocolFilter.SetCurrentIndex(0)
+	a.connectionFilter.SetText("")
 	_ = a.searchEdit.SetText("")
 	if a.dirFilter != nil {
 		_ = a.dirFilter.SetCurrentIndex(0)
@@ -936,6 +890,9 @@ func (a *application) statsLoop() {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
+		if a.closed.Load() {
+			return
+		}
 		st := a.engine.Stats()
 		a.mw.Synchronize(func() { a.updateStatus(st) })
 	}
@@ -943,33 +900,47 @@ func (a *application) statsLoop() {
 
 // updateStatus 根据统计快照刷新状态栏文本与灯色。
 func (a *application) updateStatus(st wincore.Stats) {
-	if a.status == nil {
+	if a.closed.Load() || a.status == nil {
 		return
 	}
-	type dot struct {
-		color walk.Color
-		label string
+	a.refreshConnections()
+	a.showPeerDetails()
+	labels := map[wincore.ConnState]string{wincore.StateDisconnected: "未连接", wincore.StateConnecting: "连接中", wincore.StateConnected: "已连接", wincore.StateReconnecting: "重连中", wincore.StateError: "错误"}
+	label := labels[st.State]
+	color := colorGray
+	if st.State == wincore.StateConnected {
+		color = colorGreen
+		if st.Listening {
+			label = fmt.Sprintf("监听中 · %d 客户端", st.PeerCount)
+		}
 	}
-	d := map[wincore.ConnState]dot{
-		wincore.StateDisconnected: {colorGray, "未连接"},
-		wincore.StateConnecting:   {colorYellow, "正在连接..."},
-		wincore.StateConnected:    {colorGreen, "已连接"},
-		wincore.StateReconnecting: {colorYellow, "重连中..."},
-		wincore.StateError:        {colorRed, "错误"},
-	}[st.State]
-	if d.label == "" {
-		d = dot{colorGray, "未连接"}
+	if st.State == wincore.StateConnecting || st.State == wincore.StateReconnecting {
+		color = colorYellow
 	}
-	if st.State == wincore.StateDisconnected || st.State == wincore.StateError {
-		a.setConnStatus(d.color, d.label)
-		return
+	if st.State == wincore.StateError {
+		color = colorRed
 	}
-	a.setConnStatus(d.color, fmt.Sprintf("%s  RX %s  TX %s  运行 %s  重连 %d",
-		d.label,
-		wincore.FormatBytes(st.RXBytes),
-		wincore.FormatBytes(st.TXBytes),
-		wincore.FormatDuration(time.Since(st.StartedAt)),
-		st.Reconnects))
+	a.setConnStatus(color, label)
+	now := time.Now()
+	total := st.RXBytes + st.TXBytes
+	rate := uint64(0)
+	if !a.lastStatsAt.IsZero() && total >= a.lastStatsBytes {
+		rate = uint64(float64(total-a.lastStatsBytes) / now.Sub(a.lastStatsAt).Seconds())
+	}
+	a.lastStatsAt = now
+	a.lastStatsBytes = total
+	elapsed := "00:00:00"
+	if st.StartedAt.Unix() > 0 && a.connected {
+		elapsed = wincore.FormatDuration(now.Sub(st.StartedAt))
+	}
+	address := st.Endpoint
+	if len(a.targets) > 0 && a.targets[0].Active {
+		address = "本地 " + a.targets[0].LocalAddress + " → " + a.targets[0].RemoteAddress
+	}
+	a.footer.SetText(fmt.Sprintf("%s %s  |  %s  |  RX %s  TX %s  |  %s/s  |  %s", a.uiMode(), label, address, wincore.FormatBytes(st.RXBytes), wincore.FormatBytes(st.TXBytes), wincore.FormatBytes(rate), elapsed))
+	if a.timeFilter.CurrentIndex() > 0 {
+		a.applyFilter()
+	}
 }
 
 func (a *application) refreshSendHistory() {
@@ -1008,8 +979,10 @@ func (a *application) refreshRecentConn() {
 		}
 		items[i] = fmt.Sprintf("%s %s", s.Mode, ep)
 	}
+	a.loadingRecent = true
 	_ = a.recentConn.SetModel(items)
 	_ = a.recentConn.SetCurrentIndex(-1)
+	a.loadingRecent = false
 }
 
 func parseKV(s string) map[string]string {
@@ -1022,17 +995,17 @@ func parseKV(s string) map[string]string {
 	return m
 }
 
-func setIPPort(endpoint string, ipEdit, portEdit *walk.LineEdit) {
-	if i := strings.LastIndex(endpoint, ":"); i >= 0 {
-		_ = ipEdit.SetText(endpoint[:i])
-		_ = portEdit.SetText(endpoint[i+1:])
+func setIPPort(endpoint string, ipEdit interface{ SetText(string) error }, portEdit *walk.LineEdit) {
+	if host, port, err := net.SplitHostPort(endpoint); err == nil {
+		_ = ipEdit.SetText(host)
+		_ = portEdit.SetText(port)
 	} else {
 		_ = ipEdit.SetText(endpoint)
 	}
 }
 
 func (a *application) onRecentConnSelected() {
-	if a.connected || a.recentConn == nil {
+	if a.connected || a.connecting || a.loadingRecent || a.recentConn == nil {
 		return
 	}
 	idx := a.recentConn.CurrentIndex()
@@ -1152,6 +1125,9 @@ func (a *application) newInstance() {
 }
 
 func (a *application) toggleHexView() {
+	if a.hexView == nil {
+		return
+	}
 	if a.hexView != nil {
 		a.hexView.SetChecked(!a.hexView.Checked())
 	}
@@ -1180,17 +1156,13 @@ func (a *application) copyPacketField(field string) {
 
 // setupTray 让应用关闭窗口后仍在后台运行(托盘图标),点击图标恢复,右键可退出。
 func (a *application) setupTray() {
-	a.mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
-		*canceled = true
-		a.mw.Hide()
-	})
 	ni, err := walk.NewNotifyIcon(a.mw)
 	if err != nil {
 		return
 	}
 	a.notifyIcon = ni
-	if icon, err := walk.NewIconFromResourceId(1); err == nil {
-		_ = ni.SetIcon(icon)
+	if icon := uiIcon("app"); icon != nil {
+		ni.SetIcon(icon)
 	}
 	_ = ni.SetToolTip("CommBox")
 	_ = ni.SetVisible(true)
@@ -1210,7 +1182,9 @@ func (a *application) setupTray() {
 	quitAction.SetText("退出")
 	quitAction.Triggered().Attach(func() {
 		a.stopTimer(false)
-		a.engine.Close()
+		a.assistant.stop()
+		a.closed.Store(true)
+		a.stopLoop()
 		walk.App().Exit(0)
 	})
 	_ = ni.ContextMenu().Actions().Add(showAction)
@@ -1262,7 +1236,7 @@ func (a *application) openVSerial() {
 		if err := (MainWindow{
 			AssignTo: &a.vsWindow, Title: "虚拟串口映射(后台运行,可多个)", MinSize: Size{Width: 640, Height: 420}, Size: Size{Width: 680, Height: 480}, Layout: VBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}},
 			Children: []Widget{
-				Label{Text: "TCP 端点 → 本机虚拟串口。添加后在后台持续运行,断开主连接也不受影响。"},
+				Label{Text: "需要 com0com 驱动；Windows 端口打开与驱动命令超时问题仍待实机验证。"},
 				Composite{Layout: HBox{}, Children: []Widget{
 					Label{Text: "IP"},
 					ComboBox{AssignTo: &a.vsIP, Editable: true, MinSize: Size{Width: 180}},

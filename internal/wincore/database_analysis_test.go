@@ -3,9 +3,12 @@ package wincore
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -204,9 +207,6 @@ func TestDatabaseAnalysisFilesAndReadOnly(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "serial-data-directory.sqlite3"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(path, filepath.Join(dir, "serial-data-link.sqlite3")); err != nil {
-		t.Fatal(err)
-	}
 	files, err := ListAnalysisDatabases(dir)
 	if err != nil || len(files) != 1 || files[0] != name {
 		t.Fatalf("files %v: %v", files, err)
@@ -241,6 +241,22 @@ func TestDatabaseAnalysisFilesAndReadOnly(t *testing.T) {
 	if _, err := ListAnalysisDatabases(filepath.Join(dir, "missing")); err == nil {
 		t.Fatal("missing directory accepted")
 	}
+	t.Run("RejectSymlink", func(t *testing.T) {
+		link := "serial-data-link.sqlite3"
+		if err := os.Symlink(path, filepath.Join(dir, link)); err != nil {
+			if errors.Is(err, syscall.Errno(1314)) && runtime.GOOS == "windows" {
+				t.Skipf("creating symlinks requires Windows Developer Mode or elevation: %v", err)
+			}
+			t.Fatal(err)
+		}
+		files, err := ListAnalysisDatabases(dir)
+		if err != nil || len(files) != 1 || files[0] != name {
+			t.Fatalf("files %v: %v", files, err)
+		}
+		if _, err := AnalyzeDatabase(dir, link, analysisStart, analysisEnd, "ALL", 100); err == nil {
+			t.Fatal("accepted symlink")
+		}
+	})
 }
 
 func TestDatabaseAnalysisSchemaAndCorruptionErrors(t *testing.T) {
