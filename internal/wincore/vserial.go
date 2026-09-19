@@ -41,8 +41,8 @@ type vserialDevice struct {
 	close  func()
 }
 
-// ErrVSerialNeedsDriver 表示平台需要安装额外的虚拟串口驱动(如 Windows 的 com0com)。
-var ErrVSerialNeedsDriver = errors.New("需要安装虚拟串口驱动")
+// ErrVSerialDeveloping 表示当前平台的虚拟串口还在开发中,尚未开放。
+var ErrVSerialDeveloping = errors.New("虚拟串口功能开发中,Windows 版暂未开放")
 
 // makeRaw 便于测试注入 term.MakeRaw 的失败路径,默认即 term.MakeRaw。
 var makeRaw = term.MakeRaw

@@ -34,7 +34,7 @@ func (a *application) openAnalysisCenter() {
 	w := &analysisWindow{app: a}
 	var scope *walk.ComboBox
 	controls := []Widget{
-		Composite{Layout: HBox{}, Children: []Widget{Label{Text: "分析范围"}, ComboBox{AssignTo: &scope, Model: []string{"选中报文", "当前可见报文", "全部保留报文"}, CurrentIndex: 1}, PushButton{AssignTo: &w.run, Text: "开始本地分析", OnClicked: func() {
+		Composite{Layout: HBox{Alignment: AlignHNearVCenter}, Children: []Widget{Label{Text: "分析范围"}, ComboBox{AssignTo: &scope, Model: []string{"选中报文", "当前可见报文", "全部保留报文"}, CurrentIndex: 1}, PushButton{AssignTo: &w.run, Text: "开始本地分析", OnClicked: func() {
 			var packets []Packet
 			if a.packetModel != nil {
 				if scope.CurrentIndex() == 2 {
@@ -108,9 +108,9 @@ func (a *application) openDatabaseAnalysis() {
 		}()
 	}
 	controls := []Widget{
-		Composite{Layout: HBox{}, Children: []Widget{Label{Text: "选择采集数据库（Ctrl / Shift 多选）"}, PushButton{Text: "刷新列表", OnClicked: refresh}, PushButton{Text: "数据目录", OnClicked: a.openDataDir}}},
+		Composite{Layout: HBox{Alignment: AlignHNearVCenter}, Children: []Widget{Label{Text: "选择采集数据库（Ctrl / Shift 多选）"}, PushButton{Text: "刷新列表", OnClicked: refresh}, PushButton{Text: "数据目录", OnClicked: a.openDataDir}}},
 		ListBox{AssignTo: &list, Model: names, MultiSelection: true, MinSize: Size{Height: 90}, MaxSize: Size{Height: 120}},
-		Composite{Layout: Grid{Columns: 4}, Children: []Widget{
+		Composite{Layout: Grid{Alignment: AlignHNearVCenter, Columns: 4}, Children: []Widget{
 			Label{Text: "开始 (RFC3339)"}, LineEdit{AssignTo: &from, Text: time.Now().Add(-24 * time.Hour).Format(time.RFC3339)}, Label{Text: "结束 (RFC3339)"}, LineEdit{AssignTo: &to, Text: time.Now().Format(time.RFC3339)},
 			Label{Text: "方向"}, ComboBox{AssignTo: &direction, Model: []string{"ALL", "RX", "TX"}, CurrentIndex: 0}, Label{Text: "最新记录上限 (1–1000000)"}, LineEdit{AssignTo: &limit, Text: "10000"},
 		}},
@@ -150,10 +150,10 @@ func (w *analysisWindow) openWithInit(title string, controls []Widget, init func
 	children := append(controls,
 		Label{AssignTo: &w.status, Text: "本地分析不上传数据。AI 仅在启用后点击发送时请求所填服务。"},
 		TabWidget{StretchFactor: 1, Pages: []TabPage{
-			{Title: "本地报告", Layout: VBox{}, Children: []Widget{TextEdit{AssignTo: &w.report, ReadOnly: true, VScroll: true, HScroll: true, MinSize: Size{Height: 170}}}},
-			{Title: "AI 设置与对话", Layout: VBox{}, Children: []Widget{
+			{Title: "本地报告", Layout: VBox{Alignment: AlignHNearVNear}, Children: []Widget{TextEdit{AssignTo: &w.report, ReadOnly: true, VScroll: true, HScroll: true, MinSize: Size{Height: 170}}}},
+			{Title: "AI 设置与对话", Layout: VBox{Alignment: AlignHNearVNear}, Children: []Widget{
 				CheckBox{AssignTo: &w.enabled, Text: "启用 AI：允许点击发送时上传报告和对话（默认关闭）"},
-				Composite{Layout: Grid{Columns: 2}, Children: []Widget{Label{Text: "Base URL"}, LineEdit{AssignTo: &w.base, Text: setting("base_url", "https://api.deepseek.com")}, Label{Text: "模型"}, LineEdit{AssignTo: &w.model, Text: setting("model", "deepseek-chat")}, Label{Text: "API Key"}, LineEdit{AssignTo: &w.key, Text: setting("api_key", ""), PasswordMode: true}}},
+				Composite{Layout: Grid{Alignment: AlignHNearVCenter, Columns: 2}, Children: []Widget{Label{Text: "Base URL"}, LineEdit{AssignTo: &w.base, Text: setting("base_url", "https://api.deepseek.com")}, Label{Text: "模型"}, LineEdit{AssignTo: &w.model, Text: setting("model", "deepseek-chat")}, Label{Text: "API Key"}, LineEdit{AssignTo: &w.key, Text: setting("api_key", ""), PasswordMode: true}}},
 				PushButton{Text: "保存连接设置（Key 存于本地设置库）", OnClicked: func() {
 					for key, value := range map[string]string{"base_url": w.base.Text(), "model": w.model.Text(), "api_key": w.key.Text()} {
 						if err := w.app.engine.SetSetting("deepseek."+key, value); err != nil {
@@ -165,7 +165,7 @@ func (w *analysisWindow) openWithInit(title string, controls []Widget, init func
 				}},
 				TextEdit{AssignTo: &w.chat, ReadOnly: true, VScroll: true, StretchFactor: 1, MinSize: Size{Height: 100}},
 				TextEdit{AssignTo: &w.question, VScroll: true, MinSize: Size{Height: 50}, MaxSize: Size{Height: 80}, Text: "请分析报告中的协议、异常和排查建议。"},
-				Composite{Layout: HBox{}, Children: []Widget{PushButton{AssignTo: &w.send, Text: "发送报告 / 继续追问", OnClicked: w.sendAI}, PushButton{Text: "清空对话", OnClicked: func() {
+				Composite{Layout: HBox{Alignment: AlignHNearVCenter}, Children: []Widget{PushButton{AssignTo: &w.send, Text: "发送报告 / 继续追问", OnClicked: w.sendAI}, PushButton{Text: "清空对话", OnClicked: func() {
 					if !w.busy {
 						w.turns = nil
 						w.chat.SetText("")
@@ -174,12 +174,12 @@ func (w *analysisWindow) openWithInit(title string, controls []Widget, init func
 					if w.cancel != nil {
 						w.cancel()
 					}
-				}}}},
+				}}, HSpacer{}}},
 			}},
 		}},
-		Composite{Layout: HBox{}, Children: []Widget{PushButton{Text: "导出报告与对话…", OnClicked: w.export}, HSpacer{}, PushButton{Text: "关闭", OnClicked: func() { w.dlg.Cancel() }}}},
+		Composite{Layout: HBox{Alignment: AlignHNearVCenter}, Children: []Widget{PushButton{Text: "导出报告与对话…", OnClicked: w.export}, HSpacer{}, PushButton{Text: "关闭", OnClicked: func() { w.dlg.Cancel() }}}},
 	)
-	if err := (Dialog{AssignTo: &w.dlg, Title: title, Size: Size{Width: 980, Height: 780}, MinSize: Size{Width: 780, Height: 620}, Layout: VBox{}, Children: children}).Create(w.app.mw); err != nil {
+	if err := (Dialog{AssignTo: &w.dlg, Title: title, Size: Size{Width: 980, Height: 780}, MinSize: Size{Width: 760, Height: 560}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 12}, Spacing: 8}, Children: children}).Create(w.app.mw); err != nil {
 		w.app.showError(err)
 		return
 	}

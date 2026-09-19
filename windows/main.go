@@ -3,7 +3,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -74,11 +73,6 @@ type application struct {
 	recentConn                            *walk.ComboBox
 	recentSessions                        []wincore.SessionInfo
 	timeFilter                            *walk.ComboBox
-	vsWindow                              *walk.MainWindow
-	vsIP                                  *walk.ComboBox
-	vsPort                                *walk.LineEdit
-	vsTable                               *walk.TableView
-	vsModel                               *vserialModel
 	protocolFilter                        *walk.ComboBox
 	connectionFilter                      *walk.LineEdit
 	sendTarget                            *walk.ComboBox
@@ -94,28 +88,6 @@ type application struct {
 	lastDetails, lastStatusText      string
 	connecting, sending              bool
 	closed                           atomic.Bool
-}
-
-// vserialEntry 与 vserialModel 是虚拟串口管理窗口的表格数据。
-type vserialEntry struct {
-	id   int
-	addr string
-	link string
-}
-
-type vserialModel struct {
-	walk.TableModelBase
-	items []vserialEntry
-}
-
-func (m *vserialModel) RowCount() int { return len(m.items) }
-
-func (m *vserialModel) Value(row, col int) interface{} {
-	it := m.items[row]
-	if col == 0 {
-		return it.addr
-	}
-	return it.link
 }
 
 // Packet is a captured data frame shown in the packet table.
@@ -828,9 +800,9 @@ func (a *application) openMonitor() {
 	if a.monitorWindow == nil {
 		var pause *walk.PushButton
 		err := (MainWindow{
-			AssignTo: &a.monitorWindow, Title: "实时数据监控", MinSize: Size{Width: 760, Height: 520}, Size: Size{Width: 900, Height: 620}, Layout: VBox{},
+			AssignTo: &a.monitorWindow, Title: "实时数据监控", Icon: uiIcon("app"), MinSize: Size{Width: 700, Height: 460}, Size: Size{Width: 900, Height: 620}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 8},
 			Children: []Widget{
-				Composite{Layout: HBox{}, Children: []Widget{
+				Composite{Layout: HBox{Alignment: AlignHNearVCenter}, Children: []Widget{
 					Label{Text: "仅显示实时接收数据"}, HSpacer{},
 					PushButton{Text: "数据库位置", OnClicked: a.openDataDir},
 					PushButton{AssignTo: &pause, Text: "暂停滚动", OnClicked: func() {
@@ -860,10 +832,27 @@ func (a *application) openMonitor() {
 const (
 	fontUI    = "Microsoft YaHei UI"
 	fontMono  = "Consolas"
-	sizeBody  = 9
-	sizeTitle = 10
-	sizeMono  = 9
+	sizeBody  = 10
+	sizeTitle = 12
+	sizeMono  = 10
 )
+
+// 分区标题(左栏「连接配置」、中栏「数据监控」、AI 面板)统一走这一个字体,
+// 避免同级标题在三处各写一遍、改一处漏两处。
+var fontSection = Font{Family: fontUI, PointSize: sizeTitle, Bold: true}
+
+// 行高基线：输入类控件 26px、按钮 28px。不给下限时 walk 按各控件的理想高度排布,
+// 同一行里 LineEdit 会比 ComboBox 矮一截,中文字形上下也几乎贴边。
+const (
+	rowH = 28
+	btnH = 30
+)
+
+// stretchFill 给一行里唯一该被拉伸的控件。walk 把富余宽度按 权重/组内权重和 分配,
+// 定了宽度上限的控件拿不走自己那一份,剩下的会变成控件之间的空隙(标签与下拉框
+// 中间空出一大段就是这么来的)。权重拉到 100 相当于让该控件吃掉整行富余。
+// 可编辑下拉框、单行/多行输入框在 walk 里本就是 greedy,会先吃掉富余,无需再设。
+const stretchFill = 100
 
 // dirAll 同时是方向筛选下拉框的首项文案和“不过滤”的判定值,
 // 两者必须一致,否则筛选会把每一条报文都排除掉。
@@ -871,6 +860,8 @@ const dirAll = "全部方向"
 
 // 状态色降饱和,蓝色只保留一种作主色,避免此前深蓝/灰蓝/亮蓝三种并存。
 var (
+	colorCanvas = walk.RGB(243, 243, 243)
+	colorPanel  = walk.RGB(249, 249, 249)
 	colorGray   = walk.RGB(140, 140, 140)
 	colorGreen  = walk.RGB(34, 140, 58)
 	colorYellow = walk.RGB(186, 132, 8)
@@ -945,7 +936,15 @@ func (a *application) updateStatus(st wincore.Stats) {
 	if len(a.targets) > 0 && a.targets[0].Active {
 		address = "本地 " + a.targets[0].LocalAddress + " → " + a.targets[0].RemoteAddress
 	}
-	if footer := fmt.Sprintf("%s %s  |  %s  |  RX %s  TX %s  |  %s/s  |  %s", a.uiMode(), label, address, wincore.FormatBytes(st.RXBytes), wincore.FormatBytes(st.TXBytes), wincore.FormatBytes(rate), elapsed); footer != a.lastFooter {
+	// 未连接时 Endpoint 为空,直接拼接会在状态栏留下"|  |"这样的空档位。
+	parts := []string{fmt.Sprintf("%s %s", a.uiMode(), label)}
+	if address != "" {
+		parts = append(parts, address)
+	}
+	parts = append(parts,
+		fmt.Sprintf("RX %s  TX %s", wincore.FormatBytes(st.RXBytes), wincore.FormatBytes(st.TXBytes)),
+		wincore.FormatBytes(rate)+"/s", elapsed)
+	if footer := strings.Join(parts, "  |  "); footer != a.lastFooter {
 		a.lastFooter = footer
 		a.footer.SetText(footer)
 	}
@@ -1198,24 +1197,25 @@ func (a *application) setupTray() {
 func (a *application) openToolbox() {
 	if a.toolboxWindow == nil {
 		if err := (MainWindow{
-			AssignTo: &a.toolboxWindow, Title: "工具箱", MinSize: Size{Width: 520, Height: 340}, Size: Size{Width: 560, Height: 380}, Layout: VBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}},
+			AssignTo: &a.toolboxWindow, Title: "校验与转换", Icon: uiIcon("app"), MinSize: Size{Width: 520, Height: 340}, Size: Size{Width: 580, Height: 400}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 12}, Spacing: 8},
 			Children: []Widget{
 				Label{Text: "输入(HEX 校验用 01 03 00 0A；Base64/Unix 时间戳直接输文本或数字)"},
 				TextEdit{AssignTo: &a.toolboxInput, MinSize: Size{Height: 60}},
-				Composite{Layout: HBox{}, Children: []Widget{
-					PushButton{Text: "CRC16 Modbus", OnClicked: func() { a.runToolbox("modbus") }},
-					PushButton{Text: "CRC16", OnClicked: func() { a.runToolbox("crc16") }},
-					PushButton{Text: "CRC32", OnClicked: func() { a.runToolbox("crc32") }},
-					PushButton{Text: "XOR", OnClicked: func() { a.runToolbox("xor") }},
-					PushButton{Text: "SUM", OnClicked: func() { a.runToolbox("sum") }},
-				}},
-				Composite{Layout: HBox{}, Children: []Widget{
-					PushButton{Text: "Base64 编码", OnClicked: func() { a.runToolbox("base64enc") }},
-					PushButton{Text: "Base64 解码", OnClicked: func() { a.runToolbox("base64dec") }},
-					PushButton{Text: "Unix 时间戳", OnClicked: func() { a.runToolbox("unixtime") }},
+				Composite{Layout: HBox{Alignment: AlignHNearVCenter}, Children: []Widget{
+					PushButton{Text: "CRC16 Modbus", MinSize: Size{Height: btnH}, OnClicked: func() { a.runToolbox("modbus") }},
+					PushButton{Text: "CRC16", MinSize: Size{Height: btnH}, OnClicked: func() { a.runToolbox("crc16") }},
+					PushButton{Text: "CRC32", MinSize: Size{Height: btnH}, OnClicked: func() { a.runToolbox("crc32") }},
+					PushButton{Text: "XOR", MinSize: Size{Height: btnH}, OnClicked: func() { a.runToolbox("xor") }},
+					PushButton{Text: "SUM", MinSize: Size{Height: btnH}, OnClicked: func() { a.runToolbox("sum") }},
 					HSpacer{},
 				}},
-				Label{AssignTo: &a.toolboxOutput, Text: "结果", MinSize: Size{Height: 40}},
+				Composite{Layout: HBox{Alignment: AlignHNearVCenter}, Children: []Widget{
+					PushButton{Text: "Base64 编码", MinSize: Size{Height: btnH}, OnClicked: func() { a.runToolbox("base64enc") }},
+					PushButton{Text: "Base64 解码", MinSize: Size{Height: btnH}, OnClicked: func() { a.runToolbox("base64dec") }},
+					PushButton{Text: "Unix 时间戳", MinSize: Size{Height: btnH}, OnClicked: func() { a.runToolbox("unixtime") }},
+					HSpacer{},
+				}},
+				Label{AssignTo: &a.toolboxOutput, Text: "结果", MinSize: Size{Height: 44}},
 			},
 		}).Create(); err != nil {
 			a.showError(err)
@@ -1228,100 +1228,6 @@ func (a *application) openToolbox() {
 func (a *application) runToolbox(kind string) {
 	result := wincore.ParseToolbox(kind, a.toolboxInput.Text())
 	a.toolboxOutput.SetText(result)
-}
-
-// showChecksum 保留兼容旧调用路径。
-func (a *application) showChecksum(kind string) { a.runToolbox(kind) }
-
-func (a *application) openVSerial() {
-	if a.vsWindow == nil {
-		a.vsModel = new(vserialModel)
-		if err := (MainWindow{
-			AssignTo: &a.vsWindow, Title: "虚拟串口映射(后台运行,可多个)", MinSize: Size{Width: 640, Height: 420}, Size: Size{Width: 680, Height: 480}, Layout: VBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}},
-			Children: []Widget{
-				Label{Text: "需要 com0com 驱动；Windows 端口打开与驱动命令超时问题仍待实机验证。"},
-				Composite{Layout: HBox{}, Children: []Widget{
-					Label{Text: "IP"},
-					ComboBox{AssignTo: &a.vsIP, Editable: true, MinSize: Size{Width: 180}},
-					Label{Text: "端口"},
-					LineEdit{AssignTo: &a.vsPort, Text: "1502", MinSize: Size{Width: 80}},
-					PushButton{Text: "添加映射", OnClicked: a.addVSerial},
-				}},
-				TableView{AssignTo: &a.vsTable, Model: a.vsModel, StretchFactor: 1, Columns: []TableViewColumn{
-					{Title: "TCP 端点", Width: 200},
-					{Title: "虚拟串口设备", Width: 380},
-				}},
-				Composite{Layout: HBox{}, Children: []Widget{
-					PushButton{Text: "安装驱动", OnClicked: a.installDriver},
-					PushButton{Text: "停止选中", OnClicked: a.removeVSerial},
-					PushButton{Text: "复制设备路径", OnClicked: a.copyVSerialPath},
-				}},
-			},
-		}).Create(); err != nil {
-			a.showError(err)
-			return
-		}
-		_ = a.vsIP.SetModel(wincore.LocalIPs())
-	}
-	a.vsWindow.Show()
-}
-
-func (a *application) installDriver() {
-	if err := wincore.InstallCom0comDriver(); err != nil {
-		// 内嵌驱动未包含安装程序时,回退到打开下载页
-		_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", "https://com0com.sourceforge.net/").Start()
-		a.showError(fmt.Errorf("%v\n\n已打开 com0com 下载页,请手动下载安装。", err))
-		return
-	}
-	a.appendLog("已请求安装 com0com 驱动,请在弹出的 UAC 窗口中确认")
-}
-
-func (a *application) addVSerial() {
-	ip := strings.TrimSpace(a.vsIP.Text())
-	port := strings.TrimSpace(a.vsPort.Text())
-	if ip == "" || port == "" {
-		a.showError(fmt.Errorf("请输入 IP 和端口"))
-		return
-	}
-	p, err := strconv.Atoi(port)
-	if err != nil || p <= 0 {
-		a.showError(fmt.Errorf("端口无效"))
-		return
-	}
-	info, err := a.engine.AddVirtualSerial(fmt.Sprintf("%s:%d", ip, p))
-	if err != nil {
-		if errors.Is(err, wincore.ErrVSerialNeedsDriver) {
-			a.showError(fmt.Errorf("虚拟串口需要 com0com 驱动。\n请先安装:https://com0com.sourceforge.net/\n安装后重启 CommBox 再试。"))
-			return
-		}
-		a.showError(err)
-		return
-	}
-	a.vsModel.items = append(a.vsModel.items, vserialEntry{id: info.ID, addr: info.Addr, link: info.Link})
-	a.vsModel.PublishRowsReset()
-	a.appendLog(fmt.Sprintf("虚拟串口 #%d 已创建: %s → %s", info.ID, info.Addr, info.Link))
-}
-
-func (a *application) removeVSerial() {
-	idx := a.vsTable.CurrentIndex()
-	if idx < 0 || idx >= len(a.vsModel.items) {
-		a.showError(fmt.Errorf("请先选中一行"))
-		return
-	}
-	it := a.vsModel.items[idx]
-	a.engine.RemoveVirtualSerial(it.id)
-	a.vsModel.items = append(a.vsModel.items[:idx], a.vsModel.items[idx+1:]...)
-	a.vsModel.PublishRowsReset()
-	a.appendLog(fmt.Sprintf("虚拟串口 #%d 已停止", it.id))
-}
-
-func (a *application) copyVSerialPath() {
-	idx := a.vsTable.CurrentIndex()
-	if idx < 0 || idx >= len(a.vsModel.items) {
-		a.showError(fmt.Errorf("请先选中一行"))
-		return
-	}
-	_ = walk.Clipboard().SetText(a.vsModel.items[idx].link)
 }
 
 func (a *application) exportText(text, prefix string, owner walk.Form) {

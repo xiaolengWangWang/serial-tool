@@ -46,35 +46,64 @@ func (w *assistantPanel) widget() Widget {
 		w.maxPackets = n
 	}
 	quick := func(text string) Widget {
-		return PushButton{Text: text, Image: uiIcon("check"), OnClicked: func() { w.analyze(text) }}
+		return PushButton{Text: text, Image: uiIcon("check"), MinSize: Size{Height: btnH}, OnClicked: func() { w.analyze(text) }}
 	}
 	// 宽度对齐 mac 的 255px（app.m layoutMainPanes），把省下的横向空间还给数据表。
-	return Composite{AssignTo: &w.panel, Visible: false, MinSize: Size{Width: 250}, MaxSize: Size{Width: 270}, Background: SolidColorBrush{Color: walk.RGB(249, 249, 249)}, Layout: VBox{Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}}, Children: []Widget{
-		Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{Label{Text: "AI 通信助手", Font: Font{Family: fontUI, PointSize: sizeTitle, Bold: true}, TextColor: colorBlue}, HSpacer{}, PushButton{Text: "×", MaxSize: Size{Width: 28}, OnClicked: w.app.toggleAssistant}}},
-		Label{AssignTo: &w.status, Text: "AI 未启用 · 可使用本地分析"},
+	// 面板只有 260px 宽，一行放不下三个带图标的按钮：「发送追问」独占一行，
+	// 「停止」与「AI 设置」并排，文字才不会被按钮边框切掉。
+	return Composite{AssignTo: &w.panel, Visible: false, MinSize: Size{Width: 276}, MaxSize: Size{Width: 296}, Background: SolidColorBrush{Color: colorPanel}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 8}, Children: []Widget{
+		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
+			Label{Text: "AI 通信助手", Font: fontSection, TextColor: colorBlue, Alignment: AlignHNearVCenter},
+			HSpacer{},
+			PushButton{Text: "×", MinSize: Size{Width: 32, Height: btnH}, MaxSize: Size{Width: 32}, OnClicked: w.app.toggleAssistant},
+		}},
+		Label{AssignTo: &w.status, Text: "AI 未启用 · 可使用本地分析", TextColor: colorMuted, EllipsisMode: EllipsisEnd},
 		TabWidget{AssignTo: &w.tabs, StretchFactor: 1, Pages: []TabPage{
-			{Title: "智能分析", Layout: VBox{}, Children: []Widget{
-				Label{Text: "分析范围"}, ComboBox{AssignTo: &w.scope, Model: []string{"当前选中数据", "当前全部数据", "最近 100 条", "自定义行号范围"}, CurrentIndex: 2},
-				Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{LineEdit{AssignTo: &w.from, Text: "1", CueBanner: "起始行"}, Label{Text: "至"}, LineEdit{AssignTo: &w.to, Text: "100", CueBanner: "结束行"}}},
-				PushButton{AssignTo: &w.run, Text: "开始分析", Image: uiIcon("ai"), MinSize: Size{Height: 34}, OnClicked: func() { w.analyze("全面诊断") }},
-				Composite{Layout: Grid{Columns: 2}, Children: []Widget{quick("协议识别"), quick("Modbus 分析"), quick("CRC 校验"), quick("大小端分析"), quick("通信时序"), quick("异常报文分析"), quick("粘包 / 拆包"), quick("数据类型推测")}},
-				Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{Label{Text: "分析结果", Font: Font{Bold: true}}, HSpacer{}, PushButton{Text: "复制", Image: uiIcon("copy"), OnClicked: func() { walk.Clipboard().SetText(w.report.Text()) }}}},
+			{Title: "智能分析", Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 6}, Children: []Widget{
+				Label{Text: "分析范围"},
+				ComboBox{AssignTo: &w.scope, Model: []string{"当前选中数据", "当前全部数据", "最近 100 条", "自定义行号范围"}, CurrentIndex: 2, MinSize: Size{Height: rowH}},
+				Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
+					LineEdit{AssignTo: &w.from, Text: "1", CueBanner: "起始行", MinSize: Size{Height: rowH}},
+					inlineLabel("至", 22),
+					LineEdit{AssignTo: &w.to, Text: "100", CueBanner: "结束行", MinSize: Size{Height: rowH}},
+				}},
+				PushButton{AssignTo: &w.run, Text: "开始分析", Image: uiIcon("ai"), MinSize: Size{Height: 36}, OnClicked: func() { w.analyze("全面诊断") }},
+				Composite{Layout: Grid{Alignment: AlignHNearVCenter, Columns: 2, MarginsZero: true, Spacing: 6}, Children: []Widget{quick("协议识别"), quick("Modbus 分析"), quick("CRC 校验"), quick("大小端分析"), quick("通信时序"), quick("异常报文分析"), quick("粘包 / 拆包"), quick("数据类型推测")}},
+				Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
+					Label{Text: "分析结果", Font: Font{Family: fontUI, PointSize: sizeBody, Bold: true}, Alignment: AlignHNearVCenter},
+					HSpacer{},
+					toolButton("复制", "copy", 92, func() { walk.Clipboard().SetText(w.report.Text()) }),
+				}},
 				TextEdit{AssignTo: &w.report, ReadOnly: true, VScroll: true, StretchFactor: 1, MinSize: Size{Height: 100}},
 			}},
-			{Title: "历史分析", Layout: VBox{}, Children: []Widget{
+			{Title: "历史分析", Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 6}, Children: []Widget{
 				Label{Text: "从本地采集历史中分析，不影响当前收发。"},
-				PushButton{Text: "最近 5 分钟", OnClicked: func() { w.history(5 * time.Minute) }}, PushButton{Text: "最近 30 分钟", OnClicked: func() { w.history(30 * time.Minute) }}, PushButton{Text: "最近 1 小时", OnClicked: func() { w.history(time.Hour) }},
-				PushButton{Text: "自定义时间 / 数据库", OnClicked: w.app.openDatabaseAnalysis}, VSpacer{}, Label{Text: "历史报告生成后，可在底部继续提问。"},
+				PushButton{Text: "最近 5 分钟", MinSize: Size{Height: btnH}, OnClicked: func() { w.history(5 * time.Minute) }},
+				PushButton{Text: "最近 30 分钟", MinSize: Size{Height: btnH}, OnClicked: func() { w.history(30 * time.Minute) }},
+				PushButton{Text: "最近 1 小时", MinSize: Size{Height: btnH}, OnClicked: func() { w.history(time.Hour) }},
+				PushButton{Text: "自定义时间 / 数据库", MinSize: Size{Height: btnH}, OnClicked: w.app.openDatabaseAnalysis},
+				VSpacer{},
+				Label{Text: "历史报告生成后，可在底部继续提问。", TextColor: colorMuted},
 			}},
-			{Title: "对话记录", Layout: VBox{}, Children: []Widget{TextEdit{AssignTo: &w.chat, ReadOnly: true, VScroll: true, StretchFactor: 1}, PushButton{Text: "清空对话", OnClicked: func() {
-				if !w.busy {
-					w.turns = nil
-					w.chat.SetText("")
-				}
-			}}, PushButton{Text: "导出报告与对话", OnClicked: func() { w.app.exportText(w.report.Text()+"\r\n\r\n"+w.chat.Text(), "commbox-analysis", w.app.mw) }}}},
+			{Title: "对话记录", Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 6}, Children: []Widget{
+				TextEdit{AssignTo: &w.chat, ReadOnly: true, VScroll: true, StretchFactor: 1},
+				PushButton{Text: "清空对话", MinSize: Size{Height: btnH}, OnClicked: func() {
+					if !w.busy {
+						w.turns = nil
+						w.chat.SetText("")
+					}
+				}},
+				PushButton{Text: "导出报告与对话", MinSize: Size{Height: btnH}, OnClicked: func() {
+					w.app.exportText(w.report.Text()+"\r\n\r\n"+w.chat.Text(), "commbox-analysis", w.app.mw)
+				}},
+			}},
 		}},
-		LineEdit{AssignTo: &w.question, CueBanner: "继续询问，例如：这个值是多少？"},
-		Composite{Layout: HBox{MarginsZero: true}, Children: []Widget{PushButton{AssignTo: &w.send, Text: "发送追问", Image: uiIcon("send"), OnClicked: w.ask}, PushButton{Text: "停止", Image: uiIcon("stop"), OnClicked: w.stop}, PushButton{Text: "AI 设置", Image: uiIcon("settings"), OnClicked: w.settings}}},
+		LineEdit{AssignTo: &w.question, CueBanner: "继续询问，例如：这个值是多少？", MinSize: Size{Height: rowH}},
+		PushButton{AssignTo: &w.send, Text: "发送追问", Image: uiIcon("send"), MinSize: Size{Height: btnH}, OnClicked: w.ask},
+		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
+			PushButton{Text: "停止", Image: uiIcon("stop"), MinSize: Size{Height: btnH}, OnClicked: w.stop},
+			PushButton{Text: "AI 设置", Image: uiIcon("settings"), MinSize: Size{Height: btnH}, OnClicked: w.settings},
+		}},
 	}}
 }
 
@@ -301,9 +330,9 @@ func (w *assistantPanel) settings() {
 	var enabled *walk.CheckBox
 	var base, key, model *walk.LineEdit
 	var timeout, limit *walk.NumberEdit
-	if err := (Dialog{AssignTo: &dlg, Title: "AI 设置", Size: Size{Width: 560, Height: 380}, Layout: VBox{}, Children: []Widget{
+	if err := (Dialog{AssignTo: &dlg, Title: "AI 设置", Size: Size{Width: 580, Height: 400}, MinSize: Size{Width: 500, Height: 360}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 12}, Spacing: 8}, Children: []Widget{
 		CheckBox{AssignTo: &enabled, Text: "启用 AI（主动分析 / 追问时提交所选数据）", Checked: w.enabled},
-		Composite{Layout: Grid{Columns: 2}, Children: []Widget{Label{Text: "服务地址"}, LineEdit{AssignTo: &base, Text: w.config.Base}, Label{Text: "API Key"}, LineEdit{AssignTo: &key, Text: w.config.Key, PasswordMode: true}, Label{Text: "模型"}, LineEdit{AssignTo: &model, Text: w.config.Model}, Label{Text: "超时 (s)"}, NumberEdit{AssignTo: &timeout, Value: w.config.Timeout.Seconds(), MinValue: 1, MaxValue: 300, Decimals: 0}, Label{Text: "最大上下文条数"}, NumberEdit{AssignTo: &limit, Value: float64(w.maxPackets), MinValue: 1, MaxValue: 500, Decimals: 0}}},
+		Composite{Layout: Grid{Alignment: AlignHNearVCenter, Columns: 2}, Children: []Widget{Label{Text: "服务地址"}, LineEdit{AssignTo: &base, Text: w.config.Base}, Label{Text: "API Key"}, LineEdit{AssignTo: &key, Text: w.config.Key, PasswordMode: true}, Label{Text: "模型"}, LineEdit{AssignTo: &model, Text: w.config.Model}, Label{Text: "超时 (s)"}, NumberEdit{AssignTo: &timeout, Value: w.config.Timeout.Seconds(), MinValue: 1, MaxValue: 300, Decimals: 0}, Label{Text: "最大上下文条数"}, NumberEdit{AssignTo: &limit, Value: float64(w.maxPackets), MinValue: 1, MaxValue: 500, Decimals: 0}}},
 		Label{Text: "支持 DeepSeek 及兼容 Chat Completions 的服务。\r\nKey 保存在本机设置库；每次启动默认关闭 AI。"},
 		PushButton{Text: "保存", OnClicked: func() {
 			w.stop()

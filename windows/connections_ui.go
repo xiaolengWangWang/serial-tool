@@ -168,12 +168,12 @@ func (a *application) openConnections() {
 		}
 		lines = append(lines, fmt.Sprintf("%s  %s\r\nID: %s\r\n本地: %s\r\nRX %s / TX %s · 已连接 %s", p.Transport, p.RemoteAddress, p.ID, p.LocalAddress, wincore.FormatBytes(p.RXBytes), wincore.FormatBytes(p.TXBytes), wincore.FormatDuration(time.Since(p.ConnectedAt))))
 	}
-	if err := (Dialog{AssignTo: &dlg, Title: "连接管理", Size: Size{Width: 700, Height: 480}, Layout: VBox{}, Children: []Widget{
+	if err := (Dialog{AssignTo: &dlg, Title: "连接管理", Size: Size{Width: 720, Height: 500}, MinSize: Size{Width: 560, Height: 400}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 12}, Spacing: 8}, Children: []Widget{
 		Label{Text: "左侧客户端列表可定向发送、过滤、断开和复制地址；同 IP 不同端口按独立会话显示。"},
 		TextEdit{ReadOnly: true, VScroll: true, Text: strings.Join(lines, "\r\n\r\n"), StretchFactor: 1},
-		Composite{Layout: HBox{}, Children: []Widget{Label{Text: "TCP 最大连接数（0 不限）"}, NumberEdit{AssignTo: &maximum, MinValue: 0, MaxValue: 10000, Value: float64(a.maxConnections), Decimals: 0}}},
+		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{Label{Text: "TCP 最大连接数（0 不限）", Alignment: AlignHNearVCenter}, NumberEdit{AssignTo: &maximum, MinValue: 0, MaxValue: 10000, Value: float64(a.maxConnections), Decimals: 0, MinSize: Size{Width: 110, Height: rowH}, MaxSize: Size{Width: 110}}, HSpacer{}}},
 		CheckBox{AssignTo: &latest, Text: "串口桥接：仅回复最近请求的 TCP 会话", Checked: a.bridgeLatest},
-		PushButton{Text: "应用", OnClicked: func() {
+		PushButton{Text: "应用", MinSize: Size{Height: btnH}, OnClicked: func() {
 			a.maxConnections = int(maximum.Value())
 			a.bridgeLatest = latest.Checked()
 			a.engine.SetMaxConnections(a.maxConnections)

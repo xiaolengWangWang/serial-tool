@@ -38,10 +38,10 @@ func (a *application) openHTTPWorkspace() {
 	}
 	report := func(err error) { status.SetText("错误：" + httpWorkspaceBounded(err.Error())) }
 	err := (Dialog{
-		AssignTo: &dlg, Title: "HTTP 工作区", MinSize: Size{Width: 800, Height: 660}, Size: Size{Width: 1040, Height: 800}, Layout: VBox{},
+		AssignTo: &dlg, Title: "HTTP 工作台", MinSize: Size{Width: 760, Height: 600}, Size: Size{Width: 1040, Height: 800}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 12}, Spacing: 8},
 		Children: []Widget{
 			Label{Text: "先在主窗口选择 HTTP 客户端并连接，再发送请求；同一连接自动保留 Cookie。"},
-			Composite{Layout: HBox{}, Children: []Widget{
+			Composite{Layout: HBox{Alignment: AlignHNearVCenter}, Children: []Widget{
 				ComboBox{AssignTo: &method, Model: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}, CurrentIndex: 0, Editable: true, MinSize: Size{Width: 90}},
 				LineEdit{AssignTo: &address, Text: "http://127.0.0.1:8080/", StretchFactor: 1},
 				PushButton{AssignTo: &send, Text: "发送请求", OnClicked: func() {
@@ -86,14 +86,14 @@ func (a *application) openHTTPWorkspace() {
 					}
 				}},
 			}},
-			Composite{Layout: HBox{}, Children: []Widget{
-				Label{Text: "总超时(s)"}, LineEdit{AssignTo: &timeout, Text: "30", MaxSize: Size{Width: 70}},
-				Label{Text: "连接超时(s)"}, LineEdit{AssignTo: &connectTimeout, Text: "10", MaxSize: Size{Width: 70}},
+			Composite{Layout: HBox{Alignment: AlignHNearVCenter}, Children: []Widget{
+				inlineLabel("总超时(s)", 66), LineEdit{AssignTo: &timeout, Text: "30", MinSize: Size{Width: 70, Height: rowH}, MaxSize: Size{Width: 70}},
+				inlineLabel("连接超时(s)", 80), LineEdit{AssignTo: &connectTimeout, Text: "10", MinSize: Size{Width: 70, Height: rowH}, MaxSize: Size{Width: 70}},
 				CheckBox{AssignTo: &follow, Text: "跟随重定向", Checked: true}, CheckBox{AssignTo: &insecure, Text: "跳过 TLS 证书验证"}, HSpacer{},
 			}},
 			TabWidget{MinSize: Size{Height: 200}, Pages: []TabPage{
-				{Title: "请求头", Layout: VBox{}, Children: []Widget{Label{Text: "每行一个 Name: Value，支持重复请求头"}, TextEdit{AssignTo: &headers, VScroll: true, HScroll: true, MaxLength: 262144}}},
-				{Title: "请求体", Layout: VBox{}, Children: []Widget{
+				{Title: "请求头", Layout: VBox{Alignment: AlignHNearVNear}, Children: []Widget{Label{Text: "每行一个 Name: Value，支持重复请求头"}, TextEdit{AssignTo: &headers, VScroll: true, HScroll: true, MaxLength: 262144}}},
+				{Title: "请求体", Layout: VBox{Alignment: AlignHNearVNear}, Children: []Widget{
 					CheckBox{AssignTo: &preserve, Text: "保留导入的 cURL data/form 请求体（下方显示参数，包括文件引用）", OnCheckedChanged: func() {
 						body.SetReadOnly(preserve.Checked())
 						if !preserve.Checked() {
@@ -102,10 +102,10 @@ func (a *application) openHTTPWorkspace() {
 					}},
 					TextEdit{AssignTo: &body, VScroll: true, HScroll: true, MaxLength: 1048576},
 				}},
-				{Title: "cURL 导入 / 导出", Layout: VBox{}, Children: []Widget{
+				{Title: "cURL 导入 / 导出", Layout: VBox{Alignment: AlignHNearVNear}, Children: []Widget{
 					Label{Text: "仅解析，不执行 shell。导出内容可能包含认证信息；仅显示在此处，不自动复制或保存。"},
 					TextEdit{AssignTo: &curlText, VScroll: true, HScroll: true, MaxLength: 1048576},
-					Composite{Layout: HBox{}, Children: []Widget{
+					Composite{Layout: HBox{Alignment: AlignHNearVCenter}, Children: []Widget{
 						PushButton{Text: "导入到请求", OnClicked: func() {
 							s, err := wincore.ParseCURL(curlText.Text())
 							if err != nil {
@@ -148,14 +148,15 @@ func (a *application) openHTTPWorkspace() {
 							curlText.SetText(text)
 							status.SetText("已生成 cURL（可能包含认证信息）。")
 						}},
+						HSpacer{},
 					}},
 				}},
 			}},
 			Label{AssignTo: &status, Text: "就绪；尚未发送请求"},
 			CheckBox{AssignTo: &pretty, Text: "格式化 JSON 响应", Checked: true, OnCheckedChanged: showBody},
 			TabWidget{MinSize: Size{Height: 220}, Pages: []TabPage{
-				{Title: "响应正文", Layout: VBox{}, Children: []Widget{TextEdit{AssignTo: &responseBody, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 300000}}},
-				{Title: "响应头", Layout: VBox{}, Children: []Widget{TextEdit{AssignTo: &responseHeaders, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 300000}}},
+				{Title: "响应正文", Layout: VBox{Alignment: AlignHNearVNear}, Children: []Widget{TextEdit{AssignTo: &responseBody, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 300000}}},
+				{Title: "响应头", Layout: VBox{Alignment: AlignHNearVNear}, Children: []Widget{TextEdit{AssignTo: &responseHeaders, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 300000}}},
 			}},
 		},
 	}).Create(a.mw)
