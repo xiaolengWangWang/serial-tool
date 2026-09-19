@@ -81,6 +81,8 @@ type application struct {
 	detailsLabel, sendPreview             *walk.Label
 	selectionLabel                        *walk.Label
 	detailColumns                         *walk.Action
+	autoUpdateAction                      *walk.Action
+	checkingUpdate                        bool
 	// 每秒刷新的上一次结果。只有内容真正变化时才写回控件：
 	// 无条件 SetModel/SetText 会触发重排，而重排会把展开中的下拉列表强制收起。
 	lastTargetLabels, lastPeerLabels []string
@@ -236,6 +238,7 @@ func main() {
 	app.refreshRecentConn()
 	app.appendLog("SQLite 数据目录: " + app.engine.DataDir())
 	go app.statsLoop()
+	go app.autoCheckUpdate()
 	app.mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
 		if !*canceled {
 			app.assistant.stop()

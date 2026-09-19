@@ -46,6 +46,9 @@ func (a *application) createWindow() error {
 	}
 	// 对齐 mac：宽度不足 1280 时自动收起 AI 面板，保证中栏始终够宽承载数据表。
 	a.mw.SizeChanged().Attach(a.enforceAssistantWidth)
+	if a.autoUpdateAction != nil {
+		_ = a.autoUpdateAction.SetChecked(a.autoUpdateEnabled())
+	}
 	a.updateSelectionLabel()
 	a.fitToWorkArea()
 	return nil
@@ -61,8 +64,8 @@ func (a *application) menus() []MenuItem {
 				a.updateMode()
 			}
 		}}, Action{Text: "虚拟串口映射(开发中)", OnTriggered: a.showVSerialPending}, Action{Text: "历史数据分析", OnTriggered: a.openDatabaseAnalysis}}},
-		Menu{Text: "设置", Items: []MenuItem{Action{Text: "AI 设置", OnTriggered: a.assistant.settings}, Action{Text: "连接数与桥接", OnTriggered: a.openConnections}}},
-		Menu{Text: "帮助", Items: []MenuItem{Action{Text: "使用说明", OnTriggered: a.showHelp}, Action{Text: "发送 (F5)", Image: uiIcon("send"), Shortcut: Shortcut{Key: walk.KeyF5}, OnTriggered: func() { a.sendOnce(false) }}}},
+		Menu{Text: "设置", Items: []MenuItem{Action{Text: "AI 设置", OnTriggered: a.assistant.settings}, Action{Text: "连接数与桥接", OnTriggered: a.openConnections}, Separator{}, Action{AssignTo: &a.autoUpdateAction, Text: "启动时检查更新", Checkable: true, OnTriggered: a.toggleAutoUpdate}}},
+		Menu{Text: "帮助", Items: []MenuItem{Action{Text: "使用说明", OnTriggered: a.showHelp}, Action{Text: "检查更新", OnTriggered: a.checkUpdate}, Action{Text: "发送 (F5)", Image: uiIcon("send"), Shortcut: Shortcut{Key: walk.KeyF5}, OnTriggered: func() { a.sendOnce(false) }}}},
 	}
 }
 
