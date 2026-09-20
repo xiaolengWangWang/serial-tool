@@ -52,18 +52,19 @@ const (
 
 // 需要区分处理的 Win32 错误码
 const (
-	errPipeConnected        = syscall.Errno(535) // ERROR_PIPE_CONNECTED:调用前客户端已连上,视为成功
-	errPipeListening        = syscall.Errno(536) // ERROR_PIPE_LISTENING:本端还没有程序打开
-	errPipeBusy             = syscall.Errno(231) // ERROR_PIPE_BUSY:端口已被占用
-	errBrokenPipe           = syscall.Errno(109) // ERROR_BROKEN_PIPE:对端已关闭
-	errNoData               = syscall.Errno(232) // ERROR_NO_DATA:管道正在关闭
-	errInsufficientBuf      = syscall.Errno(122) // ERROR_INSUFFICIENT_BUFFER
-	errFileNotFound         = syscall.Errno(2)   // ERROR_FILE_NOT_FOUND
-	errOperationAborted     = syscall.Errno(995) // ERROR_OPERATION_ABORTED:I/O 被 CancelIoEx 取消
-	errInvalidHandle        = syscall.Errno(6)   // ERROR_INVALID_HANDLE
-	errIOPending            = syscall.Errno(997) // ERROR_IO_PENDING:重叠 I/O 已提交,待完成
-	errBadPipe              = syscall.Errno(230) // ERROR_BAD_PIPE:管道在监听态,当前没有客户端
-	errPipeNotConnected     = syscall.Errno(233) // ERROR_PIPE_NOT_CONNECTED:客户端已断开
+	errPipeConnected        = syscall.Errno(535)  // ERROR_PIPE_CONNECTED:调用前客户端已连上,视为成功
+	errPipeListening        = syscall.Errno(536)  // ERROR_PIPE_LISTENING:本端还没有程序打开
+	errPipeBusy             = syscall.Errno(231)  // ERROR_PIPE_BUSY:端口已被占用
+	errBrokenPipe           = syscall.Errno(109)  // ERROR_BROKEN_PIPE:对端已关闭
+	errNoData               = syscall.Errno(232)  // ERROR_NO_DATA:管道正在关闭
+	errInsufficientBuf      = syscall.Errno(122)  // ERROR_INSUFFICIENT_BUFFER
+	errFileNotFound         = syscall.Errno(2)    // ERROR_FILE_NOT_FOUND
+	errOperationAborted     = syscall.Errno(995)  // ERROR_OPERATION_ABORTED:I/O 被 CancelIoEx 取消
+	errInvalidHandle        = syscall.Errno(6)    // ERROR_INVALID_HANDLE
+	errIOPending            = syscall.Errno(997)  // ERROR_IO_PENDING:重叠 I/O 已提交,待完成
+	errBadPipe              = syscall.Errno(230)  // ERROR_BAD_PIPE:管道在监听态,当前没有客户端
+	errPipeNotConnected     = syscall.Errno(233)  // ERROR_PIPE_NOT_CONNECTED:客户端已断开
+	errNotFound             = syscall.Errno(1168) // ERROR_NOT_FOUND:查不到客户端,即当前没人打开该端口
 	processQueryLimitedInfo = 0x1000
 )
 

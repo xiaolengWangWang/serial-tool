@@ -104,6 +104,14 @@ func cmdCleanup() error {
 }
 
 func cmdRun(specs []string) error {
+	// 先清掉自家残留编号:上次被强杀时 COM 名没来得及释放,
+	// 否则这次自动选号会跳过那些其实已经死掉的编号。
+	if removed, err := vcom.RemoveStaleLinks(); err != nil {
+		fmt.Fprintln(os.Stderr, "清理残留编号时出错:", err)
+	} else if len(removed) > 0 {
+		fmt.Printf("已清理上次遗留的编号: %s\n", strings.Join(removed, " "))
+	}
+
 	m := vcom.NewManager()
 	defer m.CloseAll()
 

@@ -158,12 +158,20 @@ func (d *device) occupancy() (connected bool, pid uint32, proc, procErr string) 
 }
 
 // isNotConnectedError 判断查询结果是否明确表示「当前没有程序打开这个端口」。
+//
+// 实测:管道处于监听态(没人打开)时,GetNamedPipeClientProcessId 返回的是
+// ERROR_NOT_FOUND,不是看起来更合理的 ERROR_BAD_PIPE。少了这一条会让所有
+// 空闲端口都显示成「无法确认占用状态」。
 func isNotConnectedError(err error) bool {
 	errno, ok := err.(syscall.Errno)
 	if !ok {
 		return false
 	}
-	return errno == errBadPipe || errno == errPipeListening || errno == errPipeNotConnected
+	switch errno {
+	case errNotFound, errBadPipe, errPipeListening, errPipeNotConnected, errBrokenPipe:
+		return true
+	}
+	return false
 }
 
 // isTeardownError 判断读写错误是否属于「对端关闭 / 自己在拆除」这类正常退出信号。

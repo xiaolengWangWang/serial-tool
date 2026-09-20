@@ -212,3 +212,34 @@ func TestMultiplePairsIsolated(t *testing.T) {
 		}
 	}
 }
+
+// 回归测试:没有程序打开时必须报「空闲」,而且不能带错误说明。
+//
+// 早期版本漏了 ERROR_NOT_FOUND —— 管道处于监听态时 GetNamedPipeClientProcessId
+// 返回的正是它。结果所有空闲端口都显示成「无法确认占用状态」,界面上全是假告警。
+func TestPairReportsIdleWhenNobodyOpens(t *testing.T) {
+	m := NewManager()
+	t.Cleanup(m.CloseAll)
+
+	info, err := m.Create("", "")
+	if err != nil {
+		t.Fatalf("创建串口对失败: %v", err)
+	}
+	t.Logf("使用 %s ⇄ %s(两端都不打开)", info.A.Name, info.B.Name)
+
+	pairs := m.List().Pairs
+	if len(pairs) != 1 {
+		t.Fatalf("期望 1 对串口,得到 %d", len(pairs))
+	}
+	for _, port := range []PortInfo{pairs[0].A, pairs[0].B} {
+		if port.State != StateIdle {
+			t.Errorf("%s 状态是 %q,期望 %q", port.Name, port.State, StateIdle)
+		}
+		if port.ProcessNote != "" {
+			t.Errorf("%s 空闲时不该带说明,却有 %q", port.Name, port.ProcessNote)
+		}
+		if port.PID != 0 {
+			t.Errorf("%s 空闲时 PID 应为 0,却是 %d", port.Name, port.PID)
+		}
+	}
+}
