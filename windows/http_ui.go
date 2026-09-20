@@ -42,7 +42,7 @@ func (a *application) openHTTPWorkspace() {
 		Children: []Widget{
 			Label{Text: "先在主窗口选择 HTTP 客户端并连接，再发送请求；同一连接自动保留 Cookie。"},
 			Composite{Layout: HBox{Alignment: AlignHNearVCenter}, Children: []Widget{
-				ComboBox{AssignTo: &method, Model: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}, CurrentIndex: 0, Editable: true, MinSize: Size{Width: 90}},
+				ComboBox{AssignTo: &method, Model: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}, CurrentIndex: 0, Editable: true, MinSize: Size{Width: 100, Height: rowH}, MaxSize: Size{Width: 100}},
 				LineEdit{AssignTo: &address, Text: "http://127.0.0.1:8080/", StretchFactor: 1},
 				PushButton{AssignTo: &send, Text: "发送请求", OnClicked: func() {
 					f := fields()
@@ -152,7 +152,7 @@ func (a *application) openHTTPWorkspace() {
 					}},
 				}},
 			}},
-			Label{AssignTo: &status, Text: "就绪；尚未发送请求"},
+			Label{AssignTo: &status, Text: "就绪；尚未发送请求", EllipsisMode: EllipsisEnd, MinSize: Size{Height: 24}, Alignment: AlignHNearVCenter},
 			CheckBox{AssignTo: &pretty, Text: "格式化 JSON 响应", Checked: true, OnCheckedChanged: showBody},
 			TabWidget{MinSize: Size{Height: 220}, Pages: []TabPage{
 				{Title: "响应正文", Layout: VBox{Alignment: AlignHNearVNear}, Children: []Widget{TextEdit{AssignTo: &responseBody, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 300000}}},
@@ -170,5 +170,6 @@ func (a *application) openHTTPWorkspace() {
 			cancel()
 		}
 	})
+	dlg.SetSize(walk.Size{Width: 1040, Height: 800})
 	dlg.Show()
 }

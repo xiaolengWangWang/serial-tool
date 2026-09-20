@@ -32,6 +32,12 @@ func (a *application) selectedSendTarget() (string, string) {
 }
 
 func (a *application) sendCaptured(input string, asHex bool, eol, id, address string) error {
+	if a.engine.Stats().Mode == wincore.ModeHTTPClient {
+		if strings.TrimSpace(input) == "" {
+			return fmt.Errorf("请输入 HTTP 请求，例如 GET /health")
+		}
+		return a.engine.Send(input, false, "无")
+	}
 	data, err := wincore.ParseData(input, asHex, eol)
 	if err != nil {
 		return err
@@ -49,12 +55,37 @@ func (a *application) sendCaptured(input string, asHex bool, eol, id, address st
 }
 
 func (a *application) validateSend() {
-	data, err := wincore.ParseData(a.sendEdit.Text(), a.hexSend.Checked(), a.eol.Text())
-	if err != nil {
-		a.sendPreview.SetText(err.Error())
+	if a.uiMode() == wincore.ModeHTTPClient {
+		if strings.TrimSpace(a.sendEdit.Text()) == "" {
+			a.setSendFeedback("请输入 HTTP 请求，例如 GET /health", true)
+		} else {
+			a.setSendFeedback("HTTP 请求按文本发送；响应状态与内容见数据区", false)
+		}
 		return
 	}
-	a.sendPreview.SetText(fmt.Sprintf("%d 字节  ·  % X", len(data), data))
+	data, err := wincore.ParseData(a.sendEdit.Text(), a.hexSend.Checked(), a.eol.Text())
+	if err != nil {
+		a.setSendFeedback(err.Error(), true)
+		return
+	}
+	if len(data) == 0 {
+		a.setSendFeedback("请输入要发送的数据", true)
+		return
+	}
+	a.setSendFeedback(fmt.Sprintf("验证通过 · %d 字节  ·  % X", len(data), data), false)
+}
+
+func (a *application) setSendFeedback(text string, failed bool) {
+	if a.sendPreview == nil {
+		return
+	}
+	a.sendPreview.SetText(text)
+	a.sendPreview.SetToolTipText(text)
+	color := colorMuted
+	if failed {
+		color = colorRed
+	}
+	a.sendPreview.SetTextColor(color)
 }
 
 func (a *application) refreshConnections() {

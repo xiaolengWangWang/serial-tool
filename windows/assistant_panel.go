@@ -15,7 +15,7 @@ import (
 
 type assistantPanel struct {
 	app          *application
-	panel        *walk.Composite
+	panel        *walk.ScrollView
 	scope        *walk.ComboBox
 	from, to     *walk.LineEdit
 	report, chat *walk.TextEdit
@@ -46,12 +46,10 @@ func (w *assistantPanel) widget() Widget {
 		w.maxPackets = n
 	}
 	quick := func(text string) Widget {
-		return PushButton{Text: text, Image: uiIcon("check"), MinSize: Size{Height: btnH}, OnClicked: func() { w.analyze(text) }}
+		return PushButton{Text: text, MinSize: Size{Width: 106, Height: btnH}, MaxSize: Size{Width: 112}, OnClicked: func() { w.analyze(text) }}
 	}
-	// 宽度对齐 mac 的 255px（app.m layoutMainPanes），把省下的横向空间还给数据表。
-	// 面板只有 260px 宽，一行放不下三个带图标的按钮：「发送追问」独占一行，
-	// 「停止」与「AI 设置」并排，文字才不会被按钮边框切掉。
-	return Composite{AssignTo: &w.panel, Visible: false, MinSize: Size{Width: 276}, MaxSize: Size{Width: 296}, Background: SolidColorBrush{Color: colorPanel}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 8}, Children: []Widget{
+	// 窄面板可纵向滚动；「发送追问」独占一行，「停止」与「AI 设置」并排。
+	return ScrollView{AssignTo: &w.panel, HorizontalFixed: true, Visible: false, MinSize: Size{Width: 276}, MaxSize: Size{Width: 296}, Background: SolidColorBrush{Color: colorPanel}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 8, Right: 26, Bottom: 8}, Spacing: 8}, Children: []Widget{
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 			Label{Text: "AI 通信助手", Font: fontSection, TextColor: colorBlue, Alignment: AlignHNearVCenter},
 			HSpacer{},
@@ -77,13 +75,13 @@ func (w *assistantPanel) widget() Widget {
 				TextEdit{AssignTo: &w.report, ReadOnly: true, VScroll: true, StretchFactor: 1, MinSize: Size{Height: 100}},
 			}},
 			{Title: "历史分析", Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 6}, Children: []Widget{
-				Label{Text: "从本地采集历史中分析，不影响当前收发。"},
+				Label{Text: "分析本地历史，不影响当前收发。", EllipsisMode: EllipsisEnd},
 				PushButton{Text: "最近 5 分钟", MinSize: Size{Height: btnH}, OnClicked: func() { w.history(5 * time.Minute) }},
 				PushButton{Text: "最近 30 分钟", MinSize: Size{Height: btnH}, OnClicked: func() { w.history(30 * time.Minute) }},
 				PushButton{Text: "最近 1 小时", MinSize: Size{Height: btnH}, OnClicked: func() { w.history(time.Hour) }},
 				PushButton{Text: "自定义时间 / 数据库", MinSize: Size{Height: btnH}, OnClicked: w.app.openDatabaseAnalysis},
 				VSpacer{},
-				Label{Text: "历史报告生成后，可在底部继续提问。", TextColor: colorMuted},
+				Label{Text: "报告生成后，可在底部继续提问。", TextColor: colorMuted, EllipsisMode: EllipsisEnd},
 			}},
 			{Title: "对话记录", Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 8, Top: 8, Right: 8, Bottom: 8}, Spacing: 6}, Children: []Widget{
 				TextEdit{AssignTo: &w.chat, ReadOnly: true, VScroll: true, StretchFactor: 1},

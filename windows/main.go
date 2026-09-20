@@ -16,6 +16,7 @@ import (
 
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
+	"github.com/lxn/win"
 	"serial-tool/internal/wincore"
 )
 
@@ -28,6 +29,9 @@ type application struct {
 	displayMode                          *walk.ComboBox
 	autoScroll, showTime, clearAfterSend *walk.CheckBox
 	assistant                            *assistantPanel
+	connectionPane                       *walk.ScrollView
+	arrangingPanes                       bool
+	httpSendMode, hexBeforeHTTP          bool
 	peerBaseline                         map[string]wincore.ConnectionInfo
 	maxConnections                       int
 	bridgeLatest                         bool
@@ -80,6 +84,7 @@ type application struct {
 	targets                               []wincore.ConnectionInfo
 	detailsLabel, sendPreview             *walk.Label
 	selectionLabel                        *walk.Label
+	analyzeSelectionButton                *walk.PushButton
 	detailColumns                         *walk.Action
 	autoUpdateAction                      *walk.Action
 	checkingUpdate                        bool
@@ -229,7 +234,11 @@ func main() {
 	if icon := uiIcon("app"); icon != nil {
 		app.mw.SetIcon(icon)
 	}
-	app.setupTray()
+	if err := app.setupTray(); err != nil {
+		app.appendLog("托盘图标初始化失败: " + err.Error())
+	} else {
+		defer app.notifyIcon.Dispose()
+	}
 	app.refreshPorts()
 	app.updateMode()
 	app.hexDisplay.Store(true)
@@ -247,6 +256,7 @@ func main() {
 			app.stopLoop()
 		}
 	})
+	app.restoreMainWindow()
 	app.mw.Run()
 	app.closed.Store(true)
 	app.stopTimer(false)
@@ -323,10 +333,25 @@ func (a *application) updateMode() {
 	if a.udpTarget != nil {
 		a.udpTarget.SetVisible(a.mode.Text() == "UDP")
 	}
+	if a.hexSend != nil && a.eol != nil {
+		if isHTTP && !a.httpSendMode {
+			a.hexBeforeHTTP = a.hexSend.Checked()
+			a.hexSend.SetChecked(false)
+			a.setSendFeedback("HTTP 请求按文本发送，例如 GET /health；请求头与正文用空行分隔", false)
+		} else if !isHTTP && a.httpSendMode {
+			a.hexSend.SetChecked(a.hexBeforeHTTP)
+			a.setSendFeedback("输入报文后可先验证，按 F5 发送", false)
+		}
+		a.httpSendMode = isHTTP
+		a.hexSend.SetEnabled(!isHTTP)
+		a.eol.SetEnabled(!isHTTP)
+	}
 	if !a.connected {
 		text := map[bool]string{true: "启动监听", false: "连接"}[a.isServer()]
 		if a.uiMode() == wincore.ModeSerial {
 			text = "打开串口"
+		} else if isHTTP {
+			text = "准备 HTTP"
 		}
 		a.connectButton.SetText(text)
 	}
@@ -372,22 +397,26 @@ func (a *application) uiMode() wincore.Mode {
 }
 
 func (a *application) config() (wincore.Config, error) {
-	baud, err := strconv.Atoi(a.baud.Text())
-	if err != nil {
-		return wincore.Config{}, fmt.Errorf("波特率无效")
-	}
-	dataBits, err := strconv.Atoi(a.data.Text())
-	if err != nil {
-		return wincore.Config{}, fmt.Errorf("数据位无效")
-	}
-	stopBits, err := strconv.Atoi(a.stop.Text())
-	if err != nil {
-		return wincore.Config{}, fmt.Errorf("停止位无效")
+	mode := a.uiMode()
+	baud, dataBits, stopBits := 115200, 8, 1
+	if wincore.SpecOf(mode).NeedsSerial {
+		var err error
+		if baud, err = strconv.Atoi(a.baud.Text()); err != nil {
+			return wincore.Config{}, fmt.Errorf("波特率无效")
+		}
+		if dataBits, err = strconv.Atoi(a.data.Text()); err != nil {
+			return wincore.Config{}, fmt.Errorf("数据位无效")
+		}
+		if stopBits, err = strconv.Atoi(a.stop.Text()); err != nil {
+			return wincore.Config{}, fmt.Errorf("停止位无效")
+		}
 	}
 	ip := strings.TrimSpace(a.netIP.Text())
 	port := strings.TrimSpace(a.netPort.Text())
 	var address string
 	switch {
+	case mode == wincore.ModeHTTPClient:
+		address = ip // HTTP 的端口属于 URL，不能拼接隐藏的 TCP/UDP 端口。
 	case port == "":
 		address = ip // HTTP 模式：URL 直接填在 IP 栏
 	case ip == "":
@@ -401,7 +430,7 @@ func (a *application) config() (wincore.Config, error) {
 		interval = v
 	}
 	return wincore.BuildConfig(wincore.ConnParams{
-		Mode: a.uiMode(), SerialName: strings.TrimSpace(a.ports.Text()), Address: address,
+		Mode: mode, SerialName: strings.TrimSpace(a.ports.Text()), Address: address,
 		Baud: baud, DataBits: dataBits, StopBits: stopBits, Parity: a.parity.Text(),
 		Protocol: a.protocol.Text(), Role: a.role.Text(),
 		AutoReconnect: autoReconnect, ReconnectInterval: time.Duration(interval) * time.Second,
@@ -461,9 +490,13 @@ func (a *application) toggleConnection() {
 			a.connectButton.SetText(map[bool]string{true: "停止监听", false: "断开连接"}[a.isServer()])
 			if cfg.Mode == wincore.ModeSerial {
 				a.connectButton.SetText("关闭串口")
+			} else if cfg.Mode == wincore.ModeHTTPClient {
+				a.connectButton.SetText("结束 HTTP")
 			}
 			if a.isServer() {
 				a.setConnStatus(colorBlue, "监听中")
+			} else if cfg.Mode == wincore.ModeHTTPClient || cfg.Mode == wincore.ModeUDPClient {
+				a.setConnStatus(colorGreen, "就绪")
 			} else {
 				a.setConnStatus(colorGreen, "已连接")
 			}
@@ -477,12 +510,13 @@ func (a *application) sendOnce(fromTimer bool) {
 		return
 	}
 	if !a.connected {
-		a.sendPreview.SetText("请先连接或启动监听")
+		a.setSendFeedback("请先连接或启动监听，再发送数据", true)
 		return
 	}
 	input, asHex, eol := a.sendEdit.Text(), a.hexSend.Checked(), a.eol.Text()
 	id, address := a.selectedSendTarget()
 	a.sending = true
+	a.setSendFeedback("正在发送…", false)
 	go func() {
 		err := a.sendCaptured(input, asHex, eol, id, address)
 		if a.closed.Load() {
@@ -494,9 +528,10 @@ func (a *application) sendOnce(fromTimer bool) {
 				if fromTimer {
 					a.stopTimer(true)
 				}
-				a.showError(err)
+				a.setSendFeedback("发送失败："+err.Error(), true)
 				return
 			}
+			a.setSendFeedback("发送完成 · "+time.Now().Format("15:04:05"), false)
 			a.refreshSendHistory()
 			if a.clearAfterSend != nil && a.clearAfterSend.Checked() && a.sendEdit.Text() == input {
 				a.sendEdit.SetText("")
@@ -693,7 +728,7 @@ func (a *application) onPacket(raw wincore.Packet) {
 		if a.packetTable != nil && a.autoScroll.Checked() && a.packetModel.RowCount() > 0 {
 			a.packetTable.EnsureItemVisible(a.packetModel.RowCount() - 1)
 		}
-		a.updatePacketStats()
+		// 统计文字由 statsLoop 每秒刷新，避免高速收发时持续重排而延迟按钮点击。
 		if a.monitorEdit != nil && !a.monitorEdit.IsDisposed() {
 			a.appendDisplay(a.monitorEdit, fmt.Sprintf("[%s %s %s %s] %s\r\n", p.TS.Format("15:04:05.000"), p.Direction, p.Raw.Transport, p.Raw.Endpoint, p.Hex))
 			if !a.monitorPaused {
@@ -782,6 +817,7 @@ func (a *application) applyFilter() {
 	}
 	a.packetModel.refilter(kw, dir, a.sinceTime())
 	a.updatePacketStats()
+	a.updateSelectionLabel()
 }
 
 func (a *application) clearFilter() {
@@ -797,13 +833,15 @@ func (a *application) clearFilter() {
 	if a.packetModel != nil {
 		a.packetModel.refilter("", dirAll, time.Time{})
 	}
+	a.updatePacketStats()
+	a.updateSelectionLabel()
 }
 
 func (a *application) openMonitor() {
 	if a.monitorWindow == nil {
 		var pause *walk.PushButton
 		err := (MainWindow{
-			AssignTo: &a.monitorWindow, Title: "实时数据监控", Icon: uiIcon("app"), MinSize: Size{Width: 700, Height: 460}, Size: Size{Width: 900, Height: 620}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 8},
+			AssignTo: &a.monitorWindow, Title: "实时数据监控", MinSize: Size{Width: 700, Height: 460}, Size: Size{Width: 900, Height: 620}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 8},
 			Children: []Widget{
 				Composite{Layout: HBox{Alignment: AlignHNearVCenter}, Children: []Widget{
 					Label{Text: "仅显示实时接收数据"}, HSpacer{},
@@ -821,6 +859,9 @@ func (a *application) openMonitor() {
 		if err != nil {
 			a.showError(err)
 			return
+		}
+		if icon := uiIcon("app"); icon != nil {
+			a.monitorWindow.SetIcon(icon)
 		}
 		a.monitorWindow.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
 			*canceled = true
@@ -902,10 +943,11 @@ func (a *application) statsLoop() {
 
 // updateStatus 根据统计快照刷新状态栏文本与灯色。
 func (a *application) updateStatus(st wincore.Stats) {
-	if a.closed.Load() || a.status == nil {
+	if a.closed.Load() || a.status == nil || a.comboDropDownOpen() {
 		return
 	}
 	a.refreshConnections()
+	a.updatePacketStats()
 	a.showPeerDetails()
 	labels := map[wincore.ConnState]string{wincore.StateDisconnected: "未连接", wincore.StateConnecting: "连接中", wincore.StateConnected: "已连接", wincore.StateReconnecting: "重连中", wincore.StateError: "错误"}
 	label := labels[st.State]
@@ -914,6 +956,8 @@ func (a *application) updateStatus(st wincore.Stats) {
 		color = colorGreen
 		if st.Listening {
 			label = fmt.Sprintf("监听中 · %d 客户端", st.PeerCount)
+		} else if a.uiMode() == wincore.ModeHTTPClient || a.uiMode() == wincore.ModeUDPClient {
+			label = "就绪"
 		}
 	}
 	if st.State == wincore.StateConnecting || st.State == wincore.StateReconnecting {
@@ -1065,7 +1109,7 @@ func (a *application) onRecentConnSelected() {
 }
 
 func (a *application) updatePacketStats() {
-	if a.statsLabel == nil || a.packetModel == nil {
+	if a.statsLabel == nil || a.packetModel == nil || a.comboDropDownOpen() {
 		return
 	}
 	var rxCnt, txCnt, rxB, txB int
@@ -1078,10 +1122,13 @@ func (a *application) updatePacketStats() {
 			txB += p.Length
 		}
 	}
-	_ = a.statsLabel.SetText(fmt.Sprintf("· 共 %d 条 · RX %d/%s · TX %d/%s",
+	text := fmt.Sprintf("· 共 %d 条 · RX %d/%s · TX %d/%s",
 		rxCnt+txCnt,
 		rxCnt, wincore.FormatBytes(uint64(rxB)),
-		txCnt, wincore.FormatBytes(uint64(txB))))
+		txCnt, wincore.FormatBytes(uint64(txB)))
+	if a.statsLabel.Text() != text {
+		_ = a.statsLabel.SetText(text)
+	}
 }
 
 func (a *application) onSendHistorySelected() {
@@ -1159,30 +1206,43 @@ func (a *application) copyPacketField(field string) {
 	_ = walk.Clipboard().SetText(text)
 }
 
-// setupTray 让应用关闭窗口后仍在后台运行(托盘图标),点击图标恢复,右键可退出。
-func (a *application) setupTray() {
+// restoreMainWindow restores a minimized window and brings it to the foreground.
+func (a *application) restoreMainWindow() {
+	if win.IsIconic(a.mw.Handle()) {
+		win.ShowWindow(a.mw.Handle(), win.SW_RESTORE)
+	} else {
+		a.mw.Show()
+	}
+	win.SetForegroundWindow(a.mw.Handle())
+}
+
+// setupTray 提供点击恢复主窗口和右键退出的通知区域入口。
+func (a *application) setupTray() (err error) {
 	ni, err := walk.NewNotifyIcon(a.mw)
 	if err != nil {
-		return
+		return err
 	}
-	a.notifyIcon = ni
-	if icon := uiIcon("app"); icon != nil {
-		ni.SetIcon(icon)
+	defer func() {
+		if err != nil {
+			ni.Dispose()
+		}
+	}()
+	if err = ni.SetIcon(uiIcon("app")); err != nil {
+		return fmt.Errorf("设置图标: %w", err)
 	}
-	_ = ni.SetToolTip("CommBox")
-	_ = ni.SetVisible(true)
+	if err = ni.SetToolTip("CommBox"); err != nil {
+		return fmt.Errorf("设置提示: %w", err)
+	}
 
 	ni.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
 		if button == walk.LeftButton {
-			a.mw.Show()
+			a.restoreMainWindow()
 		}
 	})
 
 	showAction := walk.NewAction()
 	showAction.SetText("显示主界面")
-	showAction.Triggered().Attach(func() {
-		a.mw.Show()
-	})
+	showAction.Triggered().Attach(a.restoreMainWindow)
 	quitAction := walk.NewAction()
 	quitAction.SetText("退出")
 	quitAction.Triggered().Attach(func() {
@@ -1195,12 +1255,17 @@ func (a *application) setupTray() {
 	_ = ni.ContextMenu().Actions().Add(showAction)
 	_ = ni.ContextMenu().Actions().Add(walk.NewSeparatorAction())
 	_ = ni.ContextMenu().Actions().Add(quitAction)
+	if err = ni.SetVisible(true); err != nil {
+		return fmt.Errorf("显示图标: %w", err)
+	}
+	a.notifyIcon = ni
+	return nil
 }
 
 func (a *application) openToolbox() {
-	if a.toolboxWindow == nil {
+	if a.toolboxWindow == nil || a.toolboxWindow.IsDisposed() {
 		if err := (MainWindow{
-			AssignTo: &a.toolboxWindow, Title: "校验与转换", Icon: uiIcon("app"), MinSize: Size{Width: 520, Height: 340}, Size: Size{Width: 580, Height: 400}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 12}, Spacing: 8},
+			AssignTo: &a.toolboxWindow, Title: "校验与转换", MinSize: Size{Width: 520, Height: 340}, Size: Size{Width: 580, Height: 400}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 12}, Spacing: 8},
 			Children: []Widget{
 				Label{Text: "输入(HEX 校验用 01 03 00 0A；Base64/Unix 时间戳直接输文本或数字)"},
 				TextEdit{AssignTo: &a.toolboxInput, MinSize: Size{Height: 60}},
@@ -1224,6 +1289,9 @@ func (a *application) openToolbox() {
 			a.showError(err)
 			return
 		}
+	}
+	if icon := uiIcon("app"); icon != nil {
+		a.toolboxWindow.SetIcon(icon)
 	}
 	a.toolboxWindow.Show()
 }

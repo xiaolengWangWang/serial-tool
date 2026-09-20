@@ -4,9 +4,10 @@ package main
 
 import (
 	"embed"
-	"github.com/lxn/walk"
 	"os"
 	"path/filepath"
+
+	"github.com/lxn/walk"
 )
 
 //go:embed icons/*.ico
@@ -15,6 +16,16 @@ var toolbarIcons = map[string]*walk.Icon{}
 
 func uiIcon(name string) *walk.Icon {
 	if icon := toolbarIcons[name]; icon != nil {
+		return icon
+	}
+	if name == "app" {
+		// Resource 2 is the application icon in rsrc_windows_amd64.syso.
+		// Loading it directly also works when the disk icon cache is unavailable.
+		icon, err := walk.NewIconFromResourceIdWithSize(2, walk.Size{Width: 32, Height: 32})
+		if err != nil {
+			icon = walk.IconApplication()
+		}
+		toolbarIcons[name] = icon
 		return icon
 	}
 	data, err := iconFiles.ReadFile("icons/" + name + ".ico")
@@ -33,11 +44,7 @@ func uiIcon(name string) *walk.Icon {
 	if os.WriteFile(path, data, 0600) != nil {
 		return nil
 	}
-	size := 24
-	if name == "app" {
-		size = 32
-	}
-	icon, err := walk.NewIconFromFileWithSize(path, walk.Size{Width: size, Height: size})
+	icon, err := walk.NewIconFromFileWithSize(path, walk.Size{Width: 24, Height: 24})
 	if err != nil {
 		return nil
 	}

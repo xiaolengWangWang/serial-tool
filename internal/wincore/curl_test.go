@@ -2,6 +2,7 @@ package wincore
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -39,6 +40,39 @@ func TestParseCURLPreservesQuotedDataAndSelectedOptions(t *testing.T) {
 	}
 	if roundTrip.Method != spec.Method || roundTrip.URL != spec.URL || len(roundTrip.Data) != 1 || roundTrip.Data[0] != spec.Data[0] || !roundTrip.FollowRedirects || !roundTrip.Insecure {
 		t.Fatalf("round trip = %#v\nfrom %s", roundTrip, formatted)
+	}
+}
+
+func TestParseCURLBrowserMultilineRequest(t *testing.T) {
+	for _, newline := range []string{"\n", "\r\n"} {
+		t.Run(fmt.Sprintf("newline_%q", newline), func(t *testing.T) {
+			command := strings.Join([]string{
+				"curl 'https://example.test/user-service/system/menu/list' \\",
+				"  -H 'accept: application/json, text/plain, */*' \\",
+				"  -H 'authorization: Bearer test-only' \\",
+				"  -b 'JSESSIONID=test-session' \\",
+				"  -H 'sec-ch-ua: \"Chromium\";v=\"150\"' \\",
+				"  -H 'x-sign: test-signature+with/slashes==' \\",
+				"  -H 'x-time: 1789872849806'",
+			}, newline)
+			spec, err := ParseCURL(command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if spec.Method != "GET" || spec.URL != "https://example.test/user-service/system/menu/list" || spec.Headers.Get("Authorization") != "Bearer test-only" || spec.Headers.Get("X-Sign") != "test-signature+with/slashes==" || spec.Headers.Get("Sec-Ch-Ua") != `"Chromium";v="150"` || len(spec.Cookies) != 1 || spec.Cookies[0] != "JSESSIONID=test-session" {
+				t.Fatalf("browser request changed: %+v", spec)
+			}
+		})
+	}
+}
+
+func TestParseCURLContinuationDoesNotRewriteQuotedBody(t *testing.T) {
+	spec, err := ParseCURL("curl \\\r\n --data-raw 'first\r\nsecond' -H \"X-Test: a\\\r\nb\" https://example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.Data) != 1 || spec.Data[0].Value != "first\r\nsecond" || spec.Headers.Get("X-Test") != "ab" {
+		t.Fatalf("quoted content changed: %+v", spec)
 	}
 }
 

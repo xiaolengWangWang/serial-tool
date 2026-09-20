@@ -223,6 +223,18 @@ func splitCurlCommand(command string) ([]string, error) {
 		if quote != '\'' && (c == '$' || c == '`') {
 			return nil, fmt.Errorf("shell expansion is unsupported")
 		}
+		// A continued line joins the command; it does not start an empty argument.
+		// Accept Windows CRLF from text controls without rewriting quoted body bytes.
+		if quote != '\'' && c == '\\' && i+1 < len(command) {
+			if command[i+1] == '\n' {
+				i++
+				continue
+			}
+			if command[i+1] == '\r' && i+2 < len(command) && command[i+2] == '\n' {
+				i += 2
+				continue
+			}
+		}
 		if quote == 0 {
 			switch c {
 			case ' ', '\t', '\r', '\n':

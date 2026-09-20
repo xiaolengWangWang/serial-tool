@@ -24,7 +24,7 @@ func (a *application) createWindow() error {
 		AssignTo:   &a.mw,
 		Title:      "CommBox v" + wincore.Version + " · Windows",
 		Size:       Size{Width: 1280, Height: 820},
-		MinSize:    Size{Width: 960, Height: 620},
+		MinSize:    Size{Width: 1024, Height: 620},
 		Font:       Font{Family: fontUI, PointSize: sizeBody},
 		Background: SolidColorBrush{Color: colorCanvas},
 		Layout:     VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 6}, Spacing: 8},
@@ -44,7 +44,7 @@ func (a *application) createWindow() error {
 	}).Create(); err != nil {
 		return err
 	}
-	// 对齐 mac：宽度不足 1280 时自动收起 AI 面板，保证中栏始终够宽承载数据表。
+	// 按逻辑像素切换窄屏布局，展开助手不会把窗口撑出工作区。
 	a.mw.SizeChanged().Attach(a.enforceAssistantWidth)
 	if a.autoUpdateAction != nil {
 		_ = a.autoUpdateAction.SetChecked(a.autoUpdateEnabled())
@@ -72,8 +72,8 @@ func (a *application) menus() []MenuItem {
 // connectionPanel 是左栏：模式、参数、连接状态与对端列表。
 // 定宽并可纵向滚动，窗口再矮也不会把参数挤成一团。
 func (a *application) connectionPanel() Widget {
-	return ScrollView{HorizontalFixed: true, MinSize: Size{Width: 300}, MaxSize: Size{Width: 316},
-		Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Right: 6}, Spacing: 8}, Children: []Widget{
+	return ScrollView{AssignTo: &a.connectionPane, HorizontalFixed: true, MinSize: Size{Width: 300}, MaxSize: Size{Width: 316},
+		Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Right: 22}, Spacing: 8}, Children: []Widget{
 			Label{Text: "连接配置 · 工作模式", Font: fontSection, TextColor: colorBlue},
 			ComboBox{AssignTo: &a.mode, ToolTipText: "串口 / TCP / UDP / 串口服务器 / HTTP 客户端", Model: modes, CurrentIndex: 1, MinSize: Size{Height: rowH}, OnCurrentIndexChanged: a.updateMode},
 			// 两列栅格：标签列按最长标签自动定宽，每个字段只占一行，
@@ -113,7 +113,7 @@ func (a *application) connectionPanel() Widget {
 			Label{AssignTo: &a.detailsLabel, Text: "选择客户端查看连接信息", MinSize: Size{Height: 86}, MaxSize: Size{Width: 282, Height: 86}},
 			Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 				inlineLabel("最近连接", 72),
-				ComboBox{AssignTo: &a.recentConn, StretchFactor: stretchFill, MinSize: Size{Height: rowH}, OnCurrentIndexChanged: a.onRecentConnSelected},
+				ComboBox{AssignTo: &a.recentConn, StretchFactor: stretchFill, MinSize: Size{Width: 170, Height: rowH}, MaxSize: Size{Width: 186}, OnCurrentIndexChanged: a.onRecentConnSelected},
 			}},
 		}}
 }
@@ -126,19 +126,22 @@ func (a *application) monitorPanel() Widget {
 			Label{Text: "数据监控", Font: fontSection, TextColor: colorBlue, Alignment: AlignHNearVCenter, MinSize: Size{Width: 92}, MaxSize: Size{Width: 92}},
 			Label{AssignTo: &a.statsLabel, Text: "· 共 0 条", TextColor: colorMuted, EllipsisMode: EllipsisEnd, Alignment: AlignHNearVCenter, StretchFactor: 1},
 			HSpacer{},
-			toolButton("清空", "clear", 92, func() { a.packetModel.clear(); a.updatePacketStats() }),
+			toolButton("清空", "clear", 92, func() { a.packetModel.clear(); a.updatePacketStats(); a.updateSelectionLabel() }),
 			toolButton("保存", "save", 92, func() { a.exportText(a.packetModel.exportText(), "commbox", a.mw) }),
 			toolButton("AI 分析", "ai", 114, func() { a.showAssistant(); a.assistant.analyze("全面诊断") }),
 		}},
-		// 筛选合并为一行，统一用 ComboBox，搜索框拉伸占满剩余宽度。
-		// 每个下拉框按最长选项定宽，否则 HBox 会按剩余空间均摊，与内容无关。
+		// 搜索与连接条件一行，显示与范围一行，小窗口不再被整排下拉框撑宽。
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 			LineEdit{AssignTo: &a.searchEdit, CueBanner: "搜索 HEX / ASCII / 文本", StretchFactor: 1, MinSize: Size{Width: 160, Height: rowH}, OnTextChanged: a.applyFilter},
+			LineEdit{AssignTo: &a.connectionFilter, CueBanner: "连接 ID / 来源地址", MinSize: Size{Width: 150, Height: rowH}, MaxSize: Size{Width: 220}, OnTextChanged: a.applyFilter},
+			PushButton{Text: "重置筛选", MinSize: Size{Width: 96, Height: btnH}, MaxSize: Size{Width: 96}, OnClicked: a.clearFilter},
+		}},
+		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 			fixedCombo(&a.dirFilter, []string{"全部方向", "RX", "TX", "EVENT"}, 106, a.applyFilter),
 			fixedCombo(&a.displayMode, []string{"HEX + ASCII", "HEX", "ASCII"}, 130, a.updateDisplay),
 			fixedCombo(&a.protocolFilter, []string{"全部协议", "SERIAL", "TCP", "UDP", "HTTP"}, 108, a.applyFilter),
 			fixedCombo(&a.timeFilter, []string{"全部时间", "1分钟", "5分钟", "30分钟"}, 106, a.applyFilter),
-			PushButton{Text: "重置", MinSize: Size{Width: 70, Height: btnH}, MaxSize: Size{Width: 70}, OnClicked: a.clearFilter},
+			HSpacer{},
 		}},
 		VSplitter{StretchFactor: 1, Children: []Widget{a.packetTab(), a.sendArea()}},
 	}}
@@ -146,12 +149,19 @@ func (a *application) monitorPanel() Widget {
 
 // packetTab 是数据表与日志两页，外加一行选中操作。
 func (a *application) packetTab() Widget {
+	analyze := toolButton("分析选中", "ai", 128, a.analyzeSelected)
+	analyze.AssignTo = &a.analyzeSelectionButton
+	analyze.Enabled = false
 	return TabWidget{StretchFactor: 4, Pages: []TabPage{
 		// 协议 / 来源 / 连接 ID 默认隐藏：八列合计 895px，而 AI 面板展开时中栏仅约 700px，
 		// 全显必然出横向滚动条。需要时通过右键菜单打开。
 		{Title: "数据", Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 2, Top: 6, Right: 2, Bottom: 2}, Spacing: 6}, Children: []Widget{
 			TableView{AssignTo: &a.packetTable, Model: a.packetModel, MultiSelection: true, AlternatingRowBG: true, LastColumnStretched: true, Font: Font{Family: fontMono, PointSize: sizeMono}, OnSelectedIndexesChanged: a.updateSelectionLabel, Columns: []TableViewColumn{{Title: "时间", Width: 108}, {Title: "方向", Width: 52}, {Title: "HEX", Width: 268}, {Title: "ASCII", Width: 104}, {Title: "长度", Width: 58}, {Title: "协议", Width: 60, Hidden: true}, {Title: "来源", Width: 140, Hidden: true}, {Title: "连接 ID", Width: 170, Hidden: true}}, ContextMenuItems: []MenuItem{
-				Action{Text: "复制 HEX", OnTriggered: func() { a.copyPacketField("hex") }}, Action{Text: "复制 ASCII", OnTriggered: func() { a.copyPacketField("ascii") }}, Action{Text: "复制整行", OnTriggered: func() { a.copyPacketField("all") }}, Action{Text: "重新发送", OnTriggered: func() { a.loadPacket(); a.sendOnce(false) }}, Action{Text: "添加到快捷发送", OnTriggered: a.loadPacket}, Action{Text: "AI 分析选中数据", OnTriggered: a.analyzeSelected}, Separator{}, Action{AssignTo: &a.detailColumns, Text: "显示协议 / 来源 / 连接 ID 列", Checkable: true, OnTriggered: a.toggleDetailColumns}, Action{Text: "导出 CSV", OnTriggered: a.exportCSV},
+				Action{Text: "复制 HEX", OnTriggered: func() { a.copyPacketField("hex") }}, Action{Text: "复制 ASCII", OnTriggered: func() { a.copyPacketField("ascii") }}, Action{Text: "复制整行", OnTriggered: func() { a.copyPacketField("all") }}, Action{Text: "重新发送", OnTriggered: func() {
+					if a.loadPacket() {
+						a.sendOnce(false)
+					}
+				}}, Action{Text: "添加到快捷发送", OnTriggered: func() { a.loadPacket() }}, Action{Text: "AI 分析选中数据", OnTriggered: a.analyzeSelected}, Separator{}, Action{AssignTo: &a.detailColumns, Text: "显示协议 / 来源 / 连接 ID 列", Checkable: true, OnTriggered: a.toggleDetailColumns}, Action{Text: "导出 CSV", OnTriggered: a.exportCSV},
 			}},
 			// 选中操作行：AI 面板有“当前选中数据”这个分析范围，此前主区却没有选择入口和计数。
 			// 每个控件自带宽度上限，HBox 只能把富余宽度给 HSpacer，
@@ -161,9 +171,8 @@ func (a *application) packetTab() Widget {
 				toolButton("全选", "", 70, a.selectAllPackets),
 				toolButton("清除", "", 70, a.clearPacketSelection),
 				toolButton("反选", "", 70, a.invertPacketSelection),
-				toolButton("分析选中", "ai", 128, a.analyzeSelected),
+				analyze,
 				HSpacer{},
-				LineEdit{AssignTo: &a.connectionFilter, CueBanner: "连接 ID / 来源地址", MinSize: Size{Width: 118, Height: rowH}, MaxSize: Size{Width: 190}, OnTextChanged: a.applyFilter},
 				CheckBox{AssignTo: &a.autoScroll, Text: "自动滚动", Checked: true, MinSize: Size{Width: 102}, MaxSize: Size{Width: 102}},
 				CheckBox{AssignTo: &a.showTime, Text: "时间", Checked: true, MinSize: Size{Width: 72}, MaxSize: Size{Width: 72}, OnCheckedChanged: a.updateDisplay},
 			}},
@@ -174,20 +183,20 @@ func (a *application) packetTab() Widget {
 	}}
 }
 
-// sendArea 是底部发送区：格式与目标、报文输入、历史与快捷、定时与循环，共四行。
-// 历史/快捷与定时/循环此前挤在同一行，八个控件把该行最小宽度顶到 750px 以上，
-// 窗口收窄时文字互相叠压；拆成两行后每行最小宽度都在 460px 以内。
+// 发送区按格式与目标、报文、历史与快捷、定时与循环、结果提示分行。
+// UDP 目标按需单独显示，长反馈不挤占操作按钮的空间。
 func (a *application) sendArea() Widget {
-	return Composite{Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Top: 6}, Spacing: 6}, MinSize: Size{Height: 186}, Children: []Widget{
+	return Composite{Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Top: 6}, Spacing: 6}, MinSize: Size{Height: 220}, Children: []Widget{
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 			CheckBox{AssignTo: &a.hexSend, Text: "HEX", Checked: true, MinSize: Size{Width: 68}, MaxSize: Size{Width: 68}},
 			inlineLabel("行尾", 38),
 			ComboBox{AssignTo: &a.eol, Model: []string{"无", "LF", "CR", "CRLF"}, CurrentIndex: 0, MinSize: Size{Width: 80, Height: rowH}, MaxSize: Size{Width: 80}},
 			inlineLabel("目标", 38),
-			ComboBox{AssignTo: &a.sendTarget, Model: []string{"默认目标 / TCP 全部客户端"}, CurrentIndex: 0, StretchFactor: stretchFill, MinSize: Size{Width: 170, Height: rowH}},
-			LineEdit{AssignTo: &a.udpTarget, CueBanner: "UDP 目标 IP:端口", MinSize: Size{Width: 142, Height: rowH}, MaxSize: Size{Width: 164}},
+			ComboBox{AssignTo: &a.sendTarget, Model: []string{"默认目标 / TCP 全部客户端"}, CurrentIndex: 0, MinSize: Size{Width: 240, Height: rowH}, MaxSize: Size{Width: 240}, ToolTipText: "默认目标为广播；可选择单个连接，完整信息见客户端列表"},
 			CheckBox{AssignTo: &a.clearAfterSend, Text: "发送后清空", MinSize: Size{Width: 112}, MaxSize: Size{Width: 112}},
+			HSpacer{},
 		}},
+		LineEdit{AssignTo: &a.udpTarget, Visible: false, CueBanner: "UDP 指定目标（可选）：IP:端口；留空使用上方目标", MinSize: Size{Height: rowH}},
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 8}, StretchFactor: 1, Children: []Widget{
 			TextEdit{AssignTo: &a.sendEdit, StretchFactor: 1, VScroll: true, MinSize: Size{Height: 68}, Font: Font{Family: fontMono, PointSize: sizeMono}},
 			Composite{Layout: VBox{Alignment: AlignHNearVNear, MarginsZero: true, Spacing: 6}, MinSize: Size{Width: 116}, MaxSize: Size{Width: 116}, Children: []Widget{
@@ -210,10 +219,9 @@ func (a *application) sendArea() Widget {
 			inlineLabel("次数", 38),
 			LineEdit{AssignTo: &a.loopCount, Text: "0", MinSize: Size{Width: 62, Height: rowH}, MaxSize: Size{Width: 62}, ToolTipText: "循环次数，0 表示持续发送"},
 			PushButton{AssignTo: &a.loopButton, Text: "循环发送", MinSize: Size{Width: 96, Height: btnH}, MaxSize: Size{Width: 96}, OnClicked: a.toggleLoopSend},
-			// 发送提示同时承担报错回显，文字长短不一，放在行尾并允许省略。
-			Label{AssignTo: &a.sendPreview, Text: "HEX 未选中时按文本发送 · 快捷框输入名称后保存", TextColor: colorMuted, EllipsisMode: EllipsisEnd, Alignment: AlignHNearVCenter, StretchFactor: 1},
 			HSpacer{},
 		}},
+		Label{AssignTo: &a.sendPreview, Text: "输入报文后可先验证，按 F5 发送 · 快捷框输入名称后保存", ToolTipText: "未勾选 HEX 时按文本发送；快捷框输入名称后可保存当前报文", MinSize: Size{Height: 22}, TextColor: colorMuted, EllipsisMode: EllipsisEnd, Alignment: AlignHNearVCenter},
 	}}
 }
 
@@ -303,16 +311,31 @@ func (a *application) fitToWorkArea() {
 	})
 }
 
-// enforceAssistantWidth 在窗口过窄时收起 AI 面板，等价于 app.m layoutMainPanes 里的
-// if (width < 1280) _analysisVisible = NO。
+// 窄窗口先让出连接栏空间，关闭助手后恢复。使用逻辑像素以适配 DPI 缩放。
 func (a *application) enforceAssistantWidth() {
-	if a.mw == nil || a.assistant == nil || a.assistant.panel == nil {
+	if a.mw == nil || a.connectionPane == nil || a.assistant == nil || a.assistant.panel == nil || a.arrangingPanes {
 		return
 	}
-	if a.mw.ClientBoundsPixels().Width < 1280 && a.assistant.panel.Visible() {
-		a.assistant.stop()
-		a.assistant.panel.SetVisible(false)
+	a.arrangingPanes = true
+	defer func() { a.arrangingPanes = false }()
+	a.connectionPane.SetVisible(!a.assistant.panel.Visible() || a.mw.ClientBounds().Width >= 1380)
+}
+
+// Win32 在重排时会收起下拉列表。用户选项期间暂缓统计区刷新，
+// 收发与存储照常进行，下一轮统计会补上最新值。
+func (a *application) comboDropDownOpen() bool {
+	combos := []*walk.ComboBox{a.mode, a.ports, a.baud, a.data, a.parity, a.stop,
+		a.protocol, a.role, a.netIP, a.recentConn, a.dirFilter, a.displayMode,
+		a.protocolFilter, a.timeFilter, a.eol, a.sendTarget, a.sendHistory, a.favorites}
+	if a.assistant != nil {
+		combos = append(combos, a.assistant.scope)
 	}
+	for _, combo := range combos {
+		if combo != nil && !combo.IsDisposed() && win.SendMessage(combo.Handle(), win.CB_GETDROPPEDSTATE, 0, 0) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // toggleDetailColumns 切换协议 / 来源 / 连接 ID 三列，默认隐藏以避免横向滚动。
@@ -332,6 +355,9 @@ func (a *application) updateSelectionLabel() {
 		return
 	}
 	n := len(a.packetTable.SelectedIndexes())
+	if a.analyzeSelectionButton != nil {
+		a.analyzeSelectionButton.SetEnabled(n > 0)
+	}
 	if n == 0 {
 		a.selectionLabel.SetText("未选中")
 		return
@@ -375,6 +401,10 @@ func (a *application) invertPacketSelection() {
 
 // analyzeSelected 把当前选中的报文交给 AI 面板分析，范围固定为“选中数据”。
 func (a *application) analyzeSelected() {
+	if len(a.packetTable.SelectedIndexes()) == 0 {
+		a.setSendFeedback("请先在数据表中选择需要分析的报文", true)
+		return
+	}
 	a.showAssistant()
 	a.assistant.scope.SetCurrentIndex(0)
 	a.assistant.analyze("全面诊断")
@@ -384,11 +414,20 @@ func (a *application) toggleAssistant() {
 	if a.assistant.panel.Visible() {
 		a.assistant.stop()
 		a.assistant.panel.SetVisible(false)
+		a.enforceAssistantWidth()
 	} else {
 		a.showAssistant()
 	}
 }
-func (a *application) showAssistant() { a.assistant.panel.SetVisible(true) }
+func (a *application) showAssistant() {
+	a.arrangingPanes = true
+	// 在显示 AI 之前隐藏连接栏，防止 Walk 先把整个窗口扩到三栏最小宽度。
+	if a.mw.ClientBounds().Width < 1380 {
+		a.connectionPane.SetVisible(false)
+	}
+	a.assistant.panel.SetVisible(true)
+	a.arrangingPanes = false
+}
 func (a *application) updateDisplay() {
 	if a.packetTable == nil || a.displayMode == nil || a.showTime == nil {
 		return
@@ -397,13 +436,16 @@ func (a *application) updateDisplay() {
 	a.packetTable.Columns().At(2).SetVisible(a.displayMode.CurrentIndex() != 2)
 	a.packetTable.Columns().At(3).SetVisible(a.displayMode.CurrentIndex() != 1)
 }
-func (a *application) loadPacket() {
+func (a *application) loadPacket() bool {
 	i := a.packetTable.CurrentIndex()
 	if i >= 0 && i < len(a.packetModel.visible) {
 		a.sendEdit.SetText(a.packetModel.visible[i].Hex)
 		a.hexSend.SetChecked(true)
-		a.sendPreview.SetText("已载入报文；快捷框输入名称后点击保存快捷")
+		a.setSendFeedback("已载入报文；快捷框输入名称后点击保存", false)
+		return true
 	}
+	a.setSendFeedback("请先选择一条报文", true)
+	return false
 }
 func (a *application) showPeerDetails() {
 	if a.detailsLabel == nil {
