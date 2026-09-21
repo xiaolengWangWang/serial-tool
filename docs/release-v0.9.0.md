@@ -25,5 +25,5 @@ Windows x64，解压后运行 `CommBox.exe`。发布包附带 VirtualCOM v0.2.0 
 
 ```
 c2c070e20175302b2f169e86f751a710d2ff62f4e39ab12174352237cd99f28c  CommBox-0.9.0-Windows-x64.zip
-3c92dc3a9fcb8e630817e556769dec88956e3551faf1cfc0183d45bb84cf0bb4  CommBox.exe
+3c92dc3a9fcb8e630817e556769dec88956e3551faf1cfc0183d45bb84cf0bb4  CommBox-0.9.0.exe
 ```
