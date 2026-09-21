@@ -2,9 +2,9 @@
 #
 # 用法:
 #   powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
-#   powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1 -AllowUntagged   # 本地验证
+#   powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1 -SkipTagCheck   # 本地验证,不出正式包
 [CmdletBinding()]
-param([switch]$AllowUntagged)
+param([switch]$SkipTagCheck)
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -49,13 +49,12 @@ Push-Location $repoRoot
 try {
     if ((git status --porcelain).Length -ne 0) { throw 'Release source tree must be clean' }
     $tag = 'v' + $version
-    git rev-parse --verify --quiet ($tag + '^{}') > $null
-    if ($LASTEXITCODE -eq 0) {
-        if ((git rev-parse HEAD) -ne (git rev-parse ($tag + '^{}'))) { throw ('HEAD must match release tag ' + $tag) }
-    } elseif (-not $AllowUntagged) {
-        throw ('Tag ' + $tag + ' does not exist; create it or pass -AllowUntagged for a local build')
+    if ($SkipTagCheck) {
+        Write-Warning ('Skipping the ' + $tag + ' tag check; this build is NOT a release build')
     } else {
-        Write-Warning ('Tag ' + $tag + ' does not exist; this build is NOT a release build')
+        git rev-parse --verify --quiet ($tag + '^{}') > $null
+        if ($LASTEXITCODE -ne 0) { throw ('Tag ' + $tag + ' does not exist; create it or pass -SkipTagCheck for a local build') }
+        if ((git rev-parse HEAD) -ne (git rev-parse ($tag + '^{}'))) { throw ('HEAD must match release tag ' + $tag) }
     }
     $commit = (git rev-parse HEAD).Trim()
 
