@@ -20,3 +20,10 @@ Windows x64，解压后运行 `CommBox.exe`。发布包附带 VirtualCOM v0.2.0 
 - VirtualCOM 适配的边界与 v0.9.0 相同：只提供字节流端口，波特率、数据位、校验、停止位和控制信号不生效，未适配的第三方串口软件仍不兼容。
 - VirtualCOM 必须保持运行并与 CommBox 位于同一用户登录会话；退出后端口会移除。Windows 10 和长时间运行尚未验收。
 - 程序未做商业代码签名。
+
+## 校验
+
+```
+76fced34c7a3063fd91819c41ba62a439a72522ffa0147a2db7f385630cbd88f  CommBox-0.9.1-Windows-x64.zip
+8596a904c7a4d12d684f5f5ad2bf9824e2fa775b7c3f0a27dd5cc17a2e53cdef  CommBox-0.9.1.exe
+```
