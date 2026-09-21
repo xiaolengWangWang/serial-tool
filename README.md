@@ -130,14 +130,24 @@ macOS/Linux 使用 PTY，无需额外驱动。Windows 的 TCP→虚拟串口创�
 
 本 macOS 开发线仅同步和发布 macOS/Linux 构建产物；本工作流不修改、不构建或上传 Windows 产物。
 
+Windows 发布包（两个 CommBox 程序、两个 VirtualCOM 程序、说明文档与 SHA256SUMS）由 `scripts/build-release.ps1` 生成，版本号从源码常量读取：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1
+```
+
+脚本要求工作区干净且 HEAD 落在 `v<版本>` 标签上，逐个校验 PE 头、构建来源 commit、版本资源和压缩包内容。改版本号时同时改各目录的 `versioninfo.json` 并重新生成 `.syso`（`goversioninfo -64 -o rsrc_windows_amd64.syso versioninfo.json`），漏改会有测试报错。
+
 ```bash
 # 命令行(多平台,纯 Go);发布 Linux amd64
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
   -ldflags='-s -w -X main.version=0.7.8' -o commbox-linux-amd64 .
 
 # Windows 桌面版(可交叉编译)
+# 不要加 -s:剥符号的 GUI 程序在装了 360 的机器上会被当成加壳投放器隔离,
+# 只用 -w 去掉调试信息,体积约减 25%
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath \
-  -ldflags='-s -w -H windowsgui' -o build/windows/CommBox.exe ./windows
+  -ldflags='-H windowsgui -w' -o build/windows/CommBox.exe ./windows
 
 # macOS 桌面版(需在 macOS 上用 CGo 构建;按芯片分别出包,-s -w 瘦身)
 # 对每个 ARCH ∈ {arm64(M 芯片), amd64(Intel)}：
