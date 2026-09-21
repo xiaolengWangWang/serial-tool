@@ -274,6 +274,12 @@ func (a *application) refreshPorts() {
 	}
 	current := a.ports.Text()
 	_ = a.ports.SetModel(ports)
+	for i, port := range ports {
+		if strings.EqualFold(current, port) {
+			_ = a.ports.SetCurrentIndex(i)
+			return
+		}
+	}
 	if len(ports) > 0 {
 		_ = a.ports.SetCurrentIndex(0)
 	} else {
@@ -500,6 +506,7 @@ func (a *application) toggleConnection() {
 			} else {
 				a.setConnStatus(colorGreen, "已连接")
 			}
+			a.updateStatus(a.engine.Stats())
 			a.refreshRecentConn()
 		})
 	}()
@@ -966,6 +973,10 @@ func (a *application) updateStatus(st wincore.Stats) {
 	if st.State == wincore.StateError {
 		color = colorRed
 	}
+	if st.State == wincore.StateConnected && st.SerialNote != "" {
+		label += " · 免驱动"
+	}
+	a.status.SetToolTipText(st.SerialNote)
 	a.setConnStatus(color, label)
 	now := time.Now()
 	total := st.RXBytes + st.TXBytes
@@ -987,6 +998,9 @@ func (a *application) updateStatus(st wincore.Stats) {
 	parts := []string{fmt.Sprintf("%s %s", a.uiMode(), label)}
 	if address != "" {
 		parts = append(parts, address)
+	}
+	if st.State == wincore.StateConnected && st.SerialNote != "" {
+		parts = append(parts, "VirtualCOM 字节流（串口参数不生效）")
 	}
 	parts = append(parts,
 		fmt.Sprintf("RX %s  TX %s", wincore.FormatBytes(st.RXBytes), wincore.FormatBytes(st.TXBytes)),
@@ -1071,6 +1085,11 @@ func (a *application) onRecentConnSelected() {
 	}
 	s := a.recentSessions[idx]
 	p := parseKV(s.Parameters)
+	if p["backend"] == "VirtualCOM" {
+		// Byte-stream sessions have no effective serial settings. Restore valid
+		// form defaults so their absence cannot block reopening the port.
+		p["baud"], p["data"], p["parity"], p["stop"] = "115200", "8", "无校验", "1"
+	}
 	switch wincore.Mode(s.Mode) {
 	case wincore.ModeSerial:
 		_ = a.mode.SetCurrentIndex(0)

@@ -47,7 +47,8 @@ type Config struct {
 
 type Engine struct {
 	sync.Mutex
-	port              serial.Port
+	port              io.ReadWriteCloser
+	serialNote        string
 	listener          net.Listener
 	clients           map[net.Conn]*trackedConnection
 	udp               *net.UDPConn
@@ -170,8 +171,6 @@ func New(dataDir string, onData func(string, []byte), onLog func(string)) (*Engi
 	e.LoadFavorites()
 	return e, nil
 }
-
-func ListPorts() ([]string, error) { return serial.GetPortsList() }
 
 // LocalIP 返回本机对外通信使用的主 IPv4 地址(不实际发包),失败回退 127.0.0.1。
 func LocalIP() string {
@@ -437,7 +436,7 @@ func (e *Engine) Connect(cfg Config) (connectErr error) {
 		return errors.New("请输入 IP:端口")
 	}
 
-	var p serial.Port
+	var p io.ReadWriteCloser
 	var listener net.Listener
 	var clients []net.Conn
 	var udp *net.UDPConn
@@ -445,7 +444,7 @@ func (e *Engine) Connect(cfg Config) (connectErr error) {
 	var udpDialed bool
 	var err error
 	if usesSerial {
-		p, err = serial.Open(cfg.SerialName, serialMode(cfg))
+		p, err = OpenSerialPort(cfg.SerialName, serialMode(cfg))
 		if err != nil {
 			return err
 		}
@@ -499,6 +498,7 @@ func (e *Engine) Connect(cfg Config) (connectErr error) {
 	e.udpPeers = make(map[string]*udpPeerState)
 	e.bridge = cfg.Mode == ModeSerialServer
 	e.serialEndpoint = cfg.SerialName
+	e.serialNote = SerialPortNotice(p)
 	e.latestConnection = ""
 	e.mode = cfg.Mode
 	epoch := e.epoch
@@ -524,6 +524,10 @@ func (e *Engine) Connect(cfg Config) (connectErr error) {
 	}
 	parameters := fmt.Sprintf("serial=%s,baud=%d,data=%d,parity=%s,stop=%d,protocol=%s,role=%s",
 		cfg.SerialName, cfg.Baud, cfg.DataBits, cfg.Parity, cfg.StopBits, protocol, role)
+	if note := SerialPortNotice(p); note != "" {
+		parameters = fmt.Sprintf("serial=%s,backend=VirtualCOM,protocol=%s,role=%s", cfg.SerialName, protocol, role)
+		e.emitLog(note)
+	}
 	if err := e.store.StartSession(string(cfg.Mode), endpoint, parameters); err != nil {
 		e.emitLog("SQLite 会话写入失败: " + err.Error())
 	}
@@ -570,6 +574,7 @@ func (e *Engine) Disconnect() {
 	e.port, e.listener, e.clients, e.udp, e.udpPeer, e.udpPeers = nil, nil, nil, nil, nil, nil
 	e.udpDialed, e.bridge = false, false
 	e.serialEndpoint = ""
+	e.serialNote = ""
 	e.latestConnection = ""
 	e.httpURL, e.httpClient = "", nil
 	e.Unlock()
@@ -813,7 +818,8 @@ func (e *Engine) readUDP(conn *net.UDPConn, epoch uint64) {
 	}
 }
 
-func (e *Engine) readSerial(p serial.Port, epoch uint64) {
+func (e *Engine) readSerial(p io.ReadWriteCloser, epoch uint64) {
+	defer p.Close()
 	buf := make([]byte, 4096)
 	for {
 		n, err := p.Read(buf)
@@ -837,6 +843,7 @@ func (e *Engine) readSerial(p serial.Port, epoch uint64) {
 			active := e.port == p && e.epoch == epoch
 			if active {
 				e.port = nil
+				atomic.StoreInt32(&e.state, int32(StateDisconnected))
 			}
 			e.Unlock()
 			if active {

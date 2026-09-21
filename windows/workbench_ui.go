@@ -63,7 +63,7 @@ func (a *application) menus() []MenuItem {
 				a.mode.SetCurrentIndex(3)
 				a.updateMode()
 			}
-		}}, Action{Text: "虚拟串口映射(开发中)", OnTriggered: a.showVSerialPending}, Action{Text: "历史数据分析", OnTriggered: a.openDatabaseAnalysis}}},
+		}}, Action{Text: "VirtualCOM 连接说明", OnTriggered: a.showVirtualCOMHelp}, Action{Text: "历史数据分析", OnTriggered: a.openDatabaseAnalysis}}},
 		Menu{Text: "设置", Items: []MenuItem{Action{Text: "AI 设置", OnTriggered: a.assistant.settings}, Action{Text: "连接数与桥接", OnTriggered: a.openConnections}, Separator{}, Action{AssignTo: &a.autoUpdateAction, Text: "启动时检查更新", Checkable: true, OnTriggered: a.toggleAutoUpdate}}},
 		Menu{Text: "帮助", Items: []MenuItem{Action{Text: "使用说明", OnTriggered: a.showHelp}, Action{Text: "检查更新", OnTriggered: a.checkUpdate}, Action{Text: "发送 (F5)", Image: uiIcon("send"), Shortcut: Shortcut{Key: walk.KeyF5}, OnTriggered: func() { a.sendOnce(false) }}}},
 	}
@@ -79,7 +79,7 @@ func (a *application) connectionPanel() Widget {
 			// 两列栅格：标签列按最长标签自动定宽，每个字段只占一行，
 			// 左栏内容不再溢出到需要滚动才能看到“最近连接”。
 			GroupBox{AssignTo: &a.serialGroup, Title: "串口参数", Layout: Grid{Alignment: AlignHNearVCenter, Columns: 2, Spacing: 6, Margins: Margins{Left: 10, Top: 6, Right: 10, Bottom: 10}}, Children: []Widget{
-				formLabel("端口"), ComboBox{AssignTo: &a.ports, Editable: true, MinSize: Size{Width: 140, Height: rowH}},
+				formLabel("端口"), ComboBox{AssignTo: &a.ports, Editable: true, ToolTipText: "支持物理串口及 VirtualCOM 免驱动端口。VirtualCOM 的波特率、数据位、校验与停止位不生效。", MinSize: Size{Width: 140, Height: rowH}},
 				formLabel("波特率"), ComboBox{AssignTo: &a.baud, Editable: true, Model: []string{"1200", "2400", "4800", "9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"}, CurrentIndex: 7, MinSize: Size{Height: rowH}},
 				formLabel("数据位"), ComboBox{AssignTo: &a.data, Model: []string{"5", "6", "7", "8"}, CurrentIndex: 3, MinSize: Size{Height: rowH}},
 				formLabel("校验"), ComboBox{AssignTo: &a.parity, Model: []string{"无校验", "奇校验", "偶校验"}, CurrentIndex: 0, MinSize: Size{Height: rowH}},
@@ -265,14 +265,12 @@ func toolButton(text, icon string, width int, clicked walk.EventHandler) PushBut
 	return b
 }
 
-// showVSerialPending 说明虚拟串口映射的状态。Windows 侧的 com0com 驱动安装、
-// 虚拟串口命名与 setupc 命令超时三项都未在真机验证通过，本版本不开放该功能，
-// 菜单只保留入口，避免出现“创建成功却收不到数据”的假象。
-func (a *application) showVSerialPending() {
-	walk.MsgBox(a.mw, "虚拟串口映射（开发中）",
-		"Windows 版虚拟串口映射尚未开放。\r\n\r\n"+
-			"该功能依赖 com0com 内核驱动，驱动安装、虚拟串口命名与命令超时三项仍在验证中，本版本暂不提供。\r\n\r\n"+
-			"需要把 TCP 端点接到串口软件时，可先用「串口服务器」模式转发。",
+func (a *application) showVirtualCOMHelp() {
+	walk.MsgBox(a.mw, "VirtualCOM 免驱动连接",
+		"先在 VirtualCOM 中创建一对端口并保持程序运行。\r\n\r\n"+
+			"在两个 CommBox 窗口中选择「串口」→「刷新串口」，分别打开这一对的两个 COM 号，即可双向收发。也可在命令行用 -list 查看、-port COM号 打开。\r\n\r\n"+
+			"VirtualCOM 传输原始字节，波特率、数据位、校验、停止位与控制信号不生效。退出 VirtualCOM 会断开通信；创建新端口后需重新连接。\r\n\r\n"+
+			"此适配仅用于 CommBox，不会让未适配的第三方串口软件自动兼容。TCP/UDP 转发可使用「串口服务器」模式。",
 		walk.MsgBoxOK|walk.MsgBoxIconInformation)
 }
 
@@ -491,5 +489,5 @@ func (a *application) exportCSV() {
 	}
 }
 func (a *application) showHelp() {
-	walk.MsgBox(a.mw, "CommBox 使用说明", "选择左侧工作模式 → 填写参数 → 连接 → 输入报文 → F5 发送。\r\n\r\n客户端列表右键可定向发送、过滤和断开。同 IP 的不同端口按独立会话管理。\r\n未勾选 HEX 时按文本发送。定时 / 循环固定使用启动时的数据和目标。\r\n数据保留最新 10000 条，完整历史自动保存于本地。拖动数据与发送区分隔线调整空间。\r\n\r\nAI 默认关闭。设置服务后，主动分析或追问才提交所选数据。AI 失败不影响通信。\r\n虚拟串口映射仍在开发中，本版本暂未开放。", walk.MsgBoxOK)
+	walk.MsgBox(a.mw, "CommBox 使用说明", "选择左侧工作模式 → 填写参数 → 连接 → 输入报文 → F5 发送。\r\n\r\n客户端列表右键可定向发送、过滤和断开。同 IP 的不同端口按独立会话管理。\r\n未勾选 HEX 时按文本发送。定时 / 循环固定使用启动时的数据和目标。\r\n数据保留最新 10000 条，完整历史自动保存于本地。拖动数据与发送区分隔线调整空间。\r\n\r\nAI 默认关闭。设置服务后，主动分析或追问才提交所选数据。AI 失败不影响通信。\r\nVirtualCOM 免驱动端口可直接在串口模式打开，详见「工具 → VirtualCOM 连接说明」。", walk.MsgBoxOK)
 }

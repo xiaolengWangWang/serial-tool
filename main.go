@@ -52,7 +52,7 @@ func run() error {
 		return nil
 	}
 	if *list {
-		ports, err := serial.GetPortsList()
+		ports, err := wincore.ListPorts()
 		if err != nil {
 			return err
 		}
@@ -77,7 +77,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	port, err := serial.Open(*portName, mode)
+	port, err := wincore.OpenSerialPort(*portName, mode)
 	if err != nil {
 		return fmt.Errorf("打开 %s: %w", *portName, err)
 	}
@@ -85,7 +85,11 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	fmt.Fprintf(os.Stderr, "已连接 %s @ %d，输入后回车发送，Ctrl+C 退出\n", *portName, *baud)
+	if note := wincore.SerialPortNotice(port); note != "" {
+		fmt.Fprintf(os.Stderr, "已连接 %s；%s。输入后回车发送，Ctrl+C 退出\n", *portName, note)
+	} else {
+		fmt.Fprintf(os.Stderr, "已连接 %s @ %d，输入后回车发送，Ctrl+C 退出\n", *portName, *baud)
+	}
 
 	errCh := make(chan error, 2)
 	go receive(port, *hexView, errCh)
@@ -193,7 +197,7 @@ func parseData(line string, asHex bool, eol []byte) ([]byte, error) {
 	return append([]byte(line), eol...), nil
 }
 
-func receive(port serial.Port, asHex bool, errCh chan<- error) {
+func receive(port io.Reader, asHex bool, errCh chan<- error) {
 	buf := make([]byte, 1024)
 	for {
 		n, err := port.Read(buf)
@@ -211,7 +215,7 @@ func receive(port serial.Port, asHex bool, errCh chan<- error) {
 	}
 }
 
-func send(port serial.Port, asHex bool, eol []byte, errCh chan<- error) {
+func send(port io.Writer, asHex bool, eol []byte, errCh chan<- error) {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		data, err := parseData(scanner.Text(), asHex, eol)

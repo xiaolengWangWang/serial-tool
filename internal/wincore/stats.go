@@ -52,6 +52,7 @@ type Stats struct {
 	Listening      bool
 	Datagram       bool
 	Endpoint       string
+	SerialNote     string
 	PeerCount      int
 	Peers          []string
 	State          ConnState
@@ -75,6 +76,7 @@ func (e *Engine) Stats() Stats {
 	defer e.Unlock()
 	s := Stats{
 		Mode:           e.mode,
+		SerialNote:     e.serialNote,
 		SerialRXBytes:  atomic.LoadUint64(&e.serialRXBytes),
 		SerialTXBytes:  atomic.LoadUint64(&e.serialTXBytes),
 		NetworkRXBytes: atomic.LoadUint64(&e.networkRXBytes),
@@ -119,6 +121,9 @@ func (e *Engine) Stats() Stats {
 	}
 	if e.httpURL != "" {
 		s.Endpoint = e.httpURL
+	}
+	if s.Endpoint == "" && e.port != nil {
+		s.Endpoint = e.serialEndpoint
 	}
 	return s
 }

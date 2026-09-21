@@ -2,7 +2,7 @@
 
 自研 Windows 虚拟串口。纯用户态实现：**只用 Win32 API，不安装驱动、不需要任何签名、不依赖任何第三方组件**。
 
-独立项目，与 CommBox 各走各的版本号。并入 CommBox 后 CommBox 升到 0.9.0。
+独立项目，与 CommBox 各走各的版本号。CommBox v0.9.0 Windows 发布包附带本工具并提供免驱动连接适配。
 
 ---
 
@@ -50,6 +50,8 @@ System.IO.Ports.SerialPort("COM90").Open()
 .NET 在调 DCB 之前先查 `GetFileType`，命名管道过不了这一关，连门都进不去。
 
 **只有把端口当字节流读写的程序能用。**
+
+**CommBox v0.9.0 GUI 和命令行**已增加专用适配：自动发现本工具的活动 COM 号，通过重叠 I/O 直接收发字节，不调用串口参数 API。两个 CommBox 实例分别打开一对的两端即可通信，无需安装驱动。连接时会显示参数不生效的说明。该适配没有改变本工具的 Windows API 边界，第三方软件仍需自行适配。操作和验证见 [CommBox 适配记录](../docs/virtualcom-commbox-compat.md)。
 
 ### 为什么不能做到 100% 兼容
 

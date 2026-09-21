@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,6 +81,31 @@ func TestWorkbenchNetworkModeIgnoresHiddenSerialFields(t *testing.T) {
 	a.mode.SetCurrentIndex(0)
 	if _, err := a.config(); err == nil {
 		t.Fatal("serial mode accepted invalid baud rate")
+	}
+}
+
+func TestWorkbenchVirtualCOMHistoryKeepsUsableDefaults(t *testing.T) {
+	a := newWorkbenchForTest(t)
+	a.recentSessions = []wincore.SessionInfo{{Mode: string(wincore.ModeSerial), Endpoint: "COM10", Parameters: "serial=COM10,backend=VirtualCOM,protocol=,role="}}
+	a.recentConn.SetModel([]string{"串口 COM10"})
+	a.recentConn.SetCurrentIndex(0)
+	a.onRecentConnSelected()
+	cfg, err := a.config()
+	if err != nil || cfg.SerialName != "COM10" || cfg.Baud != 115200 || cfg.DataBits != 8 {
+		t.Fatalf("VirtualCOM history damaged serial defaults: %+v, %v", cfg, err)
+	}
+}
+
+func TestWorkbenchVirtualCOMStatusExplainsIgnoredParameters(t *testing.T) {
+	a := newWorkbenchForTest(t)
+	a.mode.SetCurrentIndex(0)
+	a.updateStatus(wincore.Stats{Mode: wincore.ModeSerial, State: wincore.StateConnected, Endpoint: "COM10", SerialNote: "串口参数不生效"})
+	if !strings.Contains(a.status.Text(), "免驱动") || !strings.Contains(a.footer.Text(), "串口参数不生效") {
+		t.Fatalf("missing VirtualCOM notice: %q / %q", a.status.Text(), a.footer.Text())
+	}
+	a.updateStatus(wincore.Stats{Mode: wincore.ModeSerial, State: wincore.StateConnected, Endpoint: "COM1"})
+	if strings.Contains(a.status.Text(), "免驱动") || strings.Contains(a.footer.Text(), "VirtualCOM") {
+		t.Fatal("physical port retained VirtualCOM notice")
 	}
 }
 

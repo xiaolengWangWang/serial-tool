@@ -87,7 +87,15 @@ GET /api/v1/health
 - 在"串口"模式点刷新,列表会包含这些虚拟串口设备,可直接打开
 - 用法:`screen /tmp/CommBox-vserial-<PID>-1 115200`,或用另一个串口工具/本工具第二实例打开
 
-> Windows 无 PTY,虚拟串口依赖 com0com 驱动(未安装时会提示安装);macOS/Linux 用 PTY,无需额外驱动。
+macOS/Linux 使用 PTY，无需额外驱动。Windows 的 TCP→虚拟串口创建入口仍未开放；CommBox v0.9.0 已加入下面的 VirtualCOM 免驱动连接适配。
+
+### Windows：连接 VirtualCOM 免驱动端口
+
+先运行独立的 `VirtualCOM-GUI.exe` 创建一对端口，例如 COM10 ⇄ COM11，并保持程序运行。在两个 CommBox 窗口中分别选择「串口 → 刷新串口」，打开 COM10 和 COM11，即可双向收发。命令行的 `-list` 和 `-port COM10` 同样支持这些端口。
+
+连接后界面显示「免驱动」和「串口参数不生效」。VirtualCOM 传输原始字节，不实现波特率、数据位、校验、停止位及控制信号。此适配只解决 CommBox 与 VirtualCOM 的通信，未适配的第三方串口软件仍无法直接使用它。关闭 VirtualCOM 会断开通信；重新创建串口对后需在 CommBox 重新连接。
+
+物理串口及驱动提供的 COM 口仍使用原串口库。实现、验证和试用步骤见 [VirtualCOM 适配记录](docs/virtualcom-commbox-compat.md)。
 
 ## 数据存储
 
