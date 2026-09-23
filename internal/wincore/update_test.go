@@ -154,8 +154,8 @@ func TestCheckUpdateDoesNotRetryHTTPError(t *testing.T) {
 // 标准库默认的 10 秒握手,调用方的总时长也得容得下全部重试。
 func TestUpdateTimeoutsFitSlowGitHub(t *testing.T) {
 	const worstHandshake, worstRequest = 25 * time.Second, 30 * time.Second
-	if updateTransport.TLSHandshakeTimeout < worstHandshake {
-		t.Errorf("TLS 握手超时 %v 小于实测最慢 %v", updateTransport.TLSHandshakeTimeout, worstHandshake)
+	if got := updateHTTPTransport().TLSHandshakeTimeout; got < worstHandshake {
+		t.Errorf("TLS 握手超时 %v 小于实测最慢 %v", got, worstHandshake)
 	}
 	if updateClient().Timeout < worstRequest {
 		t.Errorf("单次检查超时 %v 小于实测最慢 %v", updateClient().Timeout, worstRequest)
@@ -168,7 +168,7 @@ func TestUpdateTimeoutsFitSlowGitHub(t *testing.T) {
 // 检查和下载都必须走放宽了超时的 updateTransport,漏掉任何一个都会在慢网络下失败。
 func TestCheckAndDownloadUseUpdateTransport(t *testing.T) {
 	var dials int32
-	saved := updateTransport
+	saved := updateHTTPTransport()
 	defer func() { updateTransport = saved }()
 	updateTransport = saved.Clone()
 	updateTransport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {

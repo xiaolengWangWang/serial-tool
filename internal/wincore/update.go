@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -116,13 +117,24 @@ func getRelease(ctx context.Context, api string) (*http.Response, error) {
 
 // 国内连 GitHub 时 TLS 握手常要十几到二十几秒(2026-09 实测 api.github.com
 // 握手 12~21 秒、整次请求 15~25 秒),标准库默认的 10 秒握手超时几乎必然失败。
-// 检查和下载都走这个 Transport,下载要连 github.com 和资源 CDN,同样慢。
-var updateTransport = func() *http.Transport {
-	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.TLSHandshakeTimeout = 45 * time.Second
-	t.ResponseHeaderTimeout = 30 * time.Second
-	return t
-}()
+// 检查和下载都走 updateHTTPTransport,下载要连 github.com 和资源 CDN,同样慢。
+var (
+	updateTransportOnce sync.Once
+	updateTransport     *http.Transport // 测试在创建后可替换
+)
+
+// updateHTTPTransport 在第一次检查或下载时才创建 Transport。不能写成包级变量的
+// 初始化:那会在包初始化时执行,不用检查更新的 CommBox-CLI 也会链接整套 HTTPS
+// 客户端(TLS、证书校验、HTTP/2),exe 平白大 1.7 MB。
+func updateHTTPTransport() *http.Transport {
+	updateTransportOnce.Do(func() {
+		t := http.DefaultTransport.(*http.Transport).Clone()
+		t.TLSHandshakeTimeout = 45 * time.Second
+		t.ResponseHeaderTimeout = 30 * time.Second
+		updateTransport = t
+	})
+	return updateTransport
+}
 
 const (
 	updateCheckTimeout  = 60 * time.Second // 单次检查请求:慢握手加几秒响应
@@ -133,7 +145,7 @@ const (
 const UpdateCheckBudget = updateCheckAttempts*updateCheckTimeout + 5*time.Second
 
 func updateClient() *http.Client {
-	return &http.Client{Transport: updateTransport, Timeout: updateCheckTimeout}
+	return &http.Client{Transport: updateHTTPTransport(), Timeout: updateCheckTimeout}
 }
 
 // allowedDownloadURL 只信任 GitHub 自己的下载域名。检查接口是固定地址且走 TLS,
@@ -316,9 +328,9 @@ func (d *resumableDownload) fetch(parent context.Context, assetURL string) error
 	if d.done > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", d.done))
 	}
-	// 建连到收齐响应头由 updateTransport 的拨号、握手、响应头超时把关。下载要从
+	// 建连到收齐响应头由 Transport 的拨号、握手、响应头超时把关。下载要从
 	// github.com 跳转到资源 CDN,两次慢握手就可能要四五十秒,不能算进停滞超时。
-	resp, err := (&http.Client{Transport: updateTransport}).Do(req)
+	resp, err := (&http.Client{Transport: updateHTTPTransport()}).Do(req)
 	if err != nil {
 		return fmt.Errorf("下载失败: %w", err)
 	}

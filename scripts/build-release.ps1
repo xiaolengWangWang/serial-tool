@@ -103,6 +103,14 @@ try {
     $virtualVersion = & (Join-Path $outputDir 'VirtualCOM.exe') version
     if ($LASTEXITCODE -ne 0 -or !$virtualVersion.StartsWith('VirtualCOM ' + $vcomVersion + ' ')) { throw 'Wrong VirtualCOM version' }
 
+    # CLI 不检查更新,也没有 HTTPS 功能,不该带 TLS 握手代码。wincore 若有包级变量在
+    # 初始化时碰 http.Transport,CLI 会平白大 1.7 MB(v0.9.3 发布前出现过一次)。
+    $cliSymbols = go tool nm (Join-Path $outputDir 'CommBox-CLI.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'go tool nm failed on CommBox-CLI.exe' }
+    if ($cliSymbols -match 'crypto/tls\.\(\*Conn\)\.handshakeContext') {
+        throw 'CommBox-CLI.exe links the TLS client; look for package-level init touching net/http'
+    }
+
     $files = @('CommBox.exe', 'CommBox-CLI.exe', 'VirtualCOM-GUI.exe', 'VirtualCOM.exe', 'README-Windows.txt', 'VirtualCOM使用说明.md')
     $sums = foreach ($name in $files) { '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $outputDir $name)).Hash.ToLowerInvariant(), $name }
     [IO.File]::WriteAllText((Join-Path $outputDir 'SHA256SUMS.txt'), ($sums -join "`n") + "`n", (New-Object Text.UTF8Encoding($false)))
