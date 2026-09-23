@@ -63,7 +63,7 @@ func (e *Engine) reconnectTCP(epoch uint64, stop chan struct{}) {
 			conn.Close()
 			return
 		}
-		tracked := e.addTCPConnection(conn, epoch)
+		tracked := e.addTCPConnection(conn, epoch, false)
 		atomic.AddUint64(&e.reconnects, 1)
 		atomic.StoreInt32(&e.state, int32(StateConnected))
 		e.Unlock()

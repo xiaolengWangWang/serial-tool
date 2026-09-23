@@ -504,7 +504,7 @@ func (e *Engine) Connect(cfg Config) (connectErr error) {
 	epoch := e.epoch
 	initialClients := make([]*trackedConnection, 0, len(clients))
 	for _, client := range clients {
-		initialClients = append(initialClients, e.addTCPConnection(client, epoch))
+		initialClients = append(initialClients, e.addTCPConnection(client, epoch, false))
 	}
 	if cfg.Mode == ModeTCPClient && cfg.AutoReconnect {
 		e.reconnectAddr = cfg.Address
@@ -564,13 +564,24 @@ func serialMode(cfg Config) *serial.Mode {
 }
 
 func (e *Engine) Disconnect() {
-	atomic.StoreInt32(&e.state, int32(StateDisconnected))
+	previous := ConnState(atomic.SwapInt32(&e.state, int32(StateDisconnected)))
 	e.Lock()
 	e.epoch++
 	stop := e.reconnectStop
 	e.reconnectStop = nil
 	e.reconnectAddr = ""
 	p, listener, clients, udp := e.port, e.listener, e.clients, e.udp
+	mode, serialEndpoint := e.mode, e.serialEndpoint
+	// 手动断开也要留一条记录,否则日志里只有"对端断开",看不出这次是自己点的。
+	inbound, remote := false, ""
+	for _, c := range clients {
+		if c.inbound {
+			inbound = true
+		}
+		if len(clients) == 1 {
+			remote = c.conn.RemoteAddr().String()
+		}
+	}
 	e.port, e.listener, e.clients, e.udp, e.udpPeer, e.udpPeers = nil, nil, nil, nil, nil, nil
 	e.udpDialed, e.bridge = false, false
 	e.serialEndpoint = ""
@@ -580,6 +591,24 @@ func (e *Engine) Disconnect() {
 	e.Unlock()
 	if stop != nil {
 		close(stop)
+	}
+	if previous == StateConnected || previous == StateConnecting || previous == StateReconnecting {
+		reason := DisconnectReason{Side: SideLocal, Detail: "用户在本程序上断开"}
+		started := time.Unix(0, atomic.LoadInt64(&e.startedAt))
+		var msg string
+		if mode == ModeSerial {
+			msg = serialDisconnectLine(serialEndpoint, time.Since(started),
+				atomic.LoadUint64(&e.serialRXBytes), atomic.LoadUint64(&e.serialTXBytes), reason)
+		} else {
+			msg = disconnectLine("连接已断开", remote, inbound, time.Since(started), disconnectStats{
+				RXBytes: atomic.LoadUint64(&e.rxBytes),
+				TXBytes: atomic.LoadUint64(&e.txBytes),
+				RXCount: atomic.LoadUint64(&e.rxCount),
+				TXCount: atomic.LoadUint64(&e.txCount),
+			}, reason)
+		}
+		e.emitLog(msg)
+		e.recordEvent(msg)
 	}
 	e.store.EndSession()
 	if p != nil {
@@ -702,7 +731,7 @@ func (e *Engine) acceptLoop(listener net.Listener, epoch uint64) {
 			e.emitLog("TCP 客户端已拒绝(达到最大连接数): " + client.RemoteAddr().String())
 			continue
 		}
-		connection := e.addTCPConnection(client, epoch)
+		connection := e.addTCPConnection(client, epoch, true)
 		e.Unlock()
 		e.emitLog("TCP 客户端已连接: " + client.RemoteAddr().String())
 		go e.readTCP(connection)
@@ -711,6 +740,7 @@ func (e *Engine) acceptLoop(listener net.Listener, epoch uint64) {
 
 func (e *Engine) readTCP(connection *trackedConnection) {
 	client := connection.conn
+	var readErr error // 断开原因靠它区分:本端关的、对端关的,还是链路出错
 	defer func() {
 		_ = client.Close()
 		e.Lock()
@@ -722,11 +752,19 @@ func (e *Engine) readTCP(connection *trackedConnection) {
 			}
 		}
 		mode := e.mode
-		reconnect := e.reconnectAddr != "" && atomic.LoadUint32(&connection.manualClose) == 0
+		manual := atomic.LoadUint32(&connection.manualClose) == 1
+		reconnect := e.reconnectAddr != "" && !manual
 		stop := e.reconnectStop
 		e.Unlock()
 		if active {
-			msg := "TCP 客户端已断开: " + client.RemoteAddr().String()
+			reason := classifyDisconnect(readErr, manual)
+			msg := disconnectLine("TCP 连接已断开", client.RemoteAddr().String(), connection.inbound,
+				time.Since(connection.connectedAt), disconnectStats{
+					RXBytes: atomic.LoadUint64(&connection.rxBytes),
+					TXBytes: atomic.LoadUint64(&connection.txBytes),
+					RXCount: atomic.LoadUint64(&connection.rxCount),
+					TXCount: atomic.LoadUint64(&connection.txCount),
+				}, reason)
 			e.emitLog(msg)
 			e.recordEvent(msg)
 			if mode == ModeTCPClient {
@@ -767,6 +805,7 @@ func (e *Engine) readTCP(connection *trackedConnection) {
 			}
 		}
 		if err != nil {
+			readErr = err
 			return
 		}
 	}
@@ -841,13 +880,16 @@ func (e *Engine) readSerial(p io.ReadWriteCloser, epoch uint64) {
 		if err != nil {
 			e.Lock()
 			active := e.port == p && e.epoch == epoch
+			endpoint := e.serialEndpoint
 			if active {
 				e.port = nil
 				atomic.StoreInt32(&e.state, int32(StateDisconnected))
 			}
 			e.Unlock()
 			if active {
-				msg := "串口已断开: " + err.Error()
+				reason := classifySerialDisconnect(err, false)
+				msg := serialDisconnectLine(endpoint, time.Since(time.Unix(0, atomic.LoadInt64(&e.startedAt))),
+					atomic.LoadUint64(&e.serialRXBytes), atomic.LoadUint64(&e.serialTXBytes), reason)
 				e.emitLog(msg)
 				e.recordEvent(msg)
 				e.notifyClosed()

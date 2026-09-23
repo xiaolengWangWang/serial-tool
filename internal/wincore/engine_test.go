@@ -67,7 +67,7 @@ func TestTCPServerBroadcast(t *testing.T) {
 	defer client.Close()
 	engine.Lock()
 	engine.clients = map[net.Conn]*trackedConnection{}
-	engine.addTCPConnection(server, engine.epoch)
+	engine.addTCPConnection(server, engine.epoch, false)
 	engine.Unlock()
 	done := make(chan error, 1)
 	go func() { done <- engine.Send("ping", false, "") }()

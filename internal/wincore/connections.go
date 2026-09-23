@@ -53,6 +53,7 @@ type trackedConnection struct {
 	rxCount     uint64
 	txCount     uint64
 	manualClose uint32
+	inbound     bool // 我们 accept 来的连接为 true,对端是客户端;拨出去的为 false,对端是服务端
 }
 
 func (c *trackedConnection) snapshot() ConnectionInfo {
@@ -127,8 +128,8 @@ func (e *Engine) newPacket(direction, transport, connectionID, endpoint, source,
 	}
 }
 
-func (e *Engine) addTCPConnection(conn net.Conn, epoch uint64) *trackedConnection {
-	c := &trackedConnection{id: e.nextID("tcp"), conn: conn, epoch: epoch, connectedAt: time.Now()}
+func (e *Engine) addTCPConnection(conn net.Conn, epoch uint64, inbound bool) *trackedConnection {
+	c := &trackedConnection{id: e.nextID("tcp"), conn: conn, epoch: epoch, connectedAt: time.Now(), inbound: inbound}
 	e.clients[conn] = c
 	return c
 }
