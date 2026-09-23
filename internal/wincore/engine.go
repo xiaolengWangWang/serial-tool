@@ -573,11 +573,9 @@ func (e *Engine) Disconnect() {
 	p, listener, clients, udp := e.port, e.listener, e.clients, e.udp
 	mode, serialEndpoint := e.mode, e.serialEndpoint
 	// 手动断开也要留一条记录,否则日志里只有"对端断开",看不出这次是自己点的。
-	inbound, remote := false, ""
+	// 本端角色看是否在监听,不看已有连接:服务端没有客户端连进来时也得算服务端。
+	inbound, remote := listener != nil || (udp != nil && !e.udpDialed), ""
 	for _, c := range clients {
-		if c.inbound {
-			inbound = true
-		}
 		if len(clients) == 1 {
 			remote = c.conn.RemoteAddr().String()
 		}

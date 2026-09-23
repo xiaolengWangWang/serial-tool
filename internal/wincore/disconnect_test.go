@@ -218,3 +218,26 @@ func TestManualDisconnectIsReportedAsLocal(t *testing.T) {
 		t.Errorf("手动断开应报告为本端断开: %s", line)
 	}
 }
+
+// 服务端没有任何客户端连进来时手动断开,本端也应算服务端,不能按"没有入向连接"当成客户端。
+func TestManualDisconnectOfIdleServerIsReportedAsServer(t *testing.T) {
+	for _, mode := range []Mode{ModeTCPServer, ModeUDPServer} {
+		t.Run(string(mode), func(t *testing.T) {
+			sink := &logSink{}
+			engine, err := New(t.TempDir(), nil, sink.add)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer engine.Close()
+			if err := engine.Connect(Config{Mode: mode, Address: "127.0.0.1:0", Baud: 115200, DataBits: 8, StopBits: 1}); err != nil {
+				t.Fatal(err)
+			}
+			engine.Disconnect()
+
+			line := sink.wait(t, "连接已断开")
+			if !strings.Contains(line, "本端(服务端)主动断开") {
+				t.Errorf("空闲服务端手动断开应报告为本端(服务端): %s", line)
+			}
+		})
+	}
+}
