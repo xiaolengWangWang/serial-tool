@@ -94,7 +94,7 @@ func (a *application) refreshConnections() {
 	}
 	id, address := a.selectedSendTarget()
 	peers := append(a.engine.Connections(), a.engine.UDPPeers()...)
-	labels := []string{"默认目标 / TCP 全部客户端"}
+	labels := []string{"默认目标"}
 	selected := 0
 	for i, p := range peers {
 		labels = append(labels, p.Transport+"  "+p.RemoteAddress+"  ["+p.ID+"]")

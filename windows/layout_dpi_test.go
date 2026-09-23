@@ -77,6 +77,26 @@ func TestLayoutFitsCommonDisplaysAt96DPI(t *testing.T) {
 }
 
 func runLayoutMatrix(t *testing.T, beforeCreate func()) {
+	runLayoutCases(t, beforeCreate, nil, layoutDisplays)
+}
+
+// 每种模式的表单与发送目标高度不同；助手展开后还会切换左右栏。
+func TestLayoutModesFitCompactWorkspace(t *testing.T) {
+	for index, name := range modes {
+		t.Run(name, func(t *testing.T) {
+			runLayoutCases(t, nil, func(a *application) {
+				a.mode.SetCurrentIndex(index)
+				a.updateMode()
+			}, layoutDisplays[:1])
+		})
+	}
+	t.Run("AI 助手", func(t *testing.T) {
+		runLayoutCases(t, nil, func(a *application) { a.showAssistant() }, layoutDisplays[:1])
+	})
+}
+
+func runLayoutCases(t *testing.T, beforeCreate func(), setup func(*application), displays []layoutDisplay) {
+	t.Helper()
 	a := newWorkbenchForTestWith(t, beforeCreate)
 	var (
 		reports []layoutReport
@@ -96,11 +116,14 @@ func runLayoutMatrix(t *testing.T, beforeCreate func()) {
 		}
 		var real win.RECT
 		onUI(func() {
+			if setup != nil {
+				setup(a)
+			}
 			win.ShowWindow(a.mw.Handle(), win.SW_SHOWNOACTIVATE)
 			real, _ = workAreaFor(a.mw.Handle())
 			dpi, aware = a.mw.DPI(), threadDPIAwareness()
 		})
-		for _, d := range layoutDisplays {
+		for _, d := range displays {
 			if px(d.w, dpi) > real.Right-real.Left || px(d.h, dpi) > real.Bottom-real.Top {
 				skipped = append(skipped, d.name)
 				continue
@@ -288,7 +311,10 @@ func isGroupBoxFrame(h win.HWND) bool {
 func layoutProblems(a *application, dpi int) []string {
 	var problems []string
 	root := a.mw.Handle()
-	scroll := a.connectionPane.Handle()
+	scrollParents := map[win.HWND]bool{a.connectionPane.Handle(): true}
+	if a.assistant != nil && a.assistant.panel != nil {
+		scrollParents[a.assistant.panel.Handle()] = true
+	}
 	byParent := map[win.HWND][]win.HWND{}
 	for _, h := range childWindows(root) {
 		if win.IsWindowVisible(h) {
@@ -304,7 +330,7 @@ func layoutProblems(a *application, dpi int) []string {
 			if r.Right-r.Left <= 0 || r.Bottom-r.Top <= 0 {
 				continue
 			}
-			if p != scroll && (r.Left < pr.Left-slack || r.Top < pr.Top-slack || r.Right > pr.Right+slack || r.Bottom > pr.Bottom+slack) {
+			if !scrollParents[p] && (r.Left < pr.Left-slack || r.Top < pr.Top-slack || r.Right > pr.Right+slack || r.Bottom > pr.Bottom+slack) {
 				problems = append(problems, "被父控件裁切: "+describe(h, dpi)+" 在 "+describe(p, dpi))
 			}
 		}

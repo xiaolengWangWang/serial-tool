@@ -165,6 +165,30 @@ func TestWorkbenchStatisticsDoNotDismissOpenFilter(t *testing.T) {
 	win.SendMessage(a.dirFilter.Handle(), win.CB_SHOWDROPDOWN, 0, 0)
 }
 
+func TestWorkbenchStatisticsDescribeVisiblePacketsAndEvents(t *testing.T) {
+	a := newWorkbenchForTest(t)
+	for _, p := range []wincore.Packet{
+		{Direction: "RX", Data: []byte{1, 2}},
+		{Direction: "TX", Data: []byte{3}},
+		{Direction: "EVENT", Data: []byte("closed")},
+	} {
+		a.packetModel.add(packetFromCore(p), "", dirAll)
+	}
+	a.dirFilter.SetCurrentIndex(1) // RX only.
+	a.applyFilter()
+	if !strings.Contains(a.statsLabel.Text(), "1 / 3") {
+		t.Fatalf("filter must expose visible and total counts: %q", a.statsLabel.Text())
+	}
+	detail := a.statsLabel.ToolTipText()
+	if !strings.Contains(detail, "TX 1/1 B") || !strings.Contains(detail, "事件 1") {
+		t.Fatalf("events must not inflate transmitted packets or bytes: %q", detail)
+	}
+	a.clearFilter()
+	if !strings.Contains(a.statsLabel.Text(), "3 / 3") {
+		t.Fatalf("reset did not restore total count: %q", a.statsLabel.Text())
+	}
+}
+
 func TestWorkbenchSecondaryWindowsSurviveUnavailableIconCache(t *testing.T) {
 	a := newWorkbenchForTest(t)
 	blocked := filepath.Join(t.TempDir(), "not-a-directory")

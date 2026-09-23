@@ -42,7 +42,9 @@ func (a *application) createWindow() error {
 			}},
 			// 状态栏文字随连接状态变长。EllipsisMode 让这一行可压缩：
 			// 不加时它的文字宽度会顶住整窗最小宽度，运行中还会跟着数字一起变。
-			Label{AssignTo: &a.footer, Text: "未连接  |  RX 0 B  |  TX 0 B", MinSize: Size{Height: 20}, Font: Font{Family: fontMono, PointSize: sizeMono}, TextColor: colorMuted, EllipsisMode: EllipsisEnd, Alignment: AlignHNearVCenter},
+			Composite{Background: SolidColorBrush{Color: colorPanel}, Layout: HBox{Margins: Margins{Left: 8, Right: 8}, SpacingZero: true}, Children: []Widget{
+				Label{AssignTo: &a.footer, Text: "未连接  |  RX 0 B  |  TX 0 B", MinSize: Size{Height: 20}, Font: Font{Family: fontMono, PointSize: sizeMono}, TextColor: colorMuted, EllipsisMode: EllipsisEnd, Alignment: AlignHNearVCenter},
+			}},
 		},
 	}).Create(); err != nil {
 		return err
@@ -76,10 +78,14 @@ func (a *application) menus() []MenuItem {
 // connectionPanel 是左栏：模式、参数、连接状态与对端列表。
 // 定宽并可纵向滚动，窗口再矮也不会把参数挤成一团。
 func (a *application) connectionPanel() Widget {
-	return ScrollView{AssignTo: &a.connectionPane, HorizontalFixed: true, MinSize: Size{Width: 300}, MaxSize: Size{Width: 316},
-		Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Right: 22}, Spacing: 8}, Children: []Widget{
-			Label{Text: "连接配置 · 工作模式", Font: fontSection, TextColor: colorBlue},
+	return ScrollView{AssignTo: &a.connectionPane, HorizontalFixed: true, MinSize: Size{Width: 300}, MaxSize: Size{Width: 316}, Background: SolidColorBrush{Color: colorPanel},
+		Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 6, Right: 26, Bottom: 10}, Spacing: 8}, Children: []Widget{
+			Label{Text: "连接配置", Font: fontSection, TextColor: colorBlue},
 			ComboBox{AssignTo: &a.mode, ToolTipText: "串口 / TCP / UDP / 串口服务器 / HTTP 客户端", Model: modes, CurrentIndex: 1, MinSize: Size{Height: rowH}, OnCurrentIndexChanged: a.updateMode},
+			Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
+				inlineLabel("最近连接", 64),
+				ComboBox{AssignTo: &a.recentConn, ToolTipText: "选择最近使用的连接，自动回填参数", StretchFactor: stretchFill, MinSize: Size{Width: 150, Height: rowH}, OnCurrentIndexChanged: a.onRecentConnSelected},
+			}},
 			// 两列栅格：标签列按最长标签自动定宽，每个字段只占一行，
 			// 左栏内容不再溢出到需要滚动才能看到“最近连接”。
 			GroupBox{AssignTo: &a.serialGroup, Title: "串口参数", Layout: Grid{Alignment: AlignHNearVCenter, Columns: 2, Spacing: 6, Margins: Margins{Left: 10, Top: 6, Right: 10, Bottom: 10}}, Children: []Widget{
@@ -114,18 +120,14 @@ func (a *application) connectionPanel() Widget {
 				Action{Text: "发送数据", OnTriggered: func() { a.peerAction("send") }}, Action{Text: "仅查看该客户端", OnTriggered: func() { a.peerAction("filter") }}, Action{Text: "断开连接", OnTriggered: func() { a.peerAction("disconnect") }}, Action{Text: "复制地址", OnTriggered: func() { a.peerAction("copy") }}, Action{Text: "清空显示统计", OnTriggered: func() { a.peerAction("reset"); a.showPeerDetails() }},
 			}},
 			// 连接信息是四行文本，高度必须按四行给足，否则末行被裁掉半个字。
-			Label{AssignTo: &a.detailsLabel, Text: "选择客户端查看连接信息", MinSize: Size{Height: 86}, MaxSize: Size{Width: 282, Height: 86}},
-			Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
-				inlineLabel("最近连接", 72),
-				ComboBox{AssignTo: &a.recentConn, StretchFactor: stretchFill, MinSize: Size{Width: 170, Height: rowH}, MaxSize: Size{Width: 186}, OnCurrentIndexChanged: a.onRecentConnSelected},
-			}},
+			Label{AssignTo: &a.detailsLabel, Text: "选择对端查看地址与收发统计\r\n右键可定向发送、筛选或断开", TextColor: colorMuted, MinSize: Size{Height: 86}, MaxSize: Size{Width: 282, Height: 86}},
 		}}
 }
 
 // monitorPanel 是中栏：标题与筛选各占一行，其余高度交给数据表与发送区的分隔条。
 func (a *application) monitorPanel() Widget {
-	return Composite{StretchFactor: 1, Layout: VBox{Alignment: AlignHNearVNear, MarginsZero: true, Spacing: 6}, Children: []Widget{
-		// 条数并入标题行，不再单独占一行。统计文字随收发变长，同样用省略号压缩。
+	return Composite{StretchFactor: 1, Background: SolidColorBrush{Color: colorPanel}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 8, Top: 6, Right: 8, Bottom: 6}, Spacing: 4}, Children: []Widget{
+		// 标题行只保留视图切换和常用操作，计数靠近筛选条件。
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 8}, Children: []Widget{
 			Label{Text: "数据监控", Font: fontSection, TextColor: colorBlue, Alignment: AlignHNearVCenter, MinSize: Size{Width: 92}, MaxSize: Size{Width: 92}},
 			// 数据 / 日志切换原是标签页，标签条单占约 30px 高；并进标题行后，
@@ -134,24 +136,24 @@ func (a *application) monitorPanel() Widget {
 				RadioButton{AssignTo: &a.viewData, Text: "数据", MinSize: Size{Width: 56}, MaxSize: Size{Width: 56}, OnClicked: func() { a.showLogView(false) }},
 				RadioButton{AssignTo: &a.viewLog, Text: "日志", MinSize: Size{Width: 56}, MaxSize: Size{Width: 56}, OnClicked: func() { a.showLogView(true) }},
 			}},
-			Label{AssignTo: &a.statsLabel, Text: "· 共 0 条", TextColor: colorMuted, EllipsisMode: EllipsisEnd, Alignment: AlignHNearVCenter, StretchFactor: 1},
-			HSpacer{},
-			toolButton("清空", "clear", 92, func() { a.packetModel.clear(); a.updatePacketStats(); a.updateSelectionLabel() }),
-			toolButton("保存", "save", 92, func() { a.exportText(a.packetModel.exportText(), "commbox", a.mw) }),
-			toolButton("AI 分析", "ai", 114, func() { a.showAssistant(); a.assistant.analyze("全面诊断") }),
+			HSpacer{StretchFactor: stretchFill},
+			toolButton("清空", "clear", 80, func() { a.packetModel.clear(); a.updatePacketStats(); a.updateSelectionLabel() }),
+			toolButton("保存", "save", 80, func() { a.exportText(a.packetModel.exportText(), "commbox", a.mw) }),
+			toolButton("AI 分析", "ai", 104, func() { a.showAssistant(); a.assistant.analyze("全面诊断") }),
 		}},
 		// 搜索与连接条件一行，显示与范围一行，小窗口不再被整排下拉框撑宽。
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
-			LineEdit{AssignTo: &a.searchEdit, CueBanner: "搜索 HEX / ASCII / 文本", StretchFactor: 1, MinSize: Size{Width: 160, Height: rowH}, OnTextChanged: a.applyFilter},
+			LineEdit{AssignTo: &a.searchEdit, CueBanner: "搜索 HEX / ASCII / 文本", StretchFactor: stretchFill, MinSize: Size{Width: 160, Height: rowH}, OnTextChanged: a.applyFilter},
 			LineEdit{AssignTo: &a.connectionFilter, CueBanner: "连接 ID / 来源地址", MinSize: Size{Width: 150, Height: rowH}, MaxSize: Size{Width: 220}, OnTextChanged: a.applyFilter},
 			PushButton{Text: "重置筛选", MinSize: Size{Width: 96, Height: btnH}, MaxSize: Size{Width: 96}, OnClicked: a.clearFilter},
 		}},
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
-			fixedCombo(&a.dirFilter, []string{"全部方向", "RX", "TX", "EVENT"}, 106, a.applyFilter),
-			fixedCombo(&a.displayMode, []string{"HEX + ASCII", "HEX", "ASCII"}, 130, a.updateDisplay),
-			fixedCombo(&a.protocolFilter, []string{"全部协议", "SERIAL", "TCP", "UDP", "HTTP"}, 108, a.applyFilter),
-			fixedCombo(&a.timeFilter, []string{"全部时间", "1分钟", "5分钟", "30分钟"}, 106, a.applyFilter),
-			HSpacer{},
+			fixedCombo(&a.dirFilter, []string{dirAll, "RX", "TX", "EVENT"}, 96, a.applyFilter),
+			fixedCombo(&a.displayMode, []string{"HEX + ASCII", "HEX", "ASCII"}, 120, a.updateDisplay),
+			fixedCombo(&a.protocolFilter, []string{"全部协议", "SERIAL", "TCP", "UDP", "HTTP"}, 98, a.applyFilter),
+			fixedCombo(&a.timeFilter, []string{"全部时间", "1分钟", "5分钟", "30分钟"}, 96, a.applyFilter),
+			HSpacer{StretchFactor: stretchFill},
+			Label{AssignTo: &a.statsLabel, Text: "显示 0 / 0 条", TextColor: colorMuted, EllipsisMode: EllipsisEnd, Alignment: AlignHFarVCenter, MinSize: Size{Width: 100}, MaxSize: Size{Width: 180}},
 		}},
 		VSplitter{StretchFactor: 1, Children: []Widget{a.packetViews(), a.sendArea()}},
 	}}
@@ -167,7 +169,7 @@ func (a *application) packetViews() Widget {
 		// 协议 / 来源 / 连接 ID 默认隐藏：八列合计 895px，而 AI 面板展开时中栏仅约 700px，
 		// 全显必然出横向滚动条。需要时通过右键菜单打开。
 		Composite{AssignTo: &a.dataView, Layout: VBox{Alignment: AlignHNearVNear, MarginsZero: true, Spacing: 4}, Children: []Widget{
-			TableView{AssignTo: &a.packetTable, Model: a.packetModel, MinSize: Size{Height: minTableHeight}, MultiSelection: true, AlternatingRowBG: true, LastColumnStretched: true, Font: Font{Family: fontMono, PointSize: sizeMono}, OnSelectedIndexesChanged: a.updateSelectionLabel, Columns: []TableViewColumn{{Title: "时间", Width: 108}, {Title: "方向", Width: 52}, {Title: "HEX", Width: 268}, {Title: "ASCII", Width: 104}, {Title: "长度", Width: 58}, {Title: "协议", Width: 60, Hidden: true}, {Title: "来源", Width: 140, Hidden: true}, {Title: "连接 ID", Width: 170, Hidden: true}}, ContextMenuItems: []MenuItem{
+			TableView{AssignTo: &a.packetTable, Model: a.packetModel, MinSize: Size{Height: minTableHeight}, MultiSelection: true, AlternatingRowBG: true, LastColumnStretched: true, Font: Font{Family: fontMono, PointSize: sizeMono}, StyleCell: a.stylePacketCell, OnSelectedIndexesChanged: a.updateSelectionLabel, Columns: []TableViewColumn{{Title: "时间", Width: 108}, {Title: "方向", Width: 52}, {Title: "HEX", Width: 248}, {Title: "ASCII", Width: 104}, {Title: "长度", Width: 58}, {Title: "协议", Width: 60, Hidden: true}, {Title: "来源", Width: 140, Hidden: true}, {Title: "连接 ID", Width: 170, Hidden: true}}, ContextMenuItems: []MenuItem{
 				Action{Text: "复制 HEX", OnTriggered: func() { a.copyPacketField("hex") }}, Action{Text: "复制 ASCII", OnTriggered: func() { a.copyPacketField("ascii") }}, Action{Text: "复制整行", OnTriggered: func() { a.copyPacketField("all") }}, Action{Text: "重新发送", OnTriggered: func() {
 					if a.loadPacket() {
 						a.sendOnce(false)
@@ -180,10 +182,10 @@ func (a *application) packetViews() Widget {
 			Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 				Label{AssignTo: &a.selectionLabel, Text: "未选中", MinSize: Size{Width: 66}, MaxSize: Size{Width: 94}, EllipsisMode: EllipsisEnd, Alignment: AlignHNearVCenter},
 				toolButton("全选", "", 70, a.selectAllPackets),
-				toolButton("清除", "", 70, a.clearPacketSelection),
+				toolButton("取消", "", 70, a.clearPacketSelection),
 				toolButton("反选", "", 70, a.invertPacketSelection),
 				analyze,
-				HSpacer{},
+				HSpacer{StretchFactor: stretchFill},
 				CheckBox{AssignTo: &a.autoScroll, Text: "自动滚动", Checked: true, MinSize: Size{Width: 102}, MaxSize: Size{Width: 102}},
 				CheckBox{AssignTo: &a.showTime, Text: "时间", Checked: true, MinSize: Size{Width: 72}, MaxSize: Size{Width: 72}, OnCheckedChanged: a.updateDisplay},
 			}},
@@ -223,36 +225,37 @@ const (
 )
 
 // 发送区按格式与目标、报文、历史与快捷、定时与循环分行，结果提示并在定时行右侧，
-// 省下的一整行高度留给矮屏上的报文框和数据表。UDP 目标按需单独显示。
+// 省下的一整行高度留给矮屏上的报文框和数据表。UDP 地址与目标并排，避免顶高小屏窗口。
 func (a *application) sendArea() Widget {
 	// 分隔条按 5:3 分高度，但各自不低于下限。原来 4:1 时发送区要到分隔条约
 	// 985px 高才分得到比下限多的高度，实际上一直停在下限；5:3 下 1280x820
 	// 报文框约 6 行，矮屏仍按下限保底，多出的都给数据表。
-	return Composite{StretchFactor: 3, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Top: 4}, Spacing: 6}, Children: []Widget{
+	return Composite{StretchFactor: 3, Background: SolidColorBrush{Color: colorCanvas}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 6, Top: 4, Right: 6}, Spacing: 6}, Children: []Widget{
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
-			CheckBox{AssignTo: &a.hexSend, Text: "HEX", Checked: true, MinSize: Size{Width: 68}, MaxSize: Size{Width: 68}},
+			Label{Text: "发送", Font: Font{Family: fontUI, PointSize: sizeBody, Bold: true}, TextColor: colorBlue, Alignment: AlignHNearVCenter, MinSize: Size{Width: 36}, MaxSize: Size{Width: 36}},
+			CheckBox{AssignTo: &a.hexSend, Text: "HEX", Checked: true, MinSize: Size{Width: 56}, MaxSize: Size{Width: 56}},
 			inlineLabel("行尾", 38),
 			ComboBox{AssignTo: &a.eol, Model: []string{"无", "LF", "CR", "CRLF"}, CurrentIndex: 0, MinSize: Size{Width: 80, Height: rowH}, MaxSize: Size{Width: 80}},
 			inlineLabel("目标", 38),
-			ComboBox{AssignTo: &a.sendTarget, Model: []string{"默认目标 / TCP 全部客户端"}, CurrentIndex: 0, MinSize: Size{Width: 240, Height: rowH}, MaxSize: Size{Width: 240}, ToolTipText: "默认目标为广播；可选择单个连接，完整信息见客户端列表"},
-			CheckBox{AssignTo: &a.clearAfterSend, Text: "发送后清空", MinSize: Size{Width: 112}, MaxSize: Size{Width: 112}},
-			HSpacer{},
+			ComboBox{AssignTo: &a.sendTarget, Model: []string{"默认目标"}, CurrentIndex: 0, StretchFactor: stretchFill, MinSize: Size{Width: 112, Height: rowH}, MaxSize: Size{Width: 240}, ToolTipText: "默认目标：TCP 服务端广播，UDP 服务端回复最近对端，其他模式发送到当前连接；也可选择单个连接"},
+			LineEdit{AssignTo: &a.udpTarget, Visible: false, CueBanner: "IP:端口（可选）", ToolTipText: "UDP 指定目标，例如 127.0.0.1:9000；仅在默认目标下生效，留空使用当前连接或最近对端", MinSize: Size{Width: 132, Height: rowH}, MaxSize: Size{Width: 200}},
+			HSpacer{StretchFactor: stretchFill},
 		}},
-		LineEdit{AssignTo: &a.udpTarget, Visible: false, CueBanner: "UDP 指定目标（可选）：IP:端口；留空使用上方目标", MinSize: Size{Height: rowH}},
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 8}, StretchFactor: 1, Children: []Widget{
-			TextEdit{AssignTo: &a.sendEdit, StretchFactor: 1, VScroll: true, MinSize: Size{Height: minSendEditHeight}, Font: Font{Family: fontMono, PointSize: sizeMono}},
+			TextEdit{AssignTo: &a.sendEdit, StretchFactor: 1, VScroll: true, MinSize: Size{Height: minSendEditHeight}, ToolTipText: "输入 HEX 字节或取消勾选 HEX 后输入文本；F5 发送，验证按钮检查内容", Font: Font{Family: fontMono, PointSize: sizeMono}},
 			Composite{Layout: VBox{Alignment: AlignHNearVNear, MarginsZero: true, Spacing: 6}, MinSize: Size{Width: 116}, MaxSize: Size{Width: 116}, Children: []Widget{
-				PushButton{Text: "发送 (F5)", Image: uiIcon("send"), MinSize: Size{Height: 40}, MaxSize: Size{Height: 40}, OnClicked: func() { a.sendOnce(false) }},
+				PushButton{Text: "发送 (F5)", Font: Font{Family: fontUI, PointSize: sizeBody, Bold: true}, Image: uiIcon("send"), MinSize: Size{Height: 40}, MaxSize: Size{Height: 40}, OnClicked: func() { a.sendOnce(false) }},
 				PushButton{Text: "验证", Image: uiIcon("check"), MinSize: Size{Height: btnH}, MaxSize: Size{Height: btnH}, OnClicked: a.validateSend},
 			}},
 		}},
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 			inlineLabel("历史", 38),
-			ComboBox{AssignTo: &a.sendHistory, Editable: true, StretchFactor: 1, MinSize: Size{Width: 128, Height: rowH}, OnCurrentIndexChanged: a.onSendHistorySelected},
+			ComboBox{AssignTo: &a.sendHistory, Editable: true, StretchFactor: 1, MinSize: Size{Width: 96, Height: rowH}, OnCurrentIndexChanged: a.onSendHistorySelected},
 			inlineLabel("快捷", 38),
-			ComboBox{AssignTo: &a.favorites, Editable: true, StretchFactor: 1, MinSize: Size{Width: 128, Height: rowH}, OnCurrentIndexChanged: a.onFavoriteSelected},
+			ComboBox{AssignTo: &a.favorites, Editable: true, StretchFactor: 1, MinSize: Size{Width: 96, Height: rowH}, OnCurrentIndexChanged: a.onFavoriteSelected},
 			toolButton("保存", "save", 92, a.saveFavorite),
 			toolButton("删除", "", 70, a.deleteFavorite),
+			CheckBox{AssignTo: &a.clearAfterSend, Text: "发送后清空", MinSize: Size{Width: 112}, MaxSize: Size{Width: 112}},
 		}},
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 			inlineLabel("间隔 ms", 66),
@@ -267,6 +270,21 @@ func (a *application) sendArea() Widget {
 			HSpacer{},
 		}},
 	}}
+}
+
+// 方向保留文字，并用颜色帮助快速区分收发；其他列保持系统的选择与焦点绘制。
+func (a *application) stylePacketCell(style *walk.CellStyle) {
+	if style.Col() != 1 || style.Row() < 0 || style.Row() >= len(a.packetModel.visible) {
+		return
+	}
+	switch a.packetModel.visible[style.Row()].Direction {
+	case "RX":
+		style.TextColor = colorGreen
+	case "TX":
+		style.TextColor = colorBlue
+	default:
+		style.TextColor = colorMuted
+	}
 }
 
 // formLabel 是栅格里的表单标签：与右侧输入框垂直居中，文字不再贴在框顶。

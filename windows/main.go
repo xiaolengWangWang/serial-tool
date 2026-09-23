@@ -913,8 +913,8 @@ const dirAll = "全部方向"
 
 // 状态色降饱和,蓝色只保留一种作主色,避免此前深蓝/灰蓝/亮蓝三种并存。
 var (
-	colorCanvas = walk.RGB(243, 243, 243)
-	colorPanel  = walk.RGB(249, 249, 249)
+	colorCanvas = walk.RGB(241, 245, 249)
+	colorPanel  = walk.RGB(255, 255, 255)
 	colorGray   = walk.RGB(140, 140, 140)
 	colorGreen  = walk.RGB(34, 140, 58)
 	colorYellow = walk.RGB(186, 132, 8)
@@ -1010,6 +1010,7 @@ func (a *application) updateStatus(st wincore.Stats) {
 	if footer := strings.Join(parts, "  |  "); footer != a.lastFooter {
 		a.lastFooter = footer
 		a.footer.SetText(footer)
+		a.footer.SetToolTipText(footer)
 	}
 	if a.timeFilter.CurrentIndex() > 0 {
 		a.applyFilter()
@@ -1133,22 +1134,29 @@ func (a *application) updatePacketStats() {
 	if a.statsLabel == nil || a.packetModel == nil || a.comboDropDownOpen() {
 		return
 	}
-	var rxCnt, txCnt, rxB, txB int
+	var rxCnt, txCnt, events, rxB, txB int
 	for _, p := range a.packetModel.all {
-		if p.Direction == "RX" {
+		switch p.Direction {
+		case "RX":
 			rxCnt++
 			rxB += p.Length
-		} else {
+		case "TX":
 			txCnt++
 			txB += p.Length
+		default:
+			events++
 		}
 	}
-	text := fmt.Sprintf("· 共 %d 条 · RX %d/%s · TX %d/%s",
-		rxCnt+txCnt,
+	text := fmt.Sprintf("显示 %d / %d 条", a.packetModel.RowCount(), len(a.packetModel.all))
+	detail := fmt.Sprintf("当前显示 %d 条，共 %d 条 · RX %d/%s · TX %d/%s · 事件 %d",
+		a.packetModel.RowCount(), len(a.packetModel.all),
 		rxCnt, wincore.FormatBytes(uint64(rxB)),
-		txCnt, wincore.FormatBytes(uint64(txB)))
+		txCnt, wincore.FormatBytes(uint64(txB)), events)
 	if a.statsLabel.Text() != text {
 		_ = a.statsLabel.SetText(text)
+	}
+	if a.statsLabel.ToolTipText() != detail {
+		_ = a.statsLabel.SetToolTipText(detail)
 	}
 }
 
