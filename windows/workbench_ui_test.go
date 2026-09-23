@@ -20,11 +20,21 @@ import (
 // These tests create real Win32 controls; opt in on an interactive Windows host.
 func newWorkbenchForTest(t *testing.T) *application {
 	t.Helper()
+	return newWorkbenchForTestWith(t, nil)
+}
+
+// newWorkbenchForTestWith 在锁定的界面线程上、创建窗口之前先执行 beforeCreate,
+// 布局测试用它把线程切到 DPI 无感知模式,模拟 100% 缩放。
+func newWorkbenchForTestWith(t *testing.T, beforeCreate func()) *application {
+	t.Helper()
 	if os.Getenv("COMMBOX_GUI_TEST") != "1" {
 		t.Skip("set COMMBOX_GUI_TEST=1 to test real Windows controls")
 	}
 	runtime.LockOSThread()
 	t.Cleanup(runtime.UnlockOSThread)
+	if beforeCreate != nil {
+		beforeCreate()
+	}
 	e, err := wincore.New(t.TempDir(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -119,6 +129,25 @@ func TestWorkbenchHTTPModeRestoresSendFormat(t *testing.T) {
 	a.mode.SetCurrentIndex(1)
 	if !a.hexSend.Checked() || !a.hexSend.Enabled() || !a.eol.Enabled() {
 		t.Fatal("leaving HTTP did not restore send format")
+	}
+}
+
+func TestWorkbenchViewSwitchShowsOneView(t *testing.T) {
+	a := newWorkbenchForTest(t)
+	a.mw.Show()
+	if win.GetWindowLong(a.viewLog.Handle(), win.GWL_STYLE)&win.BS_PUSHLIKE == 0 {
+		t.Fatal("data / log switch is not push-like")
+	}
+	if !a.viewData.Checked() || a.viewLog.Checked() || !a.dataView.Visible() || a.logEdit.Visible() {
+		t.Fatal("workbench must open on the data view")
+	}
+	a.showLogView(true)
+	if a.viewData.Checked() || !a.viewLog.Checked() || a.dataView.Visible() || !a.logEdit.Visible() {
+		t.Fatal("log view was not shown alone")
+	}
+	a.showLogView(false)
+	if !a.viewData.Checked() || a.viewLog.Checked() || !a.dataView.Visible() || a.logEdit.Visible() {
+		t.Fatal("data view was not restored")
 	}
 }
 

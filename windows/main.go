@@ -69,6 +69,8 @@ type application struct {
 	dirFilter                             *walk.ComboBox
 	packetTable                           *walk.TableView
 	packetModel                           *packetTableModel
+	dataView                              *walk.Composite
+	viewData, viewLog                     *walk.RadioButton
 	loopCount                             *walk.LineEdit
 	loopButton                            *walk.PushButton
 	loopMu                                sync.Mutex

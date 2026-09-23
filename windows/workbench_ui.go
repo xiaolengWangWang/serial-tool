@@ -21,13 +21,16 @@ func (a *application) createWindow() error {
 	a.peerBaseline = map[string]wincore.ConnectionInfo{}
 	a.assistant = &assistantPanel{app: a}
 	if err := (MainWindow{
-		AssignTo:   &a.mw,
-		Title:      "CommBox v" + wincore.Version + " · Windows",
-		Size:       Size{Width: 1280, Height: 820},
-		MinSize:    Size{Width: 1024, Height: 620},
+		AssignTo: &a.mw,
+		Title:    "CommBox v" + wincore.Version + " · Windows",
+		Size:     Size{Width: 1280, Height: 820},
+		// 最小尺寸由内容决定（数据表至少 3 行、发送框至少 4 行），这里只兜底。
+		// 1600x900@150%、1366x768@125% 等屏幕的工作区只有约 1024x552，
+		// 原来的 1024x620 放不进去，底部发送区会压在任务栏下面。
+		MinSize:    Size{Width: 960, Height: 480},
 		Font:       Font{Family: fontUI, PointSize: sizeBody},
 		Background: SolidColorBrush{Color: colorCanvas},
-		Layout:     VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 6}, Spacing: 8},
+		Layout:     VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 6, Right: 10, Bottom: 4}, Spacing: 6},
 		MenuItems:  a.menus(),
 		Children: []Widget{
 			// 不设工具栏：原有五个按钮在菜单栏或数据监控标题行都已有等价入口，
@@ -39,7 +42,7 @@ func (a *application) createWindow() error {
 			}},
 			// 状态栏文字随连接状态变长。EllipsisMode 让这一行可压缩：
 			// 不加时它的文字宽度会顶住整窗最小宽度，运行中还会跟着数字一起变。
-			Label{AssignTo: &a.footer, Text: "未连接  |  RX 0 B  |  TX 0 B", MinSize: Size{Height: 26}, Font: Font{Family: fontMono, PointSize: sizeMono}, TextColor: colorMuted, EllipsisMode: EllipsisEnd, Alignment: AlignHNearVCenter},
+			Label{AssignTo: &a.footer, Text: "未连接  |  RX 0 B  |  TX 0 B", MinSize: Size{Height: 20}, Font: Font{Family: fontMono, PointSize: sizeMono}, TextColor: colorMuted, EllipsisMode: EllipsisEnd, Alignment: AlignHNearVCenter},
 		},
 	}).Create(); err != nil {
 		return err
@@ -50,6 +53,7 @@ func (a *application) createWindow() error {
 		_ = a.autoUpdateAction.SetChecked(a.autoUpdateEnabled())
 	}
 	a.updateSelectionLabel()
+	a.initViewSwitch()
 	a.fitToWorkArea()
 	return nil
 }
@@ -120,10 +124,16 @@ func (a *application) connectionPanel() Widget {
 
 // monitorPanel 是中栏：标题与筛选各占一行，其余高度交给数据表与发送区的分隔条。
 func (a *application) monitorPanel() Widget {
-	return Composite{StretchFactor: 1, Layout: VBox{Alignment: AlignHNearVNear, MarginsZero: true, Spacing: 8}, Children: []Widget{
+	return Composite{StretchFactor: 1, Layout: VBox{Alignment: AlignHNearVNear, MarginsZero: true, Spacing: 6}, Children: []Widget{
 		// 条数并入标题行，不再单独占一行。统计文字随收发变长，同样用省略号压缩。
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 8}, Children: []Widget{
 			Label{Text: "数据监控", Font: fontSection, TextColor: colorBlue, Alignment: AlignHNearVCenter, MinSize: Size{Width: 92}, MaxSize: Size{Width: 92}},
+			// 数据 / 日志切换原是标签页，标签条单占约 30px 高；并进标题行后，
+			// 矮屏（工作区约 1024x552）上这一行高度留给数据表。
+			Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true}, Children: []Widget{
+				RadioButton{AssignTo: &a.viewData, Text: "数据", MinSize: Size{Width: 56}, MaxSize: Size{Width: 56}, OnClicked: func() { a.showLogView(false) }},
+				RadioButton{AssignTo: &a.viewLog, Text: "日志", MinSize: Size{Width: 56}, MaxSize: Size{Width: 56}, OnClicked: func() { a.showLogView(true) }},
+			}},
 			Label{AssignTo: &a.statsLabel, Text: "· 共 0 条", TextColor: colorMuted, EllipsisMode: EllipsisEnd, Alignment: AlignHNearVCenter, StretchFactor: 1},
 			HSpacer{},
 			toolButton("清空", "clear", 92, func() { a.packetModel.clear(); a.updatePacketStats(); a.updateSelectionLabel() }),
@@ -143,20 +153,21 @@ func (a *application) monitorPanel() Widget {
 			fixedCombo(&a.timeFilter, []string{"全部时间", "1分钟", "5分钟", "30分钟"}, 106, a.applyFilter),
 			HSpacer{},
 		}},
-		VSplitter{StretchFactor: 1, Children: []Widget{a.packetTab(), a.sendArea()}},
+		VSplitter{StretchFactor: 1, Children: []Widget{a.packetViews(), a.sendArea()}},
 	}}
 }
 
-// packetTab 是数据表与日志两页，外加一行选中操作。
-func (a *application) packetTab() Widget {
+// packetViews 是数据表（外加一行选中操作）与日志两个视图，由标题行的
+// 数据 / 日志按钮切换，同一时间只显示一个。
+func (a *application) packetViews() Widget {
 	analyze := toolButton("分析选中", "ai", 128, a.analyzeSelected)
 	analyze.AssignTo = &a.analyzeSelectionButton
 	analyze.Enabled = false
-	return TabWidget{StretchFactor: 4, Pages: []TabPage{
+	return Composite{StretchFactor: 5, Layout: VBox{Alignment: AlignHNearVNear, MarginsZero: true}, Children: []Widget{
 		// 协议 / 来源 / 连接 ID 默认隐藏：八列合计 895px，而 AI 面板展开时中栏仅约 700px，
 		// 全显必然出横向滚动条。需要时通过右键菜单打开。
-		{Title: "数据", Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 2, Top: 6, Right: 2, Bottom: 2}, Spacing: 6}, Children: []Widget{
-			TableView{AssignTo: &a.packetTable, Model: a.packetModel, MultiSelection: true, AlternatingRowBG: true, LastColumnStretched: true, Font: Font{Family: fontMono, PointSize: sizeMono}, OnSelectedIndexesChanged: a.updateSelectionLabel, Columns: []TableViewColumn{{Title: "时间", Width: 108}, {Title: "方向", Width: 52}, {Title: "HEX", Width: 268}, {Title: "ASCII", Width: 104}, {Title: "长度", Width: 58}, {Title: "协议", Width: 60, Hidden: true}, {Title: "来源", Width: 140, Hidden: true}, {Title: "连接 ID", Width: 170, Hidden: true}}, ContextMenuItems: []MenuItem{
+		Composite{AssignTo: &a.dataView, Layout: VBox{Alignment: AlignHNearVNear, MarginsZero: true, Spacing: 4}, Children: []Widget{
+			TableView{AssignTo: &a.packetTable, Model: a.packetModel, MinSize: Size{Height: minTableHeight}, MultiSelection: true, AlternatingRowBG: true, LastColumnStretched: true, Font: Font{Family: fontMono, PointSize: sizeMono}, OnSelectedIndexesChanged: a.updateSelectionLabel, Columns: []TableViewColumn{{Title: "时间", Width: 108}, {Title: "方向", Width: 52}, {Title: "HEX", Width: 268}, {Title: "ASCII", Width: 104}, {Title: "长度", Width: 58}, {Title: "协议", Width: 60, Hidden: true}, {Title: "来源", Width: 140, Hidden: true}, {Title: "连接 ID", Width: 170, Hidden: true}}, ContextMenuItems: []MenuItem{
 				Action{Text: "复制 HEX", OnTriggered: func() { a.copyPacketField("hex") }}, Action{Text: "复制 ASCII", OnTriggered: func() { a.copyPacketField("ascii") }}, Action{Text: "复制整行", OnTriggered: func() { a.copyPacketField("all") }}, Action{Text: "重新发送", OnTriggered: func() {
 					if a.loadPacket() {
 						a.sendOnce(false)
@@ -177,16 +188,47 @@ func (a *application) packetTab() Widget {
 				CheckBox{AssignTo: &a.showTime, Text: "时间", Checked: true, MinSize: Size{Width: 72}, MaxSize: Size{Width: 72}, OnCheckedChanged: a.updateDisplay},
 			}},
 		}},
-		{Title: "日志", Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 2, Top: 6, Right: 2, Bottom: 2}}, Children: []Widget{
-			TextEdit{AssignTo: &a.logEdit, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: fontMono, PointSize: sizeMono}},
-		}},
+		TextEdit{AssignTo: &a.logEdit, Visible: false, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: fontMono, PointSize: sizeMono}},
 	}}
 }
 
-// 发送区按格式与目标、报文、历史与快捷、定时与循环、结果提示分行。
-// UDP 目标按需单独显示，长反馈不挤占操作按钮的空间。
+// initViewSwitch 把数据 / 日志两个单选钮改成按下式外观，看起来是一组切换按钮。
+// 声明式 RadioButton 不能直接带 BS_PUSHLIKE，只能创建后补上。
+func (a *application) initViewSwitch() {
+	for _, rb := range []*walk.RadioButton{a.viewData, a.viewLog} {
+		h := rb.Handle()
+		win.SetWindowLong(h, win.GWL_STYLE, win.GetWindowLong(h, win.GWL_STYLE)|win.BS_PUSHLIKE)
+		win.InvalidateRect(h, nil, true)
+	}
+	a.viewData.SetChecked(true)
+	a.mw.RequestLayout()
+}
+
+func (a *application) showLogView(log bool) {
+	if a.dataView == nil || a.logEdit == nil {
+		return
+	}
+	a.viewData.SetChecked(!log)
+	a.viewLog.SetChecked(log)
+	a.dataView.SetVisible(!log)
+	a.logEdit.SetVisible(log)
+}
+
+// 矮屏上数据表与发送区的保底高度（96 DPI 逻辑像素，随缩放一起放大）。
+// 数据表：表头约 24 + 3 行 × 约 20 + 边框；发送框：4 行等宽字 + 内边距，
+// 并留出 125%/150% 下字高取整多出的一两个像素。分隔条拖不过这两个下限。
+const (
+	minTableHeight    = 90
+	minSendEditHeight = 72
+)
+
+// 发送区按格式与目标、报文、历史与快捷、定时与循环分行，结果提示并在定时行右侧，
+// 省下的一整行高度留给矮屏上的报文框和数据表。UDP 目标按需单独显示。
 func (a *application) sendArea() Widget {
-	return Composite{Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Top: 6}, Spacing: 6}, MinSize: Size{Height: 220}, Children: []Widget{
+	// 分隔条按 5:3 分高度，但各自不低于下限。原来 4:1 时发送区要到分隔条约
+	// 985px 高才分得到比下限多的高度，实际上一直停在下限；5:3 下 1280x820
+	// 报文框约 6 行，矮屏仍按下限保底，多出的都给数据表。
+	return Composite{StretchFactor: 3, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Top: 4}, Spacing: 6}, Children: []Widget{
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 			CheckBox{AssignTo: &a.hexSend, Text: "HEX", Checked: true, MinSize: Size{Width: 68}, MaxSize: Size{Width: 68}},
 			inlineLabel("行尾", 38),
@@ -198,10 +240,10 @@ func (a *application) sendArea() Widget {
 		}},
 		LineEdit{AssignTo: &a.udpTarget, Visible: false, CueBanner: "UDP 指定目标（可选）：IP:端口；留空使用上方目标", MinSize: Size{Height: rowH}},
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 8}, StretchFactor: 1, Children: []Widget{
-			TextEdit{AssignTo: &a.sendEdit, StretchFactor: 1, VScroll: true, MinSize: Size{Height: 68}, Font: Font{Family: fontMono, PointSize: sizeMono}},
+			TextEdit{AssignTo: &a.sendEdit, StretchFactor: 1, VScroll: true, MinSize: Size{Height: minSendEditHeight}, Font: Font{Family: fontMono, PointSize: sizeMono}},
 			Composite{Layout: VBox{Alignment: AlignHNearVNear, MarginsZero: true, Spacing: 6}, MinSize: Size{Width: 116}, MaxSize: Size{Width: 116}, Children: []Widget{
-				PushButton{Text: "发送 (F5)", Image: uiIcon("send"), MinSize: Size{Height: 48}, OnClicked: func() { a.sendOnce(false) }},
-				PushButton{Text: "验证", Image: uiIcon("check"), MinSize: Size{Height: btnH}, OnClicked: a.validateSend},
+				PushButton{Text: "发送 (F5)", Image: uiIcon("send"), MinSize: Size{Height: 40}, MaxSize: Size{Height: 40}, OnClicked: func() { a.sendOnce(false) }},
+				PushButton{Text: "验证", Image: uiIcon("check"), MinSize: Size{Height: btnH}, MaxSize: Size{Height: btnH}, OnClicked: a.validateSend},
 			}},
 		}},
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
@@ -219,9 +261,11 @@ func (a *application) sendArea() Widget {
 			inlineLabel("次数", 38),
 			LineEdit{AssignTo: &a.loopCount, Text: "0", MinSize: Size{Width: 62, Height: rowH}, MaxSize: Size{Width: 62}, ToolTipText: "循环次数，0 表示持续发送"},
 			PushButton{AssignTo: &a.loopButton, Text: "循环发送", MinSize: Size{Width: 96, Height: btnH}, MaxSize: Size{Width: 96}, OnClicked: a.toggleLoopSend},
+			// 提示按文字宽度显示，窄窗口下压缩成省略号，完整内容在悬停提示里。
+			// 标签不会吃掉整行富余，末尾仍要 HSpacer，否则富余宽度会摊成控件间的空隙。
+			Label{AssignTo: &a.sendPreview, Text: "输入报文后可先验证，按 F5 发送", ToolTipText: "未勾选 HEX 时按文本发送；快捷框输入名称后可保存当前报文", MinSize: Size{Width: 40}, TextColor: colorMuted, EllipsisMode: EllipsisEnd, Alignment: AlignHNearVCenter},
 			HSpacer{},
 		}},
-		Label{AssignTo: &a.sendPreview, Text: "输入报文后可先验证，按 F5 发送 · 快捷框输入名称后保存", ToolTipText: "未勾选 HEX 时按文本发送；快捷框输入名称后可保存当前报文", MinSize: Size{Height: 22}, TextColor: colorMuted, EllipsisMode: EllipsisEnd, Alignment: AlignHNearVCenter},
 	}}
 }
 
@@ -281,31 +325,44 @@ func (a *application) fitToWorkArea() {
 	if a.mw == nil {
 		return
 	}
+	if rc, ok := workAreaFor(a.mw.Handle()); ok {
+		a.fitIntoWorkArea(rc)
+	}
+}
+
+// workAreaFor 取窗口所在显示器的工作区（物理像素）。多屏且缩放不同时，
+// 主屏的工作区不代表窗口实际所在的那块屏。
+func workAreaFor(hwnd win.HWND) (win.RECT, bool) {
+	var mi win.MONITORINFO
+	mi.CbSize = uint32(unsafe.Sizeof(mi))
+	if m := win.MonitorFromWindow(hwnd, win.MONITOR_DEFAULTTONEAREST); m != 0 && win.GetMonitorInfo(m, &mi) {
+		return mi.RcWork, true
+	}
 	const spiGetWorkArea = 0x0030
 	var rc win.RECT
-	if !win.SystemParametersInfo(spiGetWorkArea, 0, unsafe.Pointer(&rc), 0) {
-		return
-	}
+	return rc, win.SystemParametersInfo(spiGetWorkArea, 0, unsafe.Pointer(&rc), 0)
+}
+
+// fitIntoWorkArea 按给定工作区（物理像素）收缩并居中主窗口，测试用它模拟各种屏幕。
+func (a *application) fitIntoWorkArea(rc win.RECT) {
 	availW, availH := int(rc.Right-rc.Left), int(rc.Bottom-rc.Top)
 	if availW <= 0 || availH <= 0 {
 		return
 	}
-	// 上限取工作区的 85%：1280x820 在 175% 缩放的屏幕上换算后接近满屏，
-	// 留出余量才便于和其他窗口并排。屏幕足够大时仍用设计尺寸，不做放大。
-	maxW, maxH := availW*85/100, availH*85/100
+	// 宽度上限取工作区的 85%：1280x820 在 175% 缩放的屏幕上换算后接近满屏，
+	// 留出余量才便于和其他窗口并排。高度与并排无关，放不下时用满工作区：
+	// 1920x1080@150% 上按 85% 收缩会白白少掉约 100px，数据表只剩三行。
+	// 屏幕足够大时仍用设计尺寸，不做放大。
 	b := a.mw.BoundsPixels()
-	w, h := b.Width, b.Height
-	if w > maxW {
-		w = maxW
-	}
-	if h > maxH {
-		h = maxH
-	}
+	_ = a.mw.SetBoundsPixels(walk.Rectangle{X: b.X, Y: b.Y, Width: min(b.Width, availW*85/100), Height: min(b.Height, availH)})
+	// 系统会把尺寸抬到内容的最小尺寸，按抬过之后的实际大小居中，
+	// 否则窄屏上窗口右缘会越出工作区。
+	b = a.mw.BoundsPixels()
 	_ = a.mw.SetBoundsPixels(walk.Rectangle{
-		X:      int(rc.Left) + (availW-w)/2,
-		Y:      int(rc.Top) + (availH-h)/2,
-		Width:  w,
-		Height: h,
+		X:      int(rc.Left) + max(0, (availW-b.Width)/2),
+		Y:      int(rc.Top) + max(0, (availH-b.Height)/2),
+		Width:  b.Width,
+		Height: b.Height,
 	})
 }
 
