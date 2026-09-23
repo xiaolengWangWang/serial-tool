@@ -51,7 +51,7 @@ func (a *application) autoCheckUpdate() {
 	if a.closed.Load() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), wincore.UpdateCheckBudget)
 	defer cancel()
 	info, err := wincore.CheckUpdate(ctx, wincore.Version)
 	if a.closed.Load() {
@@ -78,9 +78,9 @@ func (a *application) checkUpdate() {
 		return
 	}
 	a.checkingUpdate = true
-	a.appendLog("正在检查更新…")
+	a.appendLog("正在检查更新…(连接 GitHub 较慢时需要半分钟左右)")
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), wincore.UpdateCheckBudget)
 		defer cancel()
 		info, err := wincore.CheckUpdate(ctx, wincore.Version)
 		if a.closed.Load() {

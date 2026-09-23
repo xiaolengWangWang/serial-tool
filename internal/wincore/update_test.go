@@ -1,16 +1,22 @@
 package wincore
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestCompareVersions(t *testing.T) {
@@ -102,6 +108,98 @@ func TestCheckUpdateServerError(t *testing.T) {
 	defer srv.Close()
 	if _, err := checkUpdateFrom(context.Background(), srv.URL, "0.8.4"); err == nil {
 		t.Fatal("非 200 响应应返回错误")
+	}
+}
+
+// 连接在响应前被掐断(慢网络下常见)时重试一次,第二次成功就算检查成功。
+func TestCheckUpdateRetriesDroppedConnection(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&hits, 1) == 1 {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				conn.Close()
+			}
+			return
+		}
+		fmt.Fprint(w, releaseJSON("v0.9.2", "CommBox-0.9.2-Windows-x64.zip", 1, ""))
+	}))
+	defer srv.Close()
+	info, err := checkUpdateFrom(context.Background(), srv.URL, "0.9.1")
+	if err != nil {
+		t.Fatalf("第一次连接被掐断后应重试成功: %v", err)
+	}
+	if !info.Newer || atomic.LoadInt32(&hits) != 2 {
+		t.Fatalf("请求次数=%d info=%+v", hits, info)
+	}
+}
+
+// 服务器已回了状态码(如限流 403)说明网络是通的,重试没有意义。
+func TestCheckUpdateDoesNotRetryHTTPError(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	if _, err := checkUpdateFrom(context.Background(), srv.URL, "0.9.1"); err == nil {
+		t.Fatal("403 应返回错误")
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("HTTP 错误不应重试,实际请求 %d 次", got)
+	}
+}
+
+// 实测国内连 api.github.com 握手 12~21 秒、整次 15~25 秒。超时不能退回
+// 标准库默认的 10 秒握手,调用方的总时长也得容得下全部重试。
+func TestUpdateTimeoutsFitSlowGitHub(t *testing.T) {
+	const worstHandshake, worstRequest = 25 * time.Second, 30 * time.Second
+	if updateTransport.TLSHandshakeTimeout < worstHandshake {
+		t.Errorf("TLS 握手超时 %v 小于实测最慢 %v", updateTransport.TLSHandshakeTimeout, worstHandshake)
+	}
+	if updateClient().Timeout < worstRequest {
+		t.Errorf("单次检查超时 %v 小于实测最慢 %v", updateClient().Timeout, worstRequest)
+	}
+	if UpdateCheckBudget < updateCheckAttempts*updateClient().Timeout {
+		t.Errorf("总时长 %v 容不下 %d 次请求", UpdateCheckBudget, updateCheckAttempts)
+	}
+}
+
+// 检查和下载都必须走放宽了超时的 updateTransport,漏掉任何一个都会在慢网络下失败。
+func TestCheckAndDownloadUseUpdateTransport(t *testing.T) {
+	var dials int32
+	saved := updateTransport
+	defer func() { updateTransport = saved }()
+	updateTransport = saved.Clone()
+	updateTransport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		atomic.AddInt32(&dials, 1)
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	}
+
+	payload := []byte("zip")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".zip") {
+			w.Write(payload)
+			return
+		}
+		fmt.Fprint(w, releaseJSON("v0.9.2", "CommBox-0.9.2-Windows-x64.zip", len(payload), ""))
+	}))
+	defer srv.Close()
+
+	if _, err := checkUpdateFrom(context.Background(), srv.URL, "0.9.1"); err != nil {
+		t.Fatal(err)
+	}
+	if atomic.LoadInt32(&dials) == 0 {
+		t.Fatal("检查请求没有走 updateTransport")
+	}
+	updateTransport.CloseIdleConnections() // 让下载重新拨号,才能证明它也走这个 Transport
+	before := atomic.LoadInt32(&dials)
+	info := UpdateInfo{AssetURL: srv.URL + "/CommBox-0.9.2-Windows-x64.zip", AssetName: "CommBox-0.9.2-Windows-x64.zip"}
+	if _, err := downloadAsset(context.Background(), info, t.TempDir(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if atomic.LoadInt32(&dials) == before {
+		t.Fatal("下载请求没有走 updateTransport")
 	}
 }
 
@@ -226,5 +324,204 @@ func TestLiveUpdateDownload(t *testing.T) {
 	}
 	if info.AssetSize > 0 && st.Size() != info.AssetSize {
 		t.Fatalf("下载大小 %d 与发布信息 %d 不符", st.Size(), info.AssetSize)
+	}
+}
+
+// assetServer 模拟慢网络下的 GitHub 资源地址:前 failures 次请求只发一半,
+// 然后断开(stall 为真时改为不再发数据、也不断开);之后正常响应。
+// honorRange 为假时无视 Range,总是发整个文件。
+func assetServer(t *testing.T, payload []byte, failures int32, stall, honorRange bool) (*httptest.Server, *int32, func() []string) {
+	var hits int32
+	var mu sync.Mutex
+	var ranges []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&hits, 1)
+		mu.Lock()
+		ranges = append(ranges, r.Header.Get("Range"))
+		mu.Unlock()
+		if n <= failures {
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+			w.Write(payload[:len(payload)/2])
+			w.(http.Flusher).Flush()
+			if stall {
+				<-r.Context().Done()
+				return
+			}
+			panic(http.ErrAbortHandler) // 声明了完整长度却只发一半就断开,客户端读到 unexpected EOF
+		}
+		if honorRange {
+			http.ServeContent(w, r, "a.zip", time.Time{}, bytes.NewReader(payload))
+			return
+		}
+		w.Write(payload)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &hits, func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), ranges...) }
+}
+
+func testPayload() ([]byte, UpdateInfo) {
+	payload := make([]byte, 256<<10)
+	for i := range payload {
+		payload[i] = byte(i * 7)
+	}
+	sum := sha256.Sum256(payload)
+	return payload, UpdateInfo{AssetName: "CommBox-9.9.9-Windows-x64.zip", AssetSize: int64(len(payload)), SHA256: hex.EncodeToString(sum[:])}
+}
+
+func assertDownloaded(t *testing.T, path string, payload []byte) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("下载内容不对: %d 字节", len(got))
+	}
+}
+
+// 连接中途断开后带 Range 从断点续传,不从头再下。
+func TestDownloadResumesAfterDrop(t *testing.T) {
+	payload, info := testPayload()
+	srv, hits, ranges := assetServer(t, payload, 1, false, true)
+	info.AssetURL = srv.URL + "/a.zip"
+	path, err := downloadAsset(context.Background(), info, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDownloaded(t, path, payload)
+	r := ranges()
+	if atomic.LoadInt32(hits) != 2 || r[0] != "" || !strings.HasPrefix(r[1], "bytes=") || r[1] == "bytes=0-" {
+		t.Fatalf("应断点续传一次,实际请求 %d 次,Range=%q", *hits, r)
+	}
+}
+
+// 服务器不认 Range、重发整个文件时,要丢掉已写的部分从头写,不能拼出一个错包。
+func TestDownloadRestartsWhenRangeIgnored(t *testing.T) {
+	payload, info := testPayload()
+	srv, hits, _ := assetServer(t, payload, 1, false, false)
+	info.AssetURL = srv.URL + "/a.zip"
+	path, err := downloadAsset(context.Background(), info, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDownloaded(t, path, payload)
+	if atomic.LoadInt32(hits) != 2 {
+		t.Fatalf("请求次数=%d", *hits)
+	}
+}
+
+// 连接没断但不再来数据(慢网络常见的假死),停滞超时后断开并续传。
+func TestDownloadResumesAfterStall(t *testing.T) {
+	saved := downloadStallTimeout
+	defer func() { downloadStallTimeout = saved }()
+	downloadStallTimeout = 300 * time.Millisecond
+
+	payload, info := testPayload()
+	srv, hits, _ := assetServer(t, payload, 1, true, true)
+	info.AssetURL = srv.URL + "/a.zip"
+	start := time.Now()
+	path, err := downloadAsset(context.Background(), info, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDownloaded(t, path, payload)
+	if atomic.LoadInt32(hits) != 2 || time.Since(start) > 10*time.Second {
+		t.Fatalf("请求次数=%d 用时=%v", *hits, time.Since(start))
+	}
+}
+
+// 次次都断就按次数上限放弃,并且不留半截文件。
+func TestDownloadGivesUpAfterAttempts(t *testing.T) {
+	saved := downloadAttempts
+	defer func() { downloadAttempts = saved }()
+	downloadAttempts = 3
+
+	payload, info := testPayload()
+	srv, hits, _ := assetServer(t, payload, 100, false, true)
+	info.AssetURL = srv.URL + "/a.zip"
+	dir := t.TempDir()
+	_, err := downloadAsset(context.Background(), info, dir, nil)
+	if err == nil || !strings.Contains(err.Error(), "已尝试 3 次") {
+		t.Fatalf("应在 3 次后放弃,得到 %v", err)
+	}
+	if atomic.LoadInt32(hits) != 3 {
+		t.Fatalf("请求次数=%d", *hits)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("放弃后目录应为空,实际 %d 个文件", len(entries))
+	}
+}
+
+// 服务器明确拒绝(如 404)时不重试。
+func TestDownloadDoesNotRetryHTTPError(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	_, info := testPayload()
+	info.AssetURL = srv.URL + "/a.zip"
+	if _, err := downloadAsset(context.Background(), info, t.TempDir(), nil); err == nil {
+		t.Fatal("404 应返回错误")
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("HTTP 错误不应重试,实际请求 %d 次", got)
+	}
+}
+
+// 慢但一直在收数据的下载不能被停滞超时掐断:总时长超过停滞超时也要一次下完。
+func TestDownloadSlowButSteadyIsNotCut(t *testing.T) {
+	saved := downloadStallTimeout
+	defer func() { downloadStallTimeout = saved }()
+	downloadStallTimeout = 400 * time.Millisecond
+
+	payload, info := testPayload()
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+		const chunks = 16 // 每 50ms 一块,共约 800ms,是停滞超时的两倍;块间隔只有它的 1/8
+		for i := 0; i < chunks; i++ {
+			w.Write(payload[i*len(payload)/chunks : (i+1)*len(payload)/chunks])
+			w.(http.Flusher).Flush()
+			time.Sleep(50 * time.Millisecond)
+		}
+	}))
+	defer srv.Close()
+	info.AssetURL = srv.URL + "/a.zip"
+	path, err := downloadAsset(context.Background(), info, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDownloaded(t, path, payload)
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("持续收数据时不应断开重连,实际请求 %d 次", got)
+	}
+}
+
+// 建连和等响应头慢(两次慢握手)不算停滞:那段由 Transport 的各项超时管,
+// 算进停滞超时的话每次重试都会在同一处被掐断。
+func TestDownloadSlowConnectionSetupIsNotCut(t *testing.T) {
+	saved := downloadStallTimeout
+	defer func() { downloadStallTimeout = saved }()
+	downloadStallTimeout = 300 * time.Millisecond
+
+	payload, info := testPayload()
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		time.Sleep(900 * time.Millisecond) // 响应头晚于停滞超时的三倍才到
+		w.Write(payload)
+	}))
+	defer srv.Close()
+	info.AssetURL = srv.URL + "/a.zip"
+	path, err := downloadAsset(context.Background(), info, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDownloaded(t, path, payload)
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("响应头慢不应触发重试,实际请求 %d 次", got)
 	}
 }

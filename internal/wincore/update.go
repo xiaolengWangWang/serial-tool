@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"net/url"
@@ -44,13 +46,7 @@ func CheckUpdate(ctx context.Context, current string) (UpdateInfo, error) {
 }
 
 func checkUpdateFrom(ctx context.Context, api, current string) (UpdateInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, api, nil)
-	if err != nil {
-		return UpdateInfo{}, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "CommBox/"+Version)
-	resp, err := updateClient().Do(req)
+	resp, err := getRelease(ctx, api)
 	if err != nil {
 		return UpdateInfo{}, fmt.Errorf("连接发布服务器失败: %w", err)
 	}
@@ -94,8 +90,50 @@ func checkUpdateFrom(ctx context.Context, api, current string) (UpdateInfo, erro
 	return info, nil
 }
 
+// getRelease 发出检查请求。连接层失败(握手超时、连接被重置)重试一次,
+// 慢网络下偶发失败后第二次往往能通;服务器已回了状态码的不重试。
+func getRelease(ctx context.Context, api string) (*http.Response, error) {
+	var err error
+	for attempt := 0; attempt < updateCheckAttempts; attempt++ {
+		var req *http.Request
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, api, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("User-Agent", "CommBox/"+Version)
+		var resp *http.Response
+		resp, err = updateClient().Do(req)
+		if err == nil {
+			return resp, nil
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, err
+}
+
+// 国内连 GitHub 时 TLS 握手常要十几到二十几秒(2026-09 实测 api.github.com
+// 握手 12~21 秒、整次请求 15~25 秒),标准库默认的 10 秒握手超时几乎必然失败。
+// 检查和下载都走这个 Transport,下载要连 github.com 和资源 CDN,同样慢。
+var updateTransport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.TLSHandshakeTimeout = 45 * time.Second
+	t.ResponseHeaderTimeout = 30 * time.Second
+	return t
+}()
+
+const (
+	updateCheckTimeout  = 60 * time.Second // 单次检查请求:慢握手加几秒响应
+	updateCheckAttempts = 2
+)
+
+// UpdateCheckBudget 是调用方给整次检查(含重试)留的总时间。
+const UpdateCheckBudget = updateCheckAttempts*updateCheckTimeout + 5*time.Second
+
 func updateClient() *http.Client {
-	return &http.Client{Timeout: 20 * time.Second}
+	return &http.Client{Transport: updateTransport, Timeout: updateCheckTimeout}
 }
 
 // allowedDownloadURL 只信任 GitHub 自己的下载域名。检查接口是固定地址且走 TLS,
@@ -195,69 +233,57 @@ func DownloadUpdate(ctx context.Context, info UpdateInfo, dir string, progress f
 	return downloadAsset(ctx, info, dir, progress)
 }
 
+// 慢网络下(实测 39 KB/s)13 MB 的安装包要下 6 分钟,中途断一次很常见。
+// GitHub 的资源地址支持 Range,断了就从断点接着下,不从头再来。
+// 不设整体超时,只看是否停滞:慢但一直在收数据就让它下完,用户关窗可随时取消。
+var (
+	downloadAttempts     = 5
+	downloadStallTimeout = 60 * time.Second
+)
+
+// downloadFatal 包装不值得重试的错误:服务器明确拒绝、本地磁盘写不进去。
+type downloadFatal struct{ error }
+
 // downloadAsset 是不含域名白名单的下载实现,白名单在 DownloadUpdate 里把关。
 func downloadAsset(ctx context.Context, info UpdateInfo, dir string, progress func(done, total int64)) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
 	dst := filepath.Join(dir, filepath.Base(info.AssetName))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, info.AssetURL, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "CommBox/"+Version)
-	// 下载 16 MB 级别的安装包,不能套用检查接口的 20s 超时。
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("下载失败: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("下载失败: 服务器返回 %s", resp.Status)
-	}
-	total := resp.ContentLength
-	if total <= 0 {
-		total = info.AssetSize
-	}
 	// 先写临时文件再改名:中途失败或被取消时不会留下一个看着完整的半截包。
 	tmp, err := os.CreateTemp(dir, ".commbox-update-*")
 	if err != nil {
 		return "", err
 	}
 	tmpName := tmp.Name()
-	hash := sha256.New()
-	var done int64
-	buf := make([]byte, 64<<10)
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			if _, err := tmp.Write(buf[:n]); err != nil {
-				tmp.Close()
-				os.Remove(tmpName)
-				return "", err
-			}
-			hash.Write(buf[:n])
-			done += int64(n)
-			if progress != nil {
-				progress(done, total)
-			}
-		}
-		if readErr == io.EOF {
+	fail := func(err error) (string, error) {
+		tmp.Close()
+		os.Remove(tmpName)
+		return "", err
+	}
+	d := &resumableDownload{file: tmp, hash: sha256.New(), total: info.AssetSize, progress: progress}
+	for attempt := 1; ; attempt++ {
+		err = d.fetch(ctx, info.AssetURL)
+		if err == nil {
 			break
 		}
-		if readErr != nil {
-			tmp.Close()
-			os.Remove(tmpName)
-			return "", fmt.Errorf("下载中断: %w", readErr)
+		var fatal downloadFatal
+		if ctx.Err() != nil || errors.As(err, &fatal) {
+			return fail(err)
 		}
+		if attempt == downloadAttempts {
+			return fail(fmt.Errorf("%w(已尝试 %d 次)", err, attempt))
+		}
+	}
+	if info.AssetSize > 0 && d.done != info.AssetSize {
+		return fail(fmt.Errorf("下载不完整: 收到 %d 字节,应为 %d 字节", d.done, info.AssetSize))
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)
 		return "", err
 	}
 	if info.SHA256 != "" {
-		if got := hex.EncodeToString(hash.Sum(nil)); got != info.SHA256 {
+		if got := hex.EncodeToString(d.hash.Sum(nil)); got != info.SHA256 {
 			os.Remove(tmpName)
 			return "", fmt.Errorf("校验失败:安装包 SHA256 与发布说明不一致,已删除下载文件")
 		}
@@ -267,4 +293,87 @@ func downloadAsset(ctx context.Context, info UpdateInfo, dir string, progress fu
 		return "", err
 	}
 	return dst, nil
+}
+
+// resumableDownload 记录已写入临时文件的字节数和对应的 SHA256 进度。
+type resumableDownload struct {
+	file     *os.File
+	hash     hash.Hash
+	done     int64
+	total    int64
+	progress func(done, total int64)
+}
+
+// fetch 从 d.done 处接着下,直到读完或出错。
+func (d *resumableDownload) fetch(parent context.Context, assetURL string) error {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, assetURL, nil)
+	if err != nil {
+		return downloadFatal{err}
+	}
+	req.Header.Set("User-Agent", "CommBox/"+Version)
+	if d.done > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", d.done))
+	}
+	// 建连到收齐响应头由 updateTransport 的拨号、握手、响应头超时把关。下载要从
+	// github.com 跳转到资源 CDN,两次慢握手就可能要四五十秒,不能算进停滞超时。
+	resp, err := (&http.Client{Transport: updateTransport}).Do(req)
+	if err != nil {
+		return fmt.Errorf("下载失败: %w", err)
+	}
+	defer resp.Body.Close()
+	switch {
+	case d.done > 0 && resp.StatusCode == http.StatusPartialContent &&
+		strings.HasPrefix(resp.Header.Get("Content-Range"), fmt.Sprintf("bytes %d-", d.done)):
+		// 接着断点往后写
+	case resp.StatusCode == http.StatusOK:
+		// 首次下载,或服务器不认 Range 发来了整个文件:从头写
+		if err := d.restart(); err != nil {
+			return downloadFatal{err}
+		}
+		if d.total <= 0 {
+			d.total = resp.ContentLength
+		}
+	default:
+		return downloadFatal{fmt.Errorf("下载失败: 服务器返回 %s", resp.Status)}
+	}
+	// 响应头到了以后只看数据是否还在流动。
+	stall := time.AfterFunc(downloadStallTimeout, cancel)
+	defer stall.Stop()
+	buf := make([]byte, 64<<10)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			stall.Reset(downloadStallTimeout)
+			if _, err := d.file.Write(buf[:n]); err != nil {
+				return downloadFatal{err}
+			}
+			d.hash.Write(buf[:n])
+			d.done += int64(n)
+			if d.progress != nil {
+				d.progress(d.done, d.total)
+			}
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil {
+			if parent.Err() == nil && ctx.Err() != nil {
+				return fmt.Errorf("下载中断: 超过 %v 没有收到数据", downloadStallTimeout)
+			}
+			return fmt.Errorf("下载中断: %w", readErr)
+		}
+	}
+}
+func (d *resumableDownload) restart() error {
+	if err := d.file.Truncate(0); err != nil {
+		return err
+	}
+	if _, err := d.file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	d.hash.Reset()
+	d.done = 0
+	return nil
 }
