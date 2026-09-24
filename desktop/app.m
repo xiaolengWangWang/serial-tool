@@ -66,6 +66,12 @@ int RunLayoutChecks(id delegate, NSString *directory);
     NSMutableString *_aiDisplayMarkdown; // 展示与存档用的对话转写
     NSString *_aiMarkdownName;           // 本次会话存档文件名
     NSTextView *_aiActiveView;           // 当前对话输出到的视图
+    NSMenuItem *_autoUpdateItem;         // “启动时自动检查更新”菜单项(带勾)
+    BOOL _checkingUpdate;                // 防止重复触发检查
+    NSWindow *_updateSheet;              // 下载进度 sheet
+    NSProgressIndicator *_updateBar;
+    NSTextField *_updateStatus;
+    long long _updateTotal;              // 当前下载总字节,0 表示未知
 }
 - (void)appendText:(NSString *)text;
 - (void)appendMonitorText:(NSString *)text;
@@ -340,6 +346,16 @@ static void Item(NSMenu *menu, NSString *title, SEL action, NSString *key, NSEve
 static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSMenuItem *item = [mainMenu addItemWithTitle:title action:NULL keyEquivalent:@""];
     item.submenu = submenu;
+}
+
+static NSString *humanBytes(long long n) {
+    if (n < 1024) return [NSString stringWithFormat:@"%lld B", n];
+    double v = (double)n;
+    const char *units[] = {"KB", "MB", "GB"};
+    int i = 0;
+    v /= 1024;
+    while (v >= 1024 && i < 2) { v /= 1024; i++; }
+    return [NSString stringWithFormat:@"%.1f %s", v, units[i]];
 }
 
 @implementation AppDelegate
@@ -907,6 +923,13 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSString *databaseInfo = [NSString stringWithUTF8String:database ?: ""]; free(database);
     if ([databaseInfo hasPrefix:@"错误:"]) [self alert:databaseInfo];
     else [self appendText:[NSString stringWithFormat:@"[SQLite 数据目录：%@]\n", databaseInfo]];
+
+    // 启动时静默检查更新(默认开启),只有确实有新版本才弹窗;网络问题不打扰。
+    // 让出启动阶段:端口枚举、SQLite 打开都在这几秒里。
+    if (GoAutoUpdateEnabled()) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{ [self runUpdateCheck:NO]; });
+    }
 }
 
 - (void)windowDidResize:(NSNotification *)notification {
@@ -1009,7 +1032,188 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     Item(viewMenu, @"监控窗口", @selector(openMonitor:), @"m", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Submenu(mainMenu, @"视图", viewMenu);
 
+    NSMenu *helpMenu = [[[NSMenu alloc] initWithTitle:@"帮助"] autorelease];
+    Item(helpMenu, @"检查更新", @selector(checkUpdate:), @"", 0);
+    _autoUpdateItem = [helpMenu addItemWithTitle:@"启动时自动检查更新" action:@selector(toggleAutoUpdate:) keyEquivalent:@""];
+    _autoUpdateItem.state = GoAutoUpdateEnabled() ? NSControlStateValueOn : NSControlStateValueOff;
+    [helpMenu addItem:[NSMenuItem separatorItem]];
+    Item(helpMenu, @"访问项目主页", @selector(openReleasesPage:), @"", 0);
+    Submenu(mainMenu, @"帮助", helpMenu);
+
     NSApp.mainMenu = mainMenu;
+}
+
+- (void)toggleAutoUpdate:(id)sender {
+    BOOL on = _autoUpdateItem.state != NSControlStateValueOn;
+    _autoUpdateItem.state = on ? NSControlStateValueOn : NSControlStateValueOff;
+    GoSetAutoUpdate(on ? 1 : 0);
+}
+
+- (void)openReleasesPage:(id)sender {
+    char *page = GoReleasesPage();
+    NSString *url = [NSString stringWithUTF8String:page ?: ""]; free(page);
+    if (url.length) [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:url]];
+}
+
+// checkUpdate: 手动检查:无论结果如何都给反馈。后台查、主线程弹窗。
+- (void)checkUpdate:(id)sender {
+    [self runUpdateCheck:YES];
+}
+
+// runUpdateCheck: manual 为真时即使已是最新/出错也弹窗;自动检查只在有新版本时打扰。
+- (void)runUpdateCheck:(BOOL)manual {
+    if (_checkingUpdate) return;
+    _checkingUpdate = YES;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        char *raw = GoCheckUpdate();
+        NSData *data = [[NSData alloc] initWithBytes:(raw ?: "{}") length:(raw ? strlen(raw) : 2)];
+        free(raw);
+        NSDictionary *info = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+        [data release];
+        NSDictionary *parsed = [info isKindOfClass:[NSDictionary class]] ? info : @{};
+        dispatch_async(dispatch_get_main_queue(), ^{
+            _checkingUpdate = NO;
+            [self presentUpdateResult:parsed manual:manual];
+        });
+    });
+}
+
+- (void)presentUpdateResult:(NSDictionary *)info manual:(BOOL)manual {
+    BOOL ok = [info[@"ok"] boolValue];
+    if (!ok) {
+        if (!manual) return; // 自动检查失败只是网络问题,不打扰
+        NSString *err = info[@"error"] ?: @"未知错误";
+        NSAlert *a = [[[NSAlert alloc] init] autorelease];
+        a.messageText = @"检查更新失败";
+        a.informativeText = [NSString stringWithFormat:@"%@\n\n可手动访问发布页查看最新版本。", err];
+        [a addButtonWithTitle:@"打开发布页"];
+        [a addButtonWithTitle:@"关闭"];
+        if ([a runModal] == NSAlertFirstButtonReturn) [self openReleasesPage:nil];
+        return;
+    }
+    BOOL newer = [info[@"newer"] boolValue];
+    NSString *current = info[@"current"] ?: @"";
+    if (!newer) {
+        if (!manual) return;
+        [self alert:[NSString stringWithFormat:@"已是最新版本 v%@。", current]];
+        return;
+    }
+
+    NSString *version = info[@"version"] ?: @"";
+    NSString *name = info[@"name"] ?: @"";
+    NSString *notes = info[@"notes"] ?: @"";
+    if (!notes.length) notes = @"（本次发布没有填写说明）";
+    BOOL hasAsset = [info[@"hasAsset"] boolValue];
+    NSString *assetName = info[@"assetName"] ?: @"";
+    NSString *assetSize = info[@"assetSizeText"] ?: @"";
+
+    NSAlert *a = [[[NSAlert alloc] init] autorelease];
+    a.messageText = [NSString stringWithFormat:@"发现新版本 v%@（当前 v%@）", version, current];
+    NSString *detail = name;
+    if (hasAsset) detail = [NSString stringWithFormat:@"%@\n\n安装包:%@（%@）", name, assetName, assetSize];
+    a.informativeText = detail;
+
+    // 发布说明放进可滚动的只读文本框,长说明也不撑破弹窗。
+    NSScrollView *scroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 460, 220)] autorelease];
+    scroll.hasVerticalScroller = YES;
+    scroll.borderType = NSBezelBorder;
+    NSTextView *tv = [[[NSTextView alloc] initWithFrame:scroll.bounds] autorelease];
+    tv.editable = NO;
+    tv.string = notes;
+    tv.textContainerInset = NSMakeSize(6, 6);
+    scroll.documentView = tv;
+    a.accessoryView = scroll;
+
+    if (hasAsset) [a addButtonWithTitle:@"下载并打开"];
+    [a addButtonWithTitle:@"打开发布页"];
+    [a addButtonWithTitle:@"取消"];
+    NSModalResponse resp = [a runModal];
+    if (hasAsset && resp == NSAlertFirstButtonReturn) {
+        [self startUpdateDownload];
+    } else if (resp == (hasAsset ? NSAlertSecondButtonReturn : NSAlertFirstButtonReturn)) {
+        [self openReleasesPage:nil];
+    }
+}
+
+// startUpdateDownload 弹出带进度条和取消按钮的 sheet,后台下载,完成后收尾。
+- (void)startUpdateDownload {
+    _updateTotal = 0;
+    NSWindow *sheet = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 420, 130)
+        styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+    NSView *content = sheet.contentView;
+
+    _updateStatus = [NSTextField labelWithString:@"正在下载…"];
+    _updateStatus.frame = NSMakeRect(20, 82, 380, 20);
+    [content addSubview:_updateStatus];
+
+    _updateBar = [[[NSProgressIndicator alloc] initWithFrame:NSMakeRect(20, 54, 380, 20)] autorelease];
+    _updateBar.indeterminate = YES;
+    _updateBar.style = NSProgressIndicatorStyleBar;
+    [_updateBar startAnimation:nil];
+    [content addSubview:_updateBar];
+
+    NSButton *cancel = [NSButton buttonWithTitle:@"取消" target:self action:@selector(cancelUpdateDownload:)];
+    cancel.frame = NSMakeRect(320, 14, 80, 28);
+    [content addSubview:cancel];
+
+    _updateSheet = sheet;
+    [_window beginSheet:sheet completionHandler:^(NSModalResponse r) {}];
+
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        char *raw = GoDownloadUpdate();
+        NSData *data = [[NSData alloc] initWithBytes:(raw ?: "{}") length:(raw ? strlen(raw) : 2)];
+        free(raw);
+        NSDictionary *res = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+        [data release];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self finishUpdateDownload:([res isKindOfClass:[NSDictionary class]] ? res : @{})];
+        });
+    });
+}
+
+- (void)cancelUpdateDownload:(id)sender {
+    GoCancelUpdateDownload();
+    if (_updateStatus) _updateStatus.stringValue = @"正在取消…";
+}
+
+- (void)updateDownloadProgress:(long long)done total:(long long)total {
+    if (!_updateBar || !_updateStatus) return;
+    if (total > 0) {
+        if (_updateBar.indeterminate) {
+            [_updateBar stopAnimation:nil];
+            _updateBar.indeterminate = NO;
+            _updateBar.minValue = 0;
+            _updateBar.maxValue = 100;
+        }
+        _updateBar.doubleValue = (double)done * 100.0 / (double)total;
+        _updateStatus.stringValue = [NSString stringWithFormat:@"正在下载… %@ / %@（%lld%%）",
+            humanBytes(done), humanBytes(total), done * 100 / total];
+    } else {
+        _updateStatus.stringValue = [NSString stringWithFormat:@"正在下载… %@", humanBytes(done)];
+    }
+}
+
+- (void)finishUpdateDownload:(NSDictionary *)res {
+    if (_updateSheet) {
+        [_window endSheet:_updateSheet];
+        [_updateSheet orderOut:nil];
+        [_updateSheet release];
+        _updateSheet = nil;
+    }
+    _updateBar = nil;
+    _updateStatus = nil;
+
+    if (![res[@"ok"] boolValue]) {
+        NSString *err = res[@"error"] ?: @"下载失败";
+        [self alert:[NSString stringWithFormat:@"更新失败:%@", err]];
+        return;
+    }
+    NSString *path = res[@"path"] ?: @"";
+    if ([res[@"opened"] boolValue]) {
+        [self alert:@"安装包已下载并打开。请在弹出的窗口中把 CommBox 拖入 Applications 覆盖旧版本,然后重新打开。"];
+    } else {
+        [self alert:[NSString stringWithFormat:@"安装包已下载到:\n%@\n\n请双击打开后把 CommBox 拖入 Applications。", path]];
+    }
 }
 
 - (void)openAISettings:(id)sender {
@@ -2438,6 +2642,12 @@ void UIAppend(const char *text) {
     NSString *value = [[NSString alloc] initWithUTF8String:text ?: ""];
     dispatch_async(dispatch_get_main_queue(), ^{ [(AppDelegate *)NSApp.delegate appendLogText:value]; });
     [value release];
+}
+
+void UIUpdateProgress(long long done, long long total) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [(AppDelegate *)NSApp.delegate updateDownloadProgress:done total:total];
+    });
 }
 
 void UIAddPacket(const char *ts, const char *dir, const char *hex, const char *ascii, const char *kind, int len) {

@@ -6,6 +6,8 @@ void UIAppend(const char *text);
 void UIAppendLog(const char *text);
 void UIMonitorAppend(const char *text);
 void UIConnectionClosed(void);
+// Update download progress; total may be 0 when unknown.
+void UIUpdateProgress(long long done, long long total);
 // Packet display fields: timestamp, direction, HEX, ASCII, type, byte length.
 void UIAddPacket(const char *ts, const char *dir, const char *hex, const char *ascii, const char *kind, int len);
 void UIAddPacketJSON(const char *json);
@@ -40,6 +42,12 @@ char *GoDatabaseInfo(void);
 char *GoListAnalysisDatabases(void);
 char *GoAnalyzeDatabases(char *filenamesJSON, char *start, char *end, char *direction, int limit);
 char *GoVersion(void);
+int GoAutoUpdateEnabled(void);
+void GoSetAutoUpdate(int on);
+char *GoReleasesPage(void);
+char *GoCheckUpdate(void);
+char *GoDownloadUpdate(void);
+void GoCancelUpdateDownload(void);
 char *GoGetAISetting(char *key);
 char *GoSetAISetting(char *key, char *value);
 char *GoAIAnalyze(char *transport, char *hex);

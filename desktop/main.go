@@ -19,6 +19,7 @@ import (
 	"net/http"
 	neturl "net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -671,4 +672,131 @@ func GoUDPSend(text *C.char, hex C.int, eol *C.char) *C.char {
 		return C.CString(err.Error())
 	}
 	return C.CString("")
+}
+
+// ---- 在线更新 ----
+
+// updateReleasesPage 是检查失败时兜底的发布页地址。
+const updateReleasesPage = "https://github.com/xiaolengWangWang/serial-tool/releases"
+
+// settingAutoUpdate 记录是否在启动时检查更新。空值按开启处理:检查只发一个 GET、
+// 不带任何用户数据,老用户升级上来无需先去设置里打开。
+const settingAutoUpdate = "update.auto_check"
+
+var (
+	updateMu     sync.Mutex
+	lastUpdate   wincore.UpdateInfo // 最近一次 GoCheckUpdate 的结果,供下载复用
+	updateCancel context.CancelFunc // 下载进行中时可取消
+)
+
+func jsonCString(m map[string]any) *C.char {
+	data, err := json.Marshal(m)
+	if err != nil {
+		return C.CString(`{"ok":false,"error":"内部错误"}`)
+	}
+	return C.CString(string(data))
+}
+
+// updateDownloadDir 优先放到"下载"文件夹,取不到时退回临时目录。
+func updateDownloadDir() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		dir := filepath.Join(home, "Downloads")
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+			return dir
+		}
+	}
+	return filepath.Join(os.TempDir(), "CommBox-update")
+}
+
+//export GoAutoUpdateEnabled
+func GoAutoUpdateEnabled() C.int {
+	if engine != nil && engine.GetSetting(settingAutoUpdate) == "0" {
+		return 0
+	}
+	return 1
+}
+
+//export GoSetAutoUpdate
+func GoSetAutoUpdate(on C.int) {
+	if engine == nil {
+		return
+	}
+	v := "1"
+	if on == 0 {
+		v = "0"
+	}
+	_ = engine.SetSetting(settingAutoUpdate, v)
+}
+
+//export GoReleasesPage
+func GoReleasesPage() *C.char { return C.CString(updateReleasesPage) }
+
+// GoCheckUpdate 查最新发布并与当前版本比较,结果以 JSON 返回。缓存 UpdateInfo
+// 供随后的 GoDownloadUpdate 复用,避免下载前再查一次。由后台队列调用(会阻塞)。
+//
+//export GoCheckUpdate
+func GoCheckUpdate() *C.char {
+	ctx, cancel := context.WithTimeout(context.Background(), wincore.UpdateCheckBudget)
+	defer cancel()
+	info, err := wincore.CheckUpdate(ctx, wincore.Version)
+	m := map[string]any{"current": wincore.Version}
+	if err != nil {
+		m["ok"] = false
+		m["error"] = err.Error()
+		return jsonCString(m)
+	}
+	updateMu.Lock()
+	lastUpdate = info
+	updateMu.Unlock()
+	m["ok"] = true
+	m["newer"] = info.Newer
+	m["version"] = info.Version
+	m["name"] = info.Name
+	m["notes"] = info.Notes
+	m["pageURL"] = info.PageURL
+	m["hasAsset"] = info.AssetURL != ""
+	m["assetName"] = info.AssetName
+	m["assetSizeText"] = wincore.FormatBytes(uint64(info.AssetSize))
+	return jsonCString(m)
+}
+
+// GoDownloadUpdate 下载缓存的安装包到"下载"文件夹并校验,成功后 open DMG 让
+// Finder 弹出挂载,用户把 CommBox 拖入 Applications。进度经 UIUpdateProgress 回报。
+// 由后台队列调用(会阻塞),GoCancelUpdateDownload 可中途取消。
+//
+//export GoDownloadUpdate
+func GoDownloadUpdate() *C.char {
+	updateMu.Lock()
+	info := lastUpdate
+	ctx, cancel := context.WithCancel(context.Background())
+	updateCancel = cancel
+	updateMu.Unlock()
+	defer func() {
+		updateMu.Lock()
+		updateCancel = nil
+		updateMu.Unlock()
+		cancel()
+	}()
+
+	if info.AssetURL == "" {
+		return jsonCString(map[string]any{"ok": false, "error": "本次发布没有可下载的 macOS 安装包"})
+	}
+	path, err := wincore.DownloadUpdate(ctx, info, updateDownloadDir(), func(done, total int64) {
+		C.UIUpdateProgress(C.longlong(done), C.longlong(total))
+	})
+	if err != nil {
+		return jsonCString(map[string]any{"ok": false, "error": err.Error()})
+	}
+	// DMG 双击挂载即用:直接 open 让 Finder 弹出,失败也不致命,包已经下好了。
+	opened := exec.Command("open", path).Start() == nil
+	return jsonCString(map[string]any{"ok": true, "path": path, "opened": opened})
+}
+
+//export GoCancelUpdateDownload
+func GoCancelUpdateDownload() {
+	updateMu.Lock()
+	if updateCancel != nil {
+		updateCancel()
+	}
+	updateMu.Unlock()
 }

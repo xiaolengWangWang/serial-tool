@@ -52,7 +52,8 @@ func releaseJSON(tag, asset string, size int, notes string) string {
 }
 
 func TestCheckUpdateNewer(t *testing.T) {
-	asset := "CommBox-0.8.5-Windows-x64.zip"
+	// 用当前平台的后缀拼出附件名,验证在这个 OS 上挑的是本平台的包而非裸 exe。
+	asset := "CommBox-0.8.5" + updateAssetSuffix()
 	notes := "# 更新\n\n## SHA256\n\n```\n" + strings.Repeat("ab", 32) + "  " + asset + "\n```\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Accept"); got != "application/vnd.github+json" {

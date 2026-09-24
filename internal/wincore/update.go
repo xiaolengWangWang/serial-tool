@@ -23,9 +23,9 @@ import (
 // 返回的也只是公开的发布信息。
 const UpdateAPIURL = "https://api.github.com/repos/xiaolengWangWang/serial-tool/releases/latest"
 
-// updateAssetSuffix 挑选 Windows 安装包。发布页同时还挂着裸 exe,
-// 更新走 zip:解压即用,且发布说明里带它的 SHA256 可供校验。
-const updateAssetSuffix = "-Windows-x64.zip"
+// updateAssetSuffix 返回当前平台对应的安装包文件名后缀,用来从发布附件里挑出
+// 该平台的包(发布页同时还挂着裸 exe、其他平台的包)。实现按平台拆到
+// update_windows.go / update_darwin.go / update_linux.go,macOS 还要按芯片区分。
 
 // UpdateInfo 描述一次检查结果。没有可用安装包时 AssetURL 为空,
 // 此时界面只提供"打开发布页",不提供下载。
@@ -82,7 +82,7 @@ func checkUpdateFrom(ctx context.Context, api, current string) (UpdateInfo, erro
 		Newer:   CompareVersions(version, current) > 0,
 	}
 	for _, a := range payload.Assets {
-		if strings.HasSuffix(a.Name, updateAssetSuffix) && allowedDownloadURL(a.URL) {
+		if strings.HasSuffix(a.Name, updateAssetSuffix()) && allowedDownloadURL(a.URL) {
 			info.AssetURL, info.AssetName, info.AssetSize = a.URL, a.Name, a.Size
 			break
 		}
@@ -237,7 +237,7 @@ func versionPart(parts []string, i int) (int, string) {
 // 发布说明里带了 SHA256 时会校验,不一致则删除文件并报错。
 func DownloadUpdate(ctx context.Context, info UpdateInfo, dir string, progress func(done, total int64)) (string, error) {
 	if info.AssetURL == "" || info.AssetName == "" {
-		return "", fmt.Errorf("本次发布没有可下载的 Windows 安装包")
+		return "", fmt.Errorf("本次发布没有可下载的安装包")
 	}
 	if !allowedDownloadURL(info.AssetURL) {
 		return "", fmt.Errorf("下载地址不是 GitHub 官方域名,已拒绝")
