@@ -149,6 +149,14 @@ powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1
 
 脚本要求工作区干净且 HEAD 落在 `v<版本>` 标签上，逐个校验 PE 头、构建来源 commit、版本资源和压缩包内容。改版本号时同时改各目录的 `versioninfo.json` 并重新生成 `.syso`（`goversioninfo -64 -o rsrc_windows_amd64.syso versioninfo.json`），漏改会有测试报错。
 
+需要减小 Windows 下载包时，可在生成完整 ZIP 后执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/compress-windows.ps1 -SourceArchive build/CommBox-0.9.4-Windows-x64.zip
+```
+
+脚本使用支持 7zip / LZMA2 的 `tar.exe`，在原 ZIP 旁生成完整 `.7z`，以及仅含 `CommBox.exe`、使用说明和校验清单的 `-GUI.zip` / `-GUI.7z`。只使用主界面时可选 GUI 包；需要命令行或创建 VirtualCOM 端口时选完整包。脚本核对源包清单，并逐文件验证新包解压后的 SHA256。此操作减小下载体积，解压后的 EXE 大小不变；沿用现有编译参数，不剥离符号或给 EXE 加壳。
+
 ```bash
 # 命令行(多平台,纯 Go);发布 Linux amd64
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
