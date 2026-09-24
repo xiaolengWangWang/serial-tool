@@ -4,6 +4,8 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"net"
 	"strings"
 	"syscall"
 	"testing"
@@ -41,17 +43,18 @@ const (
 )
 
 type layoutReport struct {
-	display    layoutDisplay
-	dpi        int
-	winW, winH int // 窗口实际外框,逻辑像素
-	overW      int // 超出工作区的宽度,逻辑像素
-	overH      int
-	clientH    int // 客户区与数据表、发送框的高度,逻辑像素,调布局时看余量
-	tableH     int
-	sendH      int
-	sendLines  int
-	tableRows  int
-	problems   []string
+	display      layoutDisplay
+	dpi          int
+	winW, winH   int // 窗口实际外框,逻辑像素
+	overW        int // 超出工作区的宽度,逻辑像素
+	overH        int
+	clientH      int // 客户区与数据表、发送框的高度,逻辑像素,调布局时看余量
+	tableH       int
+	sendH        int
+	sendLines    int
+	tableRows    int
+	unusedTableW int // 可视区不应留给空白或过宽的元数据列。
+	problems     []string
 }
 
 func (r layoutReport) String() string {
@@ -93,6 +96,60 @@ func TestLayoutModesFitCompactWorkspace(t *testing.T) {
 	t.Run("AI 助手", func(t *testing.T) {
 		runLayoutCases(t, nil, func(a *application) { a.showAssistant() }, layoutDisplays[:1])
 	})
+	t.Run("更多筛选", func(t *testing.T) {
+		runLayoutCases(t, nil, func(a *application) { a.toggleAdvancedFilters() }, layoutDisplays[:1])
+	})
+	t.Run("长报文与名称", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				go func() { defer c.Close(); io.Copy(io.Discard, c) }()
+			}
+		}()
+		runLayoutCases(t, nil, func(a *application) { fillLongDropDowns(t, a, ln.Addr().String()) }, layoutDisplays[:1])
+	})
+}
+
+// fillLongDropDowns 走真实路径连上 TCP、发一条 120 字节报文、存一个长快捷名称，
+// 让发送历史、快捷、最近连接和发送目标都带上长选项。walk 按最长选项定下拉框
+// 最小宽度，未处理时一条长报文就能把窗口撑到两三千像素宽。
+func fillLongDropDowns(t *testing.T, a *application, address string) {
+	host, port, _ := net.SplitHostPort(address)
+	a.netIP.SetText(host)
+	a.netPort.SetText(port)
+	cfg, err := a.config()
+	if err == nil {
+		err = a.engine.Connect(cfg)
+	}
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	t.Cleanup(a.engine.Disconnect)
+	long := strings.TrimSpace(strings.Repeat("01 10 00 00 ", 30))
+	if err := a.sendCaptured(long, true, "", "", ""); err != nil {
+		t.Error(err)
+		return
+	}
+	if err := a.engine.SaveFavorite("Modbus 写多个保持寄存器 0x0000-0x0063 全部通道", long); err != nil {
+		t.Error(err)
+		return
+	}
+	a.refreshSendHistory()
+	a.refreshFavorites()
+	a.refreshRecentConn()
+	a.refreshConnections()
+	if w := int(a.sendHistory.SendMessage(win.CB_GETDROPPEDWIDTH, 0, 0)); w < walk.IntFrom96DPI(360, a.sendHistory.DPI()) {
+		t.Errorf("发送历史展开列表只有 %d px,长报文看不全", w)
+	}
 }
 
 func runLayoutCases(t *testing.T, beforeCreate func(), setup func(*application), displays []layoutDisplay) {
@@ -153,9 +210,12 @@ func runLayoutCases(t *testing.T, beforeCreate func(), setup func(*application),
 		if r.overW > 0 || r.overH > 0 || r.sendLines < minSendLines || r.tableRows < minTableRows || len(r.problems) > 0 {
 			failed = true
 		}
+		if r.unusedTableW > 24 {
+			t.Errorf("%s: 数据列没有利用 %d px 的可用宽度", r.display.name, r.unusedTableW)
+		}
 	}
 	if len(reports) == 0 {
-		t.Fatal("没有量到任何显示组合")
+		t.Skip("本机工作区装不下任何待测显示组合")
 	}
 	if failed {
 		t.Errorf("有显示组合不满足:窗口放进工作区、发送框 ≥ %d 行、数据表 ≥ %d 行、控件不重叠不裁切", minSendLines, minTableRows)
@@ -174,8 +234,30 @@ func measureLayout(a *application, d layoutDisplay, work win.RECT, dpi int) layo
 	r.tableH, r.sendH = lg(tr.Bottom-tr.Top, dpi), lg(sr.Bottom-sr.Top, dpi)
 	r.sendLines = visibleLines(a.sendEdit.Handle(), work.Bottom)
 	r.tableRows = tableRowsPerPage(a.packetTable)
-	r.problems = layoutProblems(a, dpi)
+	used := 0
+	for i := 0; i < a.packetTable.Columns().Len(); i++ {
+		col := a.packetTable.Columns().At(i)
+		if col.Visible() {
+			used += col.Width()
+		}
+	}
+	r.unusedTableW = lg(tr.Right-tr.Left, dpi) - used
+	if a.packetTable.Columns().At(4).Width() > 80 {
+		r.problems = append(r.problems, "长度列占用了应留给报文的宽度")
+	}
+	r.problems = append(r.problems, layoutProblems(a, dpi)...)
 	return r
+}
+
+func TestLayoutDataDisplayModesUseAvailableWidth(t *testing.T) {
+	for index, name := range []string{"HEX + ASCII", "HEX", "ASCII"} {
+		t.Run(name, func(t *testing.T) {
+			runLayoutCases(t, nil, func(a *application) {
+				a.displayMode.SetCurrentIndex(index)
+				a.updateDisplay()
+			}, layoutDisplays[5:])
+		})
+	}
 }
 
 func threadDPIAwareness() string {
@@ -306,8 +388,9 @@ func isGroupBoxFrame(h win.HWND) bool {
 }
 
 // layoutProblems 检查所有可见控件:超出父控件客户区(被裁切)、同级互相重叠。
-// 落到工作区外由窗口的超出量统一体现,不再逐个控件列出。滚动面板的内容本来
-// 就比视口大;分组框的边框与标签页控件按设计与同级内容重叠,这几种不算问题。
+// 落到工作区外由窗口的超出量统一体现,不再逐个控件列出。滚动面板只纵向滚动,
+// 内容比视口高不算问题,比视口宽(含压在滚动条下)就是右侧被裁掉;分组框的
+// 边框与标签页控件按设计与同级内容重叠,这几种不算问题。
 func layoutProblems(a *application, dpi int) []string {
 	var problems []string
 	root := a.mw.Handle()
@@ -323,6 +406,15 @@ func layoutProblems(a *application, dpi int) []string {
 		}
 	}
 	const slack = 1
+	// 内层容器与面板同宽，右边距留给滚动条；逐个控件看是否伸到可视区外。
+	for sv := range scrollParents {
+		vr := clientRectOnScreen(sv)
+		for _, h := range childWindows(sv) {
+			if r := windowRect(h); win.IsWindowVisible(h) && win.GetParent(h) != sv && r.Right > r.Left && (r.Left < vr.Left-slack || r.Right > vr.Right+slack) {
+				problems = append(problems, "超出滚动面板可视宽度: "+describe(h, dpi))
+			}
+		}
+	}
 	for p, kids := range byParent {
 		pr := clientRectOnScreen(p)
 		for _, h := range kids {

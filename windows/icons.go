@@ -6,6 +6,7 @@ import (
 	"embed"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/lxn/walk"
 )
@@ -15,7 +16,20 @@ var iconFiles embed.FS
 var toolbarIcons = map[string]*walk.Icon{}
 
 func uiIcon(name string) *walk.Icon {
-	if icon := toolbarIcons[name]; icon != nil {
+	return sizedIcon(name, 24)
+}
+
+// smallIcon 取 .ico 自带的 16px 帧，放进状态栏这类约 20px 高的行里不会缩得发虚。
+func smallIcon(name string) *walk.Icon {
+	return sizedIcon(name, 16)
+}
+
+func sizedIcon(name string, px int) *walk.Icon {
+	key := name
+	if px != 24 {
+		key += "@" + strconv.Itoa(px)
+	}
+	if icon := toolbarIcons[key]; icon != nil {
 		return icon
 	}
 	if name == "app" {
@@ -25,7 +39,7 @@ func uiIcon(name string) *walk.Icon {
 		if err != nil {
 			icon = walk.IconApplication()
 		}
-		toolbarIcons[name] = icon
+		toolbarIcons[key] = icon
 		return icon
 	}
 	data, err := iconFiles.ReadFile("icons/" + name + ".ico")
@@ -44,10 +58,10 @@ func uiIcon(name string) *walk.Icon {
 	if os.WriteFile(path, data, 0600) != nil {
 		return nil
 	}
-	icon, err := walk.NewIconFromFileWithSize(path, walk.Size{Width: 24, Height: 24})
+	icon, err := walk.NewIconFromFileWithSize(path, walk.Size{Width: px, Height: px})
 	if err != nil {
 		return nil
 	}
-	toolbarIcons[name] = icon
+	toolbarIcons[key] = icon
 	return icon
 }

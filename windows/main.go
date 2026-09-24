@@ -26,6 +26,7 @@ type application struct {
 	loadingRecent                        bool
 	peerList                             *walk.ListBox
 	peerTitle, footer                    *walk.Label
+	footerIcon                           *walk.ImageView
 	displayMode                          *walk.ComboBox
 	autoScroll, showTime, clearAfterSend *walk.CheckBox
 	assistant                            *assistantPanel
@@ -81,6 +82,8 @@ type application struct {
 	timeFilter                            *walk.ComboBox
 	protocolFilter                        *walk.ComboBox
 	connectionFilter                      *walk.LineEdit
+	advancedFilters                       *walk.Composite
+	filterToggle                          *walk.PushButton
 	sendTarget                            *walk.ComboBox
 	udpTarget                             *walk.LineEdit
 	targets                               []wincore.ConnectionInfo
@@ -94,6 +97,7 @@ type application struct {
 	// 无条件 SetModel/SetText 会触发重排，而重排会把展开中的下拉列表强制收起。
 	lastTargetLabels, lastPeerLabels []string
 	lastFooter, lastPeerTitle        string
+	lastFooterIcon                   string
 	lastDetails, lastStatusText      string
 	connecting, sending              bool
 	closed                           atomic.Bool
@@ -842,6 +846,7 @@ func (a *application) applyFilter() {
 		dir = a.dirFilter.Text()
 	}
 	a.packetModel.refilter(kw, dir, a.sinceTime())
+	a.updateFilterToggle()
 	a.updatePacketStats()
 	a.updateSelectionLabel()
 }
@@ -859,6 +864,7 @@ func (a *application) clearFilter() {
 	if a.packetModel != nil {
 		a.packetModel.refilter("", dirAll, time.Time{})
 	}
+	a.updateFilterToggle()
 	a.updatePacketStats()
 	a.updateSelectionLabel()
 }
@@ -879,7 +885,7 @@ func (a *application) openMonitor() {
 					PushButton{Text: "清空", OnClicked: func() { _ = a.monitorEdit.SetText("") }},
 					PushButton{Text: "导出", OnClicked: func() { a.exportText(a.monitorEdit.Text(), "monitor-data", a.monitorWindow) }},
 				}},
-				TextEdit{AssignTo: &a.monitorEdit, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: fontMono, PointSize: sizeMono}},
+				TextEdit{AssignTo: &a.monitorEdit, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: fontMono, PointSize: sizeData}},
 			},
 		}).Create()
 		if err != nil {
@@ -897,14 +903,14 @@ func (a *application) openMonitor() {
 	a.monitorWindow.Show()
 }
 
-// 字体阶梯：正文与标题只差 1pt,避免分区标题过分抢眼;HEX 一律同字号,
-// 便于把数据表里的报文和发送框内容直接对照。
+// 数据文字比辅助表单大一级，收发、日志和独立监控窗口保持同字号。
 const (
 	fontUI    = "Microsoft YaHei UI"
 	fontMono  = "Consolas"
 	sizeBody  = 10
 	sizeTitle = 12
 	sizeMono  = 10
+	sizeData  = 12
 )
 
 // 分区标题(左栏「连接配置」、中栏「数据监控」、AI 面板)统一走这一个字体,
@@ -1024,6 +1030,7 @@ func (a *application) updateStatus(st wincore.Stats) {
 	parts = append(parts,
 		fmt.Sprintf("RX %s  TX %s", wincore.FormatBytes(st.RXBytes), wincore.FormatBytes(st.TXBytes)),
 		wincore.FormatBytes(rate)+"/s", elapsed)
+	a.updateFooterIcon()
 	if footer := strings.Join(parts, "  |  "); footer != a.lastFooter {
 		a.lastFooter = footer
 		a.footer.SetText(footer)
@@ -1080,7 +1087,7 @@ func (a *application) refreshSendHistory() {
 		return
 	}
 	cur := a.sendHistory.Text()
-	_ = a.sendHistory.SetModel(a.engine.RecentSends())
+	setDropDownItems(a.sendHistory, a.engine.RecentSends())
 	if cur != "" {
 		_ = a.sendHistory.SetText(cur)
 	}
@@ -1091,7 +1098,7 @@ func (a *application) refreshFavorites() {
 		return
 	}
 	cur := a.favorites.Text()
-	_ = a.favorites.SetModel(a.engine.FavoriteNames())
+	setDropDownItems(a.favorites, a.engine.FavoriteNames())
 	if cur != "" {
 		_ = a.favorites.SetText(cur)
 	}

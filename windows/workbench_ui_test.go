@@ -189,6 +189,44 @@ func TestWorkbenchStatisticsDescribeVisiblePacketsAndEvents(t *testing.T) {
 	}
 }
 
+func TestWorkbenchCollapsedFiltersRemainVisibleAndResettable(t *testing.T) {
+	a := newWorkbenchForTest(t)
+	a.mw.Show()
+	if a.advancedFilters.Visible() {
+		t.Fatal("advanced filters should initially leave room for data")
+	}
+	a.toggleAdvancedFilters()
+	if !a.advancedFilters.Visible() {
+		t.Fatal("advanced filters did not expand")
+	}
+	a.connectionFilter.SetText("peer-1")
+	a.toggleAdvancedFilters()
+	if a.advancedFilters.Visible() || a.filterToggle.Text() != "筛选已启用" {
+		t.Fatal("collapsed active filter must remain discoverable")
+	}
+	a.clearFilter()
+	if a.filterToggle.Text() != "更多筛选" || a.connectionFilter.Text() != "" {
+		t.Fatal("reset must clear the hidden filter and its active indicator")
+	}
+}
+
+func TestWorkbenchFooterIconFollowsMode(t *testing.T) {
+	a := newWorkbenchForTest(t)
+	for index := range modes {
+		a.mode.SetCurrentIndex(index)
+		for _, role := range []int{0, 1} {
+			a.role.SetCurrentIndex(role)
+			a.updateMode()
+			a.updateStatus(a.engine.Stats())
+			mode := a.uiMode()
+			want := smallIcon(modeIcons[mode])
+			if want == nil || a.footerIcon.Image() != want || a.footerIcon.ToolTipText() != string(mode) {
+				t.Fatalf("status bar icon does not follow %s", mode)
+			}
+		}
+	}
+}
+
 func TestWorkbenchSecondaryWindowsSurviveUnavailableIconCache(t *testing.T) {
 	a := newWorkbenchForTest(t)
 	blocked := filepath.Join(t.TempDir(), "not-a-directory")
