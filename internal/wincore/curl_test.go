@@ -220,3 +220,17 @@ func TestParseCURLAttachedShortValuesAndFlagClusters(t *testing.T) {
 		t.Fatalf("--json explicit type = %#v, %v", spec, err)
 	}
 }
+
+// 以 -s/-k/-L 等开头的选项值不能被当成组合短选项拆开。
+func TestParseCURLDashLeadingValuesAreNotFlags(t *testing.T) {
+	spec, err := ParseCURL(`curl -d '-sort=asc' --user '-L:pw' -H 'X-Q: -k' https://example.test/`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.Data) != 1 || spec.Data[0].Value != "-sort=asc" || spec.Auth == nil || spec.Auth.Username != "-L" || spec.Auth.Password != "pw" || spec.Headers.Get("X-Q") != "-k" {
+		t.Fatalf("spec = %#v", spec)
+	}
+	if spec.Insecure || spec.FollowRedirects {
+		t.Fatalf("value was parsed as a flag: %#v", spec)
+	}
+}

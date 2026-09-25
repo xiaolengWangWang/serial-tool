@@ -590,8 +590,25 @@ func (a *application) toggleTimer() {
 			case <-cancel:
 				return
 			case <-ticker.C:
+				// cancel 与 tick 同时就绪时 select 随机选,已停止的定时器仍可能再发一次。
+				select {
+				case <-cancel:
+					return
+				default:
+				}
 				if err := a.sendCaptured(input, asHex, eol, id, address); err != nil {
+					if a.closed.Load() {
+						return
+					}
 					a.mw.Synchronize(func() {
+						// 用户已停止或断开(断开必然让这次发送失败),或已开了新的定时器:
+						// 这时的失败是预期内的,不弹窗,也不能去停掉新的定时器。
+						a.timerMu.Lock()
+						current := a.timerCancel == cancel
+						a.timerMu.Unlock()
+						if !current {
+							return
+						}
 						a.stopTimer(true)
 						a.showError(fmt.Errorf("定时发送已停止: %w", err))
 					})

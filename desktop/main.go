@@ -632,21 +632,11 @@ func GoToggleLoop(input *C.char, asHex C.int, eol *C.char, count C.int, interval
 			default:
 			}
 			if n > 0 && cnt >= n {
-				loopMu.Lock()
-				if loopCancel == cancel {
-					loopCancel = nil
-				}
-				loopMu.Unlock()
-				C.UILoopDone()
+				finishLoop(cancel)
 				return
 			}
 			if err := engine.Send(inp, hex, e); err != nil {
-				loopMu.Lock()
-				if loopCancel == cancel {
-					loopCancel = nil
-				}
-				loopMu.Unlock()
-				C.UILoopDone()
+				finishLoop(cancel)
 				return
 			}
 			cnt++
@@ -658,6 +648,20 @@ func GoToggleLoop(input *C.char, asHex C.int, eol *C.char, count C.int, interval
 		}
 	}()
 	return C.CString("started")
+}
+
+// finishLoop 在循环自然结束或发送失败时收尾。只有仍是当前这一轮才通知界面:
+// 用户已停掉它并开了新循环时,旧循环晚到的收尾会把新循环的按钮错误复位。
+func finishLoop(cancel chan struct{}) {
+	loopMu.Lock()
+	current := loopCancel == cancel
+	if current {
+		loopCancel = nil
+	}
+	loopMu.Unlock()
+	if current {
+		C.UILoopDone()
+	}
 }
 
 //export GoSend

@@ -18,7 +18,6 @@ func ParseCURL(command string) (HTTPRequestSpec, error) {
 	if len(args) == 0 || args[0] != "curl" {
 		return HTTPRequestSpec{}, fmt.Errorf("command must start with curl")
 	}
-	args = expandCurlShortFlags(args)
 	spec := HTTPRequestSpec{Method: http.MethodGet, Headers: make(http.Header)}
 	methodSet, options, jsonBody := false, true, false
 	for i := 1; i < len(args); i++ {
@@ -26,6 +25,13 @@ func ParseCURL(command string) (HTTPRequestSpec, error) {
 		if options && arg == "--" {
 			options = false
 			continue
+		}
+		// 组合短选项(-sSL、-sXPOST)在这里逐个拆,只拆处在选项位置的参数:
+		// 被 need() 取走的选项值(-d '-sort=asc'、--user '-L:')不会走到这里。
+		if options && len(arg) > 2 && arg[0] == '-' && arg[1] != '-' && strings.IndexByte(curlShortNoArg, arg[1]) >= 0 {
+			args[i] = "-" + arg[2:] // 余下部分下一轮再处理
+			i--
+			arg = arg[:2]
 		}
 		if !options || !strings.HasPrefix(arg, "-") || arg == "-" {
 			if spec.URL != "" {
@@ -220,23 +226,6 @@ func curlOption(arg string) (name, value string, hasValue bool) {
 	return arg, "", false
 }
 
-// expandCurlShortFlags 把组合短选项拆开:-sSL → -s -S -L,-sXPOST → -s -XPOST。
-// 只在打头字母是无参数选项时拆,其余原样交给 curlOption。"--" 之后不再处理。
-func expandCurlShortFlags(args []string) []string {
-	out := make([]string, 0, len(args))
-	for i, arg := range args {
-		if arg == "--" {
-			return append(out, args[i:]...)
-		}
-		for len(arg) > 2 && arg[0] == '-' && arg[1] != '-' && strings.IndexByte(curlShortNoArg, arg[1]) >= 0 {
-			out = append(out, arg[:2])
-			arg = "-" + arg[2:]
-		}
-		out = append(out, arg)
-	}
-	return out
-}
-
 func curlSeconds(s string) (time.Duration, error) {
 	seconds, err := strconv.ParseFloat(s, 64)
 	if err != nil || seconds < 0 {
@@ -394,6 +383,9 @@ func FormatCURL(spec HTTPRequestSpec) (string, error) {
 	}
 	if spec.FollowRedirects {
 		parts = append(parts, "--location")
+	}
+	if strings.HasPrefix(spec.URL, "-") {
+		parts = append(parts, "--") // 否则导入时会把 URL 当成选项
 	}
 	return strings.Join(append(parts, curlQuote(spec.URL)), " "), nil
 }
