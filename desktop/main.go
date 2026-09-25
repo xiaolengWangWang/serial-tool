@@ -14,6 +14,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -683,6 +684,9 @@ const updateReleasesPage = "https://github.com/xiaolengWangWang/serial-tool/rele
 // 不带任何用户数据,老用户升级上来无需先去设置里打开。
 const settingAutoUpdate = "update.auto_check"
 
+// updateProgressInterval 是下载进度回报界面的最小间隔。
+const updateProgressInterval = 100 * time.Millisecond
+
 var (
 	updateMu     sync.Mutex
 	lastUpdate   wincore.UpdateInfo // 最近一次 GoCheckUpdate 的结果,供下载复用
@@ -767,6 +771,10 @@ func GoCheckUpdate() *C.char {
 //export GoDownloadUpdate
 func GoDownloadUpdate() *C.char {
 	updateMu.Lock()
+	if updateCancel != nil {
+		updateMu.Unlock()
+		return jsonCString(map[string]any{"ok": false, "error": "已有更新正在下载"})
+	}
 	info := lastUpdate
 	ctx, cancel := context.WithCancel(context.Background())
 	updateCancel = cancel
@@ -781,10 +789,18 @@ func GoDownloadUpdate() *C.char {
 	if info.AssetURL == "" {
 		return jsonCString(map[string]any{"ok": false, "error": "本次发布没有可下载的 macOS 安装包"})
 	}
+	// 每 64KB 回调一次,直接转发会把主线程队列灌满;限到约 10 次/秒,最后一块总会送达。
+	var lastReport time.Time
 	path, err := wincore.DownloadUpdate(ctx, info, updateDownloadDir(), func(done, total int64) {
-		C.UIUpdateProgress(C.longlong(done), C.longlong(total))
+		if now := time.Now(); now.Sub(lastReport) >= updateProgressInterval || (total > 0 && done >= total) {
+			lastReport = now
+			C.UIUpdateProgress(C.longlong(done), C.longlong(total))
+		}
 	})
 	if err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return jsonCString(map[string]any{"ok": false, "canceled": true})
+		}
 		return jsonCString(map[string]any{"ok": false, "error": err.Error()})
 	}
 	// DMG 双击挂载即用:直接 open 让 Finder 弹出,失败也不致命,包已经下好了。

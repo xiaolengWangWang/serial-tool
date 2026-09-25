@@ -365,6 +365,8 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
 
 // 监控窗口最多保留的条目数,超出丢最旧的,防止长时间跑吃内存。
 static const NSUInteger kMonitorMaxEntries = 5000;
+// 监控文本框的字符上限:增量追加与整表重绘共用,大包时条数上限不足以约束文本长度。
+static const NSUInteger kMonitorMaxChars = 400000;
 
 static NSString *humanBytes(long long n) {
     if (n < 1024) return [NSString stringWithFormat:@"%lld B", n];
@@ -1091,6 +1093,10 @@ static NSString *humanBytes(long long n) {
 // runUpdateCheck: manual 为真时即使已是最新/出错也弹窗;自动检查只在有新版本时打扰。
 - (void)runUpdateCheck:(BOOL)manual {
     if (_checkingUpdate) return;
+    if (_updateSheet) { // 正在下载时再查只会弹出一个点了也没用的"下载"按钮
+        if (manual) [self alert:@"正在下载更新,请等待完成或先取消。"];
+        return;
+    }
     _checkingUpdate = YES;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         char *raw = GoCheckUpdate();
@@ -1165,6 +1171,8 @@ static NSString *humanBytes(long long n) {
 
 // startUpdateDownload 弹出带进度条和取消按钮的 sheet,后台下载,完成后收尾。
 - (void)startUpdateDownload {
+    // 进度 sheet 只挡主窗口不挡菜单,下载中再次触发时不另起一次。
+    if (_updateSheet) return;
     _updateTotal = 0;
     NSWindow *sheet = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 420, 130)
         styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
@@ -1231,6 +1239,7 @@ static NSString *humanBytes(long long n) {
     _updateBar = nil;
     _updateStatus = nil;
 
+    if ([res[@"canceled"] boolValue]) return; // 用户主动取消,不当作失败弹窗
     if (![res[@"ok"] boolValue]) {
         NSString *err = res[@"error"] ?: @"下载失败";
         [self alert:[NSString stringWithFormat:@"更新失败:%@", err]];
@@ -2496,6 +2505,8 @@ static NSString *humanBytes(long long n) {
                 _httpStatus.stringValue = [NSString stringWithFormat:@"请求失败:%@", res[@"error"] ?: @"未知错误"];
                 return;
             }
+            [_httpRawBody release];
+            [_httpPrettyBody release];
             _httpRawBody = [res[@"rawBody"] ?: @"" copy];
             _httpPrettyBody = [res[@"body"] ?: @"" copy];
             _httpRespHeaders.string = res[@"headers"] ?: @"";
@@ -2621,10 +2632,19 @@ static NSString *humanBytes(long long n) {
 
 - (void)renderMonitor {
     if (!_monitorLog) return;
+    // 从最新往回取,攒够字符上限即停,避免大包时一次拼出十几 MB 文本卡住界面。
     NSString *kw = _monitorFilter.stringValue.lowercaseString;
-    NSMutableString *out = [NSMutableString string];
-    for (NSDictionary *e in _monitorEntries)
-        if ([self monitorEntryMatches:e filter:kw]) [out appendString:[self monitorLineForEntry:e]];
+    NSMutableArray *lines = [NSMutableArray array];
+    NSUInteger total = 0;
+    for (NSDictionary *e in [_monitorEntries reverseObjectEnumerator]) {
+        if (![self monitorEntryMatches:e filter:kw]) continue;
+        NSString *line = [self monitorLineForEntry:e];
+        if (total + line.length > kMonitorMaxChars && lines.count) break;
+        [lines addObject:line];
+        total += line.length;
+    }
+    NSMutableString *out = [NSMutableString stringWithCapacity:total];
+    for (NSString *line in [lines reverseObjectEnumerator]) [out appendString:line];
     [_monitorLog setString:out];
     [_monitorPending removeAllObjects];
     if (!_monitorPaused) [_monitorLog scrollRangeToVisible:NSMakeRange(_monitorLog.string.length, 0)];
@@ -2654,7 +2674,7 @@ static NSString *humanBytes(long long n) {
     [_monitorPending removeAllObjects];
     if (chunk.length) {
         [_monitorLog.textStorage appendAttributedString:[[[NSAttributedString alloc] initWithString:chunk] autorelease]];
-        capTextView(_monitorLog, 400000);
+        capTextView(_monitorLog, kMonitorMaxChars);
         if (!_monitorPaused) [_monitorLog scrollRangeToVisible:NSMakeRange(_monitorLog.string.length, 0)];
     }
 }

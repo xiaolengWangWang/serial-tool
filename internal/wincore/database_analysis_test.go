@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 const analysisStart = "2026-09-10T00:00:00Z"
@@ -168,6 +169,11 @@ func TestDatabaseAnalysisMillionRecordLimit(t *testing.T) {
 	if testing.Short() {
 		t.Skip("百万条压力测试使用非 short 模式单独验证")
 	}
+	// The race detector slows SQLite several-fold; the 30s product budget is not
+	// what this test verifies.
+	oldTimeout := analysisTimeout
+	analysisTimeout = 10 * time.Minute
+	t.Cleanup(func() { analysisTimeout = oldTimeout })
 	dir, name, db := analysisTestDB(t)
 	// One more than the requested ceiling verifies newest selection, not just
 	// acceptance of the option. Small packets stay below the payload cap.

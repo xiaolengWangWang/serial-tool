@@ -137,6 +137,9 @@ func (s *analysisSource) next() (analysisPacket, bool, error) {
 	return p, true, nil
 }
 
+// analysisTimeout 是单次数据库分析的总时限;压力测试在 -race 下会放宽。
+var analysisTimeout = 30 * time.Second
+
 func AnalyzeDatabase(dir, filename, start, end, direction string, limit int) (string, error) {
 	return AnalyzeDatabases(dir, []string{filename}, start, end, direction, limit)
 }
@@ -177,7 +180,7 @@ func AnalyzeDatabases(dir string, filenames []string, start, end, direction stri
 		}
 	}
 	sort.Strings(names)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), analysisTimeout)
 	defer cancel()
 	const filter = ` FROM (SELECT *, CASE WHEN source IN ('发送','NET→SERIAL','SERIAL→NET') OR source GLOB '虚拟串口 #[0-9]* 发送'
         THEN 'TX' ELSE 'RX' END AS capture_direction FROM received_data) r JOIN sessions s ON s.id = r.session_id
