@@ -47,8 +47,10 @@ var ErrVSerialDeveloping = errors.New("虚拟串口功能开发中,Windows 版�
 // makeRaw 便于测试注入 term.MakeRaw 的失败路径,默认即 term.MakeRaw。
 var makeRaw = term.MakeRaw
 
-// vDial 便于测试让拨号卡在半途,默认即 net.Dial。
-var vDial = net.Dial
+// vDial 便于测试让拨号卡在半途。带超时:目标不通时不必等系统默认的 75 秒才重试。
+var vDial = func(network, addr string) (net.Conn, error) {
+	return net.DialTimeout(network, addr, tcpDialTimeout)
+}
 
 // AddVirtualSerial 连接一个 TCP 端点并新建一个后台虚拟串口桥接,
 // 与主连接及其它桥接互不影响,可同时存在多个。设备常驻:TCP 断开会自动重连。

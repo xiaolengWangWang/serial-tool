@@ -53,6 +53,8 @@ int RunLayoutChecks(id delegate, NSString *directory);
     BOOL _databaseBusy;
     NSInteger _rxCount, _txCount;
     BOOL _connected;
+    BOOL _connecting;                    // 后台连接进行中,防止重复点击
+    BOOL _sending;                       // 后台手动发送进行中
     BOOL _monitorPaused;
     BOOL _displayPaused;              // 暂停显示：只冻结表格，接收与入库继续
     NSButton *_displayPauseButton;
@@ -1979,6 +1981,7 @@ static NSString *humanBytes(long long n) {
 }
 
 - (void)toggleConnect:(id)sender {
+    if (_connecting) return;
     if (_connected) {
         GoDisconnect();
         [self resetToDisconnected];
@@ -2007,35 +2010,51 @@ static NSString *humanBytes(long long n) {
     }
 
     BOOL hex = _hexView.state == NSControlStateValueOn;
-    char *err;
-    if (bridge) err = GoStartSerialServer((char *)serialName.UTF8String, _baud.intValue, _data.intValue, _stop.intValue,
-                                           (char *)_parity.stringValue.UTF8String,
-                                           (char *)_bridgeProtocol.titleOfSelectedItem.UTF8String,
-                                           (char *)_role.titleOfSelectedItem.UTF8String,
-                                           (char *)endpoint.UTF8String, hex);
-    else if ([mode isEqualToString:@"TCP"]) err = server ? GoListen((char *)endpoint.UTF8String, hex)
-                                                         : GoConnectTCP((char *)endpoint.UTF8String, hex);
-    else if ([mode isEqualToString:@"UDP"]) err = server ? GoListenUDP((char *)endpoint.UTF8String, hex)
-                                                         : GoConnectUDP((char *)endpoint.UTF8String, hex);
-    else if (http) err = GoConnectHTTP((char *)endpoint.UTF8String);
-    else err = GoConnect((char *)endpoint.UTF8String, _baud.intValue, _data.intValue, _stop.intValue,
-                         (char *)_parity.stringValue.UTF8String, hex);
-    NSString *message = [NSString stringWithUTF8String:err ?: ""]; free(err);
-    if (message.length) { [self refreshStats:nil]; [self alert:message]; return; }
-
-    _connected = YES; _mode.enabled = NO;
-    _ports.enabled = NO; _refresh.enabled = NO; _ip.enabled = NO; _port.enabled = NO;
-    _role.enabled = NO; _bridgeProtocol.enabled = NO;
-    for (NSControl *control in _serialControls) control.enabled = NO;
-    _connect.title = server ? @"停止监听" : @"断开";
-    NSString *modeDesc = net ? [NSString stringWithFormat:@"%@ %@", mode, _role.titleOfSelectedItem] : mode;
-    [self refreshStats:nil];
-    if (bridge)
-        [self appendText:[NSString stringWithFormat:@"[串口服务器已启动：%@ ↔ %@ %@ %@]\n", serialName,
-                          _bridgeProtocol.titleOfSelectedItem, _role.titleOfSelectedItem, endpoint]];
-    else
-        [self appendText:[NSString stringWithFormat:@"[%@ %@ %@]\n", server ? @"正在监听" : @"已连接", modeDesc, endpoint]];
-    [self reloadHistory];
+    // 参数在主线程取好;连接放到后台:TCP 拨号到不通的地址要等到超时,
+    // 同步调用会让整个窗口卡住转彩球。连接期间禁用按钮与模式切换,防止重复点击。
+    int baud = _baud.intValue, dataBits = _data.intValue, stopBits = _stop.intValue;
+    NSString *parity = _parity.stringValue ?: @"";
+    NSString *protocol = _bridgeProtocol.titleOfSelectedItem ?: @"";
+    NSString *role = _role.titleOfSelectedItem ?: @"";
+    _connecting = YES;
+    _connect.enabled = NO; _connect.title = @"连接中…"; _mode.enabled = NO;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        char *err;
+        if (bridge) err = GoStartSerialServer((char *)serialName.UTF8String, baud, dataBits, stopBits,
+                                               (char *)parity.UTF8String, (char *)protocol.UTF8String,
+                                               (char *)role.UTF8String, (char *)endpoint.UTF8String, hex);
+        else if ([mode isEqualToString:@"TCP"]) err = server ? GoListen((char *)endpoint.UTF8String, hex)
+                                                             : GoConnectTCP((char *)endpoint.UTF8String, hex);
+        else if ([mode isEqualToString:@"UDP"]) err = server ? GoListenUDP((char *)endpoint.UTF8String, hex)
+                                                             : GoConnectUDP((char *)endpoint.UTF8String, hex);
+        else if (http) err = GoConnectHTTP((char *)endpoint.UTF8String);
+        else err = GoConnect((char *)endpoint.UTF8String, baud, dataBits, stopBits, (char *)parity.UTF8String, hex);
+        NSString *message = [NSString stringWithUTF8String:err ?: ""]; free(err);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            _connecting = NO;
+            _connect.enabled = YES;
+            if (message.length) {
+                _mode.enabled = YES;
+                [self modeChanged:nil]; // 恢复按钮标题与控件状态
+                [self refreshStats:nil];
+                [self alert:message];
+                return;
+            }
+            _connected = YES; _mode.enabled = NO;
+            _ports.enabled = NO; _refresh.enabled = NO; _ip.enabled = NO; _port.enabled = NO;
+            _role.enabled = NO; _bridgeProtocol.enabled = NO;
+            for (NSControl *control in _serialControls) control.enabled = NO;
+            _connect.title = server ? @"停止监听" : @"断开";
+            NSString *modeDesc = net ? [NSString stringWithFormat:@"%@ %@", mode, role] : mode;
+            [self refreshStats:nil];
+            if (bridge)
+                [self appendText:[NSString stringWithFormat:@"[串口服务器已启动：%@ ↔ %@ %@ %@]\n", serialName,
+                                  protocol, role, endpoint]];
+            else
+                [self appendText:[NSString stringWithFormat:@"[%@ %@ %@]\n", server ? @"正在监听" : @"已连接", modeDesc, endpoint]];
+            [self reloadHistory];
+        });
+    });
 }
 
 - (NSString *)sendCurrentData {
@@ -2049,9 +2068,23 @@ static NSString *humanBytes(long long n) {
     return message;
 }
 
+// send: 手动发送放到后台:HTTP 模式要等响应(客户端超时 10 秒),TCP 对端不收时
+// 写入最多阻塞 5 秒,同步调用会卡住窗口。定时发送仍走 sendCurrentData。
 - (void)send:(id)sender {
-    NSString *message = [self sendCurrentData];
-    if (message.length) [self alert:message];
+    if (_sending) return;
+    BOOL http = [self isHTTPMode], hex = _hexSend.state == NSControlStateValueOn;
+    NSString *text = [[_send.string copy] autorelease];
+    NSString *eol = _eol.stringValue ?: @"";
+    _sending = YES;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        char *err = http ? GoHTTPRequest((char *)text.UTF8String)
+                         : GoSend((char *)text.UTF8String, hex, (char *)eol.UTF8String);
+        NSString *message = [NSString stringWithUTF8String:err ?: ""]; free(err);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            _sending = NO;
+            if (message.length) [self alert:message];
+        });
+    });
 }
 
 - (void)timerFired:(NSTimer *)timer {

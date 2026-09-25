@@ -31,6 +31,10 @@ const (
 	ModeHTTPClient   Mode = "HTTP 客户端"
 )
 
+// tcpDialTimeout 限制 TCP 客户端首次连接。目标不通(丢包不回 RST)时系统默认
+// 要等 75 秒左右(macOS 实测)才报超时,界面一直停在"正在连接"。
+const tcpDialTimeout = 10 * time.Second
+
 type Config struct {
 	Mode              Mode
 	SerialName        string
@@ -506,7 +510,7 @@ func (e *Engine) Connect(cfg Config) (connectErr error) {
 				listener, err = net.Listen("tcp", cfg.Address)
 			} else {
 				var client net.Conn
-				client, err = net.Dial("tcp", cfg.Address)
+				client, err = net.DialTimeout("tcp", cfg.Address, tcpDialTimeout)
 				if err == nil {
 					clients = append(clients, client)
 				}

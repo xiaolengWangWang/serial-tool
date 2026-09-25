@@ -453,12 +453,13 @@ func TestVirtualSerialRemoveDuringDial(t *testing.T) {
 	defer listener.Close()
 	dialing, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
+	oldDial := vDial
+	t.Cleanup(func() { vDial = oldDial })
 	vDial = func(network, addr string) (net.Conn, error) {
 		once.Do(func() { close(dialing) })
 		<-release
 		return net.Dial(network, addr)
 	}
-	t.Cleanup(func() { vDial = net.Dial })
 
 	engine, err := New(t.TempDir(), nil, func(string) {})
 	if err != nil {
