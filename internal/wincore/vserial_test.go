@@ -443,3 +443,43 @@ func waitVirtualConnected(t *testing.T, e *Engine, id int) {
 }
 
 // TestVirtualSerialMakeRawFailure 见 vserial_unix_test.go(仅 PTY 后端适用)。
+
+// 拨号还没返回时移除桥接,拨号随后成功的连接也必须被关掉,不能被后台协程接着用。
+func TestVirtualSerialRemoveDuringDial(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	dialing, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	vDial = func(network, addr string) (net.Conn, error) {
+		once.Do(func() { close(dialing) })
+		<-release
+		return net.Dial(network, addr)
+	}
+	t.Cleanup(func() { vDial = net.Dial })
+
+	engine, err := New(t.TempDir(), nil, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	info, err := engine.AddVirtualSerial(listener.Addr().String())
+	if err != nil {
+		t.Skipf("虚拟串口不可用: %v", err)
+	}
+	<-dialing
+	engine.RemoveVirtualSerial(info.ID)
+	close(release)
+
+	server, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	_ = server.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := server.Read(make([]byte, 1)); err == nil || isTimeout(err) {
+		t.Fatalf("桥接移除后拨通的连接未被关闭: %v", err)
+	}
+}

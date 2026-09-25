@@ -34,6 +34,16 @@ type Store struct {
 	endpoint   string
 	parameters string
 	captureKey string
+	// bg 是后台任务(虚拟串口)的会话,按调用方持有的句柄索引。会话行只存在于
+	// 当时的数据文件里,换文件后行 ID 失效,所以对外只给句柄,换文件时在新文件
+	// 重建会话行,否则后续数据会挂到不存在或别人的会话上。
+	bg    map[int64]*bgSession
+	bgSeq int64
+}
+
+type bgSession struct {
+	mode, endpoint, parameters string
+	rowID                      int64 // 当前数据文件里的 sessions.id
 }
 
 func OpenStore(dir string) (*Store, error) {
@@ -175,11 +185,21 @@ func (s *Store) rotateIfNeededLocked(now time.Time, incomingSize int64) error {
 	active := s.sessionID != 0
 	s.finishSessionLocked(now)
 	if s.db != nil {
+		for _, b := range s.bg {
+			_, _ = s.db.Exec(`UPDATE sessions SET ended_at = ? WHERE id = ?`, now.Format(time.RFC3339Nano), b.rowID)
+		}
 		_ = s.db.Close()
 		s.db = nil
 	}
 	if err := s.openFileLocked(now, date == s.date); err != nil {
 		return err
+	}
+	for _, b := range s.bg {
+		id, err := s.insertSessionRow(now, b.mode, b.endpoint, b.parameters)
+		if err != nil {
+			return err
+		}
+		b.rowID = id
 	}
 	if active {
 		return s.insertSessionLocked(now)
@@ -264,34 +284,52 @@ func (s *Store) insertSessionRow(now time.Time, mode, endpoint, parameters strin
 	return result.LastInsertId()
 }
 
-// NewSession 为后台任务(如虚拟串口)插入独立会话并返回 ID,不影响主连接的全局会话。
+// NewSession 为后台任务(如虚拟串口)插入独立会话并返回句柄(从 1 起),不影响
+// 主连接的全局会话。句柄跨数据文件轮换保持不变,不是 sessions 表的行 ID。
 func (s *Store) NewSession(mode, endpoint, parameters string) (int64, error) {
 	s.Lock()
 	defer s.Unlock()
-	return s.insertSessionRow(time.Now(), mode, endpoint, parameters)
+	if s.db == nil {
+		return 0, fmt.Errorf("数据库不可用")
+	}
+	id, err := s.insertSessionRow(time.Now(), mode, endpoint, parameters)
+	if err != nil {
+		return 0, err
+	}
+	if s.bg == nil {
+		s.bg = make(map[int64]*bgSession)
+	}
+	s.bgSeq++
+	s.bg[s.bgSeq] = &bgSession{mode: mode, endpoint: endpoint, parameters: parameters, rowID: id}
+	return s.bgSeq, nil
 }
 
-// EndSessionID 结束指定会话。
-func (s *Store) EndSessionID(id int64) {
+// EndSessionID 结束 NewSession 返回的后台会话。
+func (s *Store) EndSessionID(handle int64) {
 	s.Lock()
 	defer s.Unlock()
-	if s.db == nil || id == 0 {
+	b := s.bg[handle]
+	if b == nil {
 		return
 	}
-	_, _ = s.db.Exec(`UPDATE sessions SET ended_at = ? WHERE id = ?`, time.Now().Format(time.RFC3339Nano), id)
+	delete(s.bg, handle)
+	if s.db != nil {
+		_, _ = s.db.Exec(`UPDATE sessions SET ended_at = ? WHERE id = ?`, time.Now().Format(time.RFC3339Nano), b.rowID)
+	}
 }
 
-// ReceivedForSession 把一条报文写入指定会话(用于后台任务如虚拟串口)。
-func (s *Store) ReceivedForSession(sessionID int64, source string, data []byte) error {
+// ReceivedForSession 把一条报文写入 NewSession 返回的后台会话(用于虚拟串口)。
+func (s *Store) ReceivedForSession(handle int64, source string, data []byte) error {
 	s.Lock()
 	defer s.Unlock()
-	if s.db == nil || sessionID == 0 {
+	if s.db == nil || s.bg[handle] == nil {
 		return nil
 	}
 	now := time.Now()
 	if err := s.rotateIfNeededLocked(now, int64(len(data))); err != nil {
 		return err
 	}
+	sessionID := s.bg[handle].rowID // 轮换后已指向新文件里的会话行
 	validUTF8 := utf8.Valid(data)
 	textData := string(data)
 	if !validUTF8 {

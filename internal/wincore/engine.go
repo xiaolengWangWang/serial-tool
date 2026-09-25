@@ -103,6 +103,13 @@ func (e *Engine) SetOnClosed(fn func()) {
 	e.Unlock()
 }
 
+// markPassiveClosed 在被动断开、已记下真实原因之后把状态置为未连接。两端 UI
+// 收到 onClosed 都会再调 Disconnect 收尾,若状态仍是已连接,Disconnect 会再补
+// 一条"用户在本程序上断开",与刚记下的对端断开/监听错误自相矛盾。
+func (e *Engine) markPassiveClosed() {
+	atomic.StoreInt32(&e.state, int32(StateDisconnected))
+}
+
 func (e *Engine) notifyClosed() {
 	e.Lock()
 	fn := e.onClosed
@@ -713,6 +720,7 @@ func (e *Engine) acceptLoop(listener net.Listener, epoch uint64) {
 				msg := "TCP 监听错误: " + err.Error()
 				e.emitLog(msg)
 				e.recordEvent(msg)
+				e.markPassiveClosed()
 				e.notifyClosed()
 			}
 			return
@@ -772,6 +780,7 @@ func (e *Engine) readTCP(connection *trackedConnection) {
 					e.emitLog("TCP 连接断开,自动重连中...")
 					go e.reconnectTCP(connection.epoch, stop)
 				} else {
+					e.markPassiveClosed()
 					e.notifyClosed()
 				}
 			}
@@ -848,6 +857,7 @@ func (e *Engine) readUDP(conn *net.UDPConn, epoch uint64) {
 				msg := "UDP 监听错误: " + err.Error()
 				e.emitLog(msg)
 				e.recordEvent(msg)
+				e.markPassiveClosed()
 				e.notifyClosed()
 			}
 			return

@@ -47,6 +47,9 @@ var ErrVSerialDeveloping = errors.New("虚拟串口功能开发中,Windows 版�
 // makeRaw 便于测试注入 term.MakeRaw 的失败路径,默认即 term.MakeRaw。
 var makeRaw = term.MakeRaw
 
+// vDial 便于测试让拨号卡在半途,默认即 net.Dial。
+var vDial = net.Dial
+
 // AddVirtualSerial 连接一个 TCP 端点并新建一个后台虚拟串口桥接,
 // 与主连接及其它桥接互不影响,可同时存在多个。设备常驻:TCP 断开会自动重连。
 func (e *Engine) AddVirtualSerial(addr string) (VSerialInfo, error) {
@@ -122,7 +125,17 @@ func (e *Engine) vDialLoop(b *vBridge) {
 		if conn == nil {
 			return // stop 已关闭,桥接被移除
 		}
+		// 拨号可能阻塞很久,期间桥接可能已被移除。RemoveVirtualSerial 先关 stop
+		// 再在 b.mu 下取走 conn,这里在同一把锁下查 stop:要么被它取走关掉,
+		// 要么这里看到已停止自己关掉,不会留下没人关的连接。
 		b.mu.Lock()
+		select {
+		case <-b.stop:
+			b.mu.Unlock()
+			_ = conn.Close()
+			return
+		default:
+		}
 		b.conn = conn
 		b.mu.Unlock()
 		e.emitLog(fmt.Sprintf("虚拟串口 #%d 已连接 %s", b.id, b.addr))
@@ -166,7 +179,7 @@ func (e *Engine) vDialLoop(b *vBridge) {
 // vConnect 建立到 b.addr 的 TCP 连接;失败则每 2s 重试。返回 nil 表示桥接已被移除。
 func (e *Engine) vConnect(b *vBridge) net.Conn {
 	for {
-		c, err := net.Dial("tcp", b.addr)
+		c, err := vDial("tcp", b.addr)
 		if err == nil {
 			return c
 		}

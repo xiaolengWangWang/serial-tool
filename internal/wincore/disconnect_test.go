@@ -241,3 +241,41 @@ func TestManualDisconnectOfIdleServerIsReportedAsServer(t *testing.T) {
 		})
 	}
 }
+
+// 两端 UI 收到 onClosed 都会调 Disconnect 收尾;对端关闭后不能再补一条"用户在本程序上断开"。
+func TestPassiveCloseThenUIDisconnectIsNotReportedAsUser(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	sink := &logSink{}
+	engine, err := New(t.TempDir(), nil, sink.add)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	closed := make(chan struct{})
+	engine.SetOnClosed(func() { engine.Disconnect(); close(closed) })
+	if err := engine.Connect(Config{Mode: ModeTCPClient, Address: listener.Addr().String()}); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("onClosed not called")
+	}
+	sink.wait(t, "服务端断开")
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	for _, line := range sink.lines {
+		if strings.Contains(line, "用户在本程序上断开") {
+			t.Errorf("对端关闭后误报用户断开: %s", line)
+		}
+	}
+}

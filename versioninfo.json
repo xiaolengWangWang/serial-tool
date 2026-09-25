@@ -1,7 +1,7 @@
 {
   "FixedFileInfo": {
-    "FileVersion": {"Major": 0, "Minor": 9, "Patch": 8, "Build": 0},
-    "ProductVersion": {"Major": 0, "Minor": 9, "Patch": 8, "Build": 0},
+    "FileVersion": {"Major": 0, "Minor": 9, "Patch": 9, "Build": 0},
+    "ProductVersion": {"Major": 0, "Minor": 9, "Patch": 9, "Build": 0},
     "FileFlagsMask": "3f",
     "FileFlags": "00",
     "FileOS": "040004",
@@ -10,11 +10,11 @@
   },
   "StringFileInfo": {
     "FileDescription": "CommBox 命令行",
-    "FileVersion": "0.9.8",
+    "FileVersion": "0.9.9",
     "InternalName": "CommBox-CLI.exe",
     "OriginalFilename": "CommBox-CLI.exe",
     "ProductName": "CommBox",
-    "ProductVersion": "0.9.8"
+    "ProductVersion": "0.9.9"
   },
   "VarFileInfo": {
     "Translation": {"LangID": "0804", "CharsetID": "04B0"}

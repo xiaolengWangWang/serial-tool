@@ -31,11 +31,16 @@ type side struct {
 	// pending 是已从 inbox 取出、但还没成功写给本端的数据。
 	// 写失败时保留在这里等下次重试,避免「取出即丢失」。
 	pending []byte
+
+	// purgeGen 每次「清空 Buffer」加一。pending 只归 writeLoop 访问,清空时
+	// 不能直接动它,writeLoop 发现代数变了就自己丢掉 pending,记入 pendingDropped。
+	purgeGen       atomic.Uint64
+	pendingDropped atomic.Uint64
 }
 
 func (s *side) stats() (used, capacity int, dropped uint64) {
 	st := s.inbox.Stats()
-	return st.Used, st.Capacity, st.Dropped
+	return st.Used, st.Capacity, st.Dropped + s.pendingDropped.Load()
 }
 
 // Pair 是一对相互连通的虚拟串口,例如 COM10 ⇄ COM11。
@@ -138,6 +143,7 @@ func (p *Pair) readLoop(from, peer *side) {
 func (p *Pair) writeLoop(to *side) {
 	defer p.wg.Done()
 	buf := make([]byte, relayChunk)
+	var gen uint64 // pending 取出时的清空代数
 
 	for !p.stopping() {
 		if len(to.pending) == 0 {
@@ -146,6 +152,14 @@ func (p *Pair) writeLoop(to *side) {
 				return // 缓存关闭,拆除中
 			}
 			to.pending = buf[:n]
+			gen = to.purgeGen.Load()
+		}
+		if g := to.purgeGen.Load(); g != gen {
+			// 取出后、送达前被「清空 Buffer」:这部分也属于待传数据,一并丢弃。
+			to.pendingDropped.Add(uint64(len(to.pending)))
+			to.pending = nil
+			gen = g
+			continue
 		}
 
 		n, err := to.dev.write(to.pending)
@@ -214,7 +228,10 @@ func (p *Pair) Close() {
 }
 
 // PurgeBuffers 清空两个方向的待传数据,返回丢弃的总字节数(规格 2.7「清空 Buffer」)。
+// 已取出等待重试的 pending 由 writeLoop 随后丢弃,计入统计但不在返回值里。
 func (p *Pair) PurgeBuffers() int {
+	p.a.purgeGen.Add(1)
+	p.b.purgeGen.Add(1)
 	return p.a.inbox.Purge() + p.b.inbox.Purge()
 }
 
