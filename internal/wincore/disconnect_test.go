@@ -279,3 +279,55 @@ func TestPassiveCloseThenUIDisconnectIsNotReportedAsUser(t *testing.T) {
 		}
 	}
 }
+
+// 断开汇总写的是"本次连接"的收发量,不能带上之前连接的累计值。
+func TestDisconnectSummaryCountsOnlyThisSession(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() { _, _ = io.Copy(io.Discard, conn) }()
+		}
+	}()
+	sink := &logSink{}
+	engine, err := New(t.TempDir(), nil, sink.add)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	for round := 1; round <= 2; round++ {
+		if err := engine.Connect(Config{Mode: ModeTCPClient, Address: listener.Addr().String()}); err != nil {
+			t.Fatal(err)
+		}
+		if round == 1 {
+			if err := engine.Send(strings.Repeat("A", 1000), false, ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+		engine.Disconnect()
+	}
+	var summaries []string
+	sink.mu.Lock()
+	for _, line := range sink.lines {
+		if strings.HasPrefix(line, "连接已断开") {
+			summaries = append(summaries, line)
+		}
+	}
+	sink.mu.Unlock()
+	if len(summaries) != 2 {
+		t.Fatalf("summaries = %q", summaries)
+	}
+	if !strings.Contains(summaries[0], "发 1000 B/1 帧") {
+		t.Errorf("第一次连接应发 1000 B: %s", summaries[0])
+	}
+	if !strings.Contains(summaries[1], "发 0 B/0 帧") {
+		t.Errorf("第二次连接没有发送,不应带上上次的收发: %s", summaries[1])
+	}
+}

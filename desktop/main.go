@@ -28,6 +28,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	"serial-tool/internal/wincore"
@@ -345,6 +346,17 @@ func GoAIAnalyze(transport, hex *C.char) *C.char {
 	return C.CString(deepseekChat(prompt))
 }
 
+// truncateUTF8 截到最多 n 字节,退到字符边界,不把中文切成半个字。
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
 //export GoAIAnalyzeReport
 func GoAIAnalyzeReport(report *C.char) *C.char {
 	text := strings.TrimSpace(C.GoString(report))
@@ -353,7 +365,7 @@ func GoAIAnalyzeReport(report *C.char) *C.char {
 	}
 	const maxReport = 32 * 1024
 	if len(text) > maxReport {
-		text = text[:maxReport] + "\n……（报告过长，已截断）"
+		text = truncateUTF8(text, maxReport) + "\n……（报告过长，已截断）"
 	}
 	prompt := fmt.Sprintf("以下是本地 SQLite 采集数据的分析报告，含统计与逐条 HEX 报文解析。请据此做协议识别、异常定位、风险评估与现场排查建议；只依据报告内容，不确定时明确说明，不臆测未给出的参数。\n\n%s", text)
 	return C.CString(deepseekChat(prompt))

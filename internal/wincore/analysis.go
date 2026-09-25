@@ -66,16 +66,20 @@ func appendDataTypeReport(out *strings.Builder, data []byte) {
 	if len(data) < 4 {
 		return
 	}
-	orders := map[string][]byte{
-		"ABCD": data[:4], "BADC": {data[1], data[0], data[3], data[2]},
-		"CDAB": {data[2], data[3], data[0], data[1]}, "DCBA": {data[3], data[2], data[1], data[0]},
+	// 用切片固定顺序:遍历 map 顺序随机,同一帧每次分析的输出会不一样。
+	orders := []struct {
+		name  string
+		bytes []byte
+	}{
+		{"ABCD", data[:4]}, {"BADC", []byte{data[1], data[0], data[3], data[2]}},
+		{"CDAB", []byte{data[2], data[3], data[0], data[1]}}, {"DCBA", []byte{data[3], data[2], data[1], data[0]}},
 	}
 	fmt.Fprintf(out, "UInt32/Float32 候选：\n")
-	for name, b := range orders {
-		bits := binary.BigEndian.Uint32(b)
+	for _, o := range orders {
+		bits := binary.BigEndian.Uint32(o.bytes)
 		value := math.Float32frombits(bits)
 		if !math.IsNaN(float64(value)) && !math.IsInf(float64(value), 0) {
-			fmt.Fprintf(out, "  %s：UInt32=%d，Float32=%g\n", name, bits, value)
+			fmt.Fprintf(out, "  %s：UInt32=%d，Float32=%g\n", o.name, bits, value)
 		}
 	}
 }

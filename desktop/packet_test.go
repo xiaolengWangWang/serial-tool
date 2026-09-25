@@ -6,6 +6,7 @@ import (
 	"serial-tool/internal/wincore"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestPacketDisplayFields(t *testing.T) {
@@ -31,5 +32,14 @@ func TestPacketModelPreservesEvidence(t *testing.T) {
 	}
 	if got["status"] != "未分析" {
 		t.Fatalf("unverified packet status: %#v", got)
+	}
+}
+
+func TestTruncateUTF8KeepsWholeCharacters(t *testing.T) {
+	s := "报告ABC" // 报、告各 3 字节
+	for n, want := range map[int]string{0: "", 1: "", 3: "报", 4: "报", 5: "报", 6: "报告", 7: "报告A", 100: s} {
+		if got := truncateUTF8(s, n); got != want || !utf8.ValidString(got) {
+			t.Errorf("truncateUTF8(%q, %d) = %q, want %q", s, n, got, want)
+		}
 	}
 }

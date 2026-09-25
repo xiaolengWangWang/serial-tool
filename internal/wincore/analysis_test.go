@@ -48,3 +48,21 @@ func TestAnalyzeTransportPacketTCPUDP(t *testing.T) {
 		t.Fatalf("UDP report = %q", udp)
 	}
 }
+
+// 同一帧反复分析,报告必须逐字相同,字节序候选按 ABCD/BADC/CDAB/DCBA 排列。
+func TestAnalyzeDataTypesDeterministic(t *testing.T) {
+	first := AnalyzeHexPacket("41 20 00 00 3F 80")
+	for i := 0; i < 50; i++ {
+		if got := AnalyzeHexPacket("41 20 00 00 3F 80"); got != first {
+			t.Fatalf("report changed between runs:\n%s\n---\n%s", first, got)
+		}
+	}
+	last := -1
+	for _, name := range []string{"ABCD：", "BADC：", "CDAB：", "DCBA："} {
+		i := strings.Index(first, name)
+		if i < 0 || i < last {
+			t.Fatalf("byte orders out of order in:\n%s", first)
+		}
+		last = i
+	}
+}

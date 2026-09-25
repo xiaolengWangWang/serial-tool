@@ -93,6 +93,37 @@ type Engine struct {
 	histMu            sync.Mutex
 	favorites         map[string]string
 	sendHistory       []string
+	// sessionBase 是本次 Connect 时各计数的值。状态栏按 README 显示本次应用运行
+	// 累计,断开汇总写的却是"本次连接"的时长与收发,须减去这个基线。
+	sessionBase trafficCounters
+}
+
+type trafficCounters struct {
+	rxBytes, txBytes, rxCount, txCount, serialRX, serialTX uint64
+}
+
+func (e *Engine) loadTraffic() trafficCounters {
+	return trafficCounters{
+		rxBytes:  atomic.LoadUint64(&e.rxBytes),
+		txBytes:  atomic.LoadUint64(&e.txBytes),
+		rxCount:  atomic.LoadUint64(&e.rxCount),
+		txCount:  atomic.LoadUint64(&e.txCount),
+		serialRX: atomic.LoadUint64(&e.serialRXBytes),
+		serialTX: atomic.LoadUint64(&e.serialTXBytes),
+	}
+}
+
+// sessionTrafficLocked 返回本次连接以来的收发量,调用方须持有 e.Lock。
+func (e *Engine) sessionTrafficLocked() trafficCounters {
+	now, base := e.loadTraffic(), e.sessionBase
+	return trafficCounters{
+		rxBytes:  now.rxBytes - base.rxBytes,
+		txBytes:  now.txBytes - base.txBytes,
+		rxCount:  now.rxCount - base.rxCount,
+		txCount:  now.txCount - base.txCount,
+		serialRX: now.serialRX - base.serialRX,
+		serialTX: now.serialTX - base.serialTX,
+	}
 }
 
 // SetOnClosed 注册"连接被动断开"回调(远端关闭、串口拔出、监听出错等,
@@ -417,6 +448,7 @@ func (e *Engine) Connect(cfg Config) (connectErr error) {
 	e.Disconnect()
 	e.Lock()
 	captureKey := fmt.Sprintf("%s-%d", e.idPrefix, e.epoch)
+	e.sessionBase = e.loadTraffic()
 	e.Unlock()
 	e.store.SetCaptureKey(captureKey)
 	atomic.StoreInt32(&e.state, int32(StateConnecting))
@@ -593,6 +625,7 @@ func (e *Engine) Disconnect() {
 	e.serialNote = ""
 	e.latestConnection = ""
 	e.httpURL, e.httpClient = "", nil
+	traffic := e.sessionTrafficLocked()
 	e.Unlock()
 	if stop != nil {
 		close(stop)
@@ -602,14 +635,13 @@ func (e *Engine) Disconnect() {
 		started := time.Unix(0, atomic.LoadInt64(&e.startedAt))
 		var msg string
 		if mode == ModeSerial {
-			msg = serialDisconnectLine(serialEndpoint, time.Since(started),
-				atomic.LoadUint64(&e.serialRXBytes), atomic.LoadUint64(&e.serialTXBytes), reason)
+			msg = serialDisconnectLine(serialEndpoint, time.Since(started), traffic.serialRX, traffic.serialTX, reason)
 		} else {
 			msg = disconnectLine("连接已断开", remote, inbound, time.Since(started), disconnectStats{
-				RXBytes: atomic.LoadUint64(&e.rxBytes),
-				TXBytes: atomic.LoadUint64(&e.txBytes),
-				RXCount: atomic.LoadUint64(&e.rxCount),
-				TXCount: atomic.LoadUint64(&e.txCount),
+				RXBytes: traffic.rxBytes,
+				TXBytes: traffic.txBytes,
+				RXCount: traffic.rxCount,
+				TXCount: traffic.txCount,
 			}, reason)
 		}
 		e.emitLog(msg)
@@ -889,6 +921,7 @@ func (e *Engine) readSerial(p io.ReadWriteCloser, epoch uint64) {
 			e.Lock()
 			active := e.port == p && e.epoch == epoch
 			endpoint := e.serialEndpoint
+			traffic := e.sessionTrafficLocked()
 			if active {
 				e.port = nil
 				atomic.StoreInt32(&e.state, int32(StateDisconnected))
@@ -897,7 +930,7 @@ func (e *Engine) readSerial(p io.ReadWriteCloser, epoch uint64) {
 			if active {
 				reason := classifySerialDisconnect(err, false)
 				msg := serialDisconnectLine(endpoint, time.Since(time.Unix(0, atomic.LoadInt64(&e.startedAt))),
-					atomic.LoadUint64(&e.serialRXBytes), atomic.LoadUint64(&e.serialTXBytes), reason)
+					traffic.serialRX, traffic.serialTX, reason)
 				e.emitLog(msg)
 				e.recordEvent(msg)
 				e.notifyClosed()
