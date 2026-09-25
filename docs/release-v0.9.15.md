@@ -52,3 +52,10 @@ Windows x64，解压后运行 `CommBox.exe`。发布包附带 VirtualCOM v0.2.2 
 - VirtualCOM 必须保持运行，并与 CommBox 位于同一用户登录会话；退出后端口会移除。Windows 10 和长时间运行尚未验收。
 - 本版只含 Windows 安装包。macOS 版仍为 v0.9.14，手动检查更新会看到 v0.9.15，但没有 macOS 安装包可下载，启动时也不会自动提示。
 - 程序未做商业代码签名。
+
+## 校验
+
+```
+1165af2cff702ff73fc4455018ac0fc2ea9b87d1a473b94c3198164d45ae3750  CommBox-0.9.15-Windows-x64.zip
+e1ce268a3f83059ea0848ec9b5466cef2b7cc6891fa245c9f2fe2a516e697f61  CommBox-0.9.15.exe
+```
