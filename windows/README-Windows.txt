@@ -15,7 +15,7 @@ CommBox（Windows 64 位）
 - 每条原始接收数据保存为 SQLite BLOB 和 UTF-8 字符串
 - SQLite 按日期和 100 MiB 自动分文件
 
-VirtualCOM（随包附带的免驱动虚拟串口，v0.2.0）：
+VirtualCOM（随包附带的免驱动虚拟串口，v0.2.2）：
 1. 双击 VirtualCOM-GUI.exe，创建一对端口（例如 COM10 ⇄ COM11），保持程序运行。
 2. 打开两个 CommBox 窗口，在「串口」模式点刷新，分别连接这一对的一端，即可双向收发。
 3. 命令行：VirtualCOM.exe run 创建串口对，CommBox-CLI.exe -list 查看端口，-port COM10 打开。
