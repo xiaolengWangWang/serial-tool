@@ -71,6 +71,10 @@ type application struct {
 	packetTable                           *walk.TableView
 	packetModel                           *packetTableModel
 	dataView                              *walk.Composite
+	monitorPane, dataSendPane             *walk.Composite
+	dataPane, sendPane, sendExtras        *walk.Composite
+	sendExtrasToggle                      *walk.PushButton
+	sendExtrasOpen, balancingSend         bool
 	viewData, viewLog                     *walk.RadioButton
 	loopCount                             *walk.LineEdit
 	loopButton                            *walk.PushButton
@@ -279,7 +283,7 @@ func (a *application) refreshPorts() {
 		return
 	}
 	current := a.ports.Text()
-	_ = a.ports.SetModel(ports)
+	setDropDownItems(a.ports, ports) // 端口名再长也不撑宽左栏。
 	for i, port := range ports {
 		if strings.EqualFold(current, port) {
 			_ = a.ports.SetCurrentIndex(i)
@@ -585,6 +589,7 @@ func (a *application) toggleTimer() {
 	a.timerMu.Unlock()
 	a.timerButton.SetText("停止定时")
 	a.interval.SetEnabled(false)
+	a.updateSendExtrasToggle()
 	a.appendLog(fmt.Sprintf("已开始定时发送: %d ms", milliseconds))
 	go func() {
 		ticker := time.NewTicker(time.Duration(milliseconds) * time.Millisecond)
@@ -635,6 +640,7 @@ func (a *application) stopTimer(logIt bool) {
 	if a.timerButton != nil {
 		a.timerButton.SetText("开始定时")
 		a.interval.SetEnabled(true)
+		a.updateSendExtrasToggle()
 	}
 	if logIt {
 		a.appendLog("已停止定时发送")
@@ -650,6 +656,7 @@ func (a *application) stopLoop() {
 	a.loopMu.Unlock()
 	if a.loopButton != nil && !a.loopButton.IsDisposed() {
 		a.loopButton.SetText("循环发送")
+		a.updateSendExtrasToggle()
 	}
 }
 
@@ -686,6 +693,7 @@ func (a *application) toggleLoopSend() {
 	a.loopCancel = cancel
 	a.loopMu.Unlock()
 	a.loopButton.SetText("停止循环")
+	a.updateSendExtrasToggle()
 	go func() {
 		var sendErr error
 		defer func() {
@@ -699,6 +707,7 @@ func (a *application) toggleLoopSend() {
 					a.loopMu.Unlock()
 					if current {
 						a.loopButton.SetText("循环发送")
+						a.updateSendExtrasToggle()
 						if sendErr != nil {
 							a.showError(sendErr)
 						} else {
@@ -1119,7 +1128,7 @@ func (a *application) refreshRecentConn() {
 		items[i] = fmt.Sprintf("%s %s", s.Mode, ep)
 	}
 	a.loadingRecent = true
-	_ = a.recentConn.SetModel(items)
+	setDropDownItems(a.recentConn, items) // 连接名再长也不撑宽左栏，展开的列表能看全。
 	_ = a.recentConn.SetCurrentIndex(-1)
 	a.loadingRecent = false
 }

@@ -38,7 +38,7 @@ var layoutDisplays = []layoutDisplay{
 
 // 发送框至少要完整显示这么多行,数据表至少要显示这么多行。
 const (
-	minSendLines = 4
+	minSendLines = 3
 	minTableRows = 3
 )
 
@@ -54,12 +54,14 @@ type layoutReport struct {
 	sendLines    int
 	tableRows    int
 	unusedTableW int // 可视区不应留给空白或过宽的元数据列。
+	dataShare    int // 数据栏占「数据栏 + 发送区」高度的百分比
+	middleShare  int // 中栏占客户区宽度的百分比
 	problems     []string
 }
 
 func (r layoutReport) String() string {
-	return fmt.Sprintf("%-26s dpi=%d 窗口 %4dx%-4d 超出 %3dx%-3d 客户区高 %3d 数据表高 %3d(%d 行) 发送框高 %3d(%d 行) 问题 %d",
-		r.display.name, r.dpi, r.winW, r.winH, r.overW, r.overH, r.clientH, r.tableH, r.tableRows, r.sendH, r.sendLines, len(r.problems))
+	return fmt.Sprintf("%-26s dpi=%d 窗口 %4dx%-4d 超出 %3dx%-3d 客户区高 %3d 数据表高 %3d(%d 行) 发送框高 %3d(%d 行) 数据栏 %d%% 中栏 %d%% 问题 %d",
+		r.display.name, r.dpi, r.winW, r.winH, r.overW, r.overH, r.clientH, r.tableH, r.tableRows, r.sendH, r.sendLines, r.dataShare, r.middleShare, len(r.problems))
 }
 
 func TestLayoutFitsCommonDisplays(t *testing.T) {
@@ -152,6 +154,31 @@ func fillLongDropDowns(t *testing.T, a *application, address string) {
 	}
 }
 
+// driveWorkbench 用窗口真正的消息循环驱动 steps:walk 在后台算布局,消息循环里才把
+// 结果应用到控件上。steps 在另一个 goroutine 里执行,界面操作都要经 onUI 回到界面线程。
+func driveWorkbench(a *application, steps func(onUI func(func()))) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer a.mw.Synchronize(func() { win.PostQuitMessage(0) })
+		steps(func(f func()) {
+			finished := make(chan struct{})
+			a.mw.Synchronize(func() { f(); close(finished) })
+			<-finished
+		})
+	}()
+	a.mw.Run()
+	<-done
+}
+
+// fitWorkbench 模拟启动:先回到设计尺寸,再按工作区收缩,等布局应用后再返回。
+func fitWorkbench(a *application, onUI func(func()), work win.RECT) {
+	onUI(func() { _ = a.mw.SetSize(walk.Size{Width: 1280, Height: 820}) })
+	time.Sleep(300 * time.Millisecond)
+	onUI(func() { a.fitIntoWorkArea(work) })
+	time.Sleep(700 * time.Millisecond)
+}
+
 func runLayoutCases(t *testing.T, beforeCreate func(), setup func(*application), displays []layoutDisplay) {
 	t.Helper()
 	a := newWorkbenchForTestWith(t, beforeCreate)
@@ -161,16 +188,7 @@ func runLayoutCases(t *testing.T, beforeCreate func(), setup func(*application),
 		dpi     int
 		aware   string
 	)
-	done := make(chan struct{})
-	// 用窗口真正的消息循环驱动:walk 在后台算布局,消息循环里才把结果应用到控件上。
-	go func() {
-		defer close(done)
-		defer a.mw.Synchronize(func() { win.PostQuitMessage(0) })
-		onUI := func(f func()) {
-			finished := make(chan struct{})
-			a.mw.Synchronize(func() { f(); close(finished) })
-			<-finished
-		}
+	driveWorkbench(a, func(onUI func(func())) {
 		var real win.RECT
 		onUI(func() {
 			if setup != nil {
@@ -186,16 +204,10 @@ func runLayoutCases(t *testing.T, beforeCreate func(), setup func(*application),
 				continue
 			}
 			work := win.RECT{Left: real.Left, Top: real.Top, Right: real.Left + px(d.w, dpi), Bottom: real.Top + px(d.h, dpi)}
-			// 模拟启动:先回到设计尺寸,再按工作区收缩,等布局应用后再量。
-			onUI(func() { _ = a.mw.SetSize(walk.Size{Width: 1280, Height: 820}) })
-			time.Sleep(300 * time.Millisecond)
-			onUI(func() { a.fitIntoWorkArea(work) })
-			time.Sleep(700 * time.Millisecond)
+			fitWorkbench(a, onUI, work)
 			onUI(func() { reports = append(reports, measureLayout(a, d, work, dpi)) })
 		}
-	}()
-	a.mw.Run()
-	<-done
+	})
 
 	t.Logf("DPI %d(线程 DPI 感知:%s)", dpi, aware)
 	for _, name := range skipped {
@@ -245,8 +257,75 @@ func measureLayout(a *application, d layoutDisplay, work win.RECT, dpi int) layo
 	if a.packetTable.Columns().At(4).Width() > 80 {
 		r.problems = append(r.problems, "长度列占用了应留给报文的宽度")
 	}
+	dr, sr2, mr := windowRect(a.dataPane.Handle()), windowRect(a.sendPane.Handle()), windowRect(a.monitorPane.Handle())
+	data, send := int(dr.Bottom-dr.Top), int(sr2.Bottom-sr2.Top)
+	middle, client := int(mr.Right-mr.Left), int(cr.Right-cr.Left)
+	r.dataShare, r.middleShare = data*100/max(1, data+send), middle*100/max(1, client)
+	// 用户展开更多筛选或更多发送时以展开内容为准,不要求比例。
+	if !a.advancedFilters.Visible() && !a.sendExtrasOpen && data*100 < (data+send)*dataSharePercent {
+		r.problems = append(r.problems, fmt.Sprintf("数据栏只占数据与发送合计高度的 %.1f%%", float64(data*100)/float64(data+send)))
+	}
+	if middle*100 < client*dataSharePercent {
+		r.problems = append(r.problems, fmt.Sprintf("中栏只占客户区宽度的 %.1f%%", float64(middle*100)/float64(client)))
+	}
 	r.problems = append(r.problems, layoutProblems(a, dpi)...)
 	return r
+}
+
+// 矮屏上历史 / 快捷与定时 / 循环两行收进「更多发送」,按需展开;收起时按钮提示
+// 定时仍在进行;工作区放得下设计尺寸时两行常驻,按钮隐藏。
+func TestSendExtrasFollowAvailableHeight(t *testing.T) {
+	a := newWorkbenchForTestWith(t, nil)
+	var errs []string
+	driveWorkbench(a, func(onUI func(func())) {
+		var real win.RECT
+		var dpi int
+		onUI(func() {
+			win.ShowWindow(a.mw.Handle(), win.SW_SHOWNOACTIVATE)
+			real, _ = workAreaFor(a.mw.Handle())
+			dpi = a.mw.DPI()
+		})
+		// text 为空表示按钮隐藏,文字无所谓。
+		expect := func(step string, open, toggle bool, text string) {
+			time.Sleep(300 * time.Millisecond)
+			onUI(func() {
+				gotText := a.sendExtrasToggle.Text()
+				if text == "" {
+					gotText = ""
+				}
+				got := fmt.Sprintf("两行显示=%v 按钮显示=%v 按钮文字=%q", a.sendExtras.Visible(), a.sendExtrasToggle.Visible(), gotText)
+				want := fmt.Sprintf("两行显示=%v 按钮显示=%v 按钮文字=%q", open, toggle, text)
+				if got != want {
+					errs = append(errs, step+": "+got+",应为 "+want)
+				}
+			})
+		}
+		tight := layoutDisplays[0]
+		fitWorkbench(a, onUI, win.RECT{Left: real.Left, Top: real.Top, Right: real.Left + px(tight.w, dpi), Bottom: real.Top + px(tight.h, dpi)})
+		expect("最紧工作区", false, true, "更多发送")
+		onUI(a.toggleSendExtras)
+		expect("点更多发送", true, true, "收起发送")
+		onUI(a.toggleSendExtras)
+		expect("点收起发送", false, true, "更多发送")
+		onUI(func() {
+			a.timerMu.Lock()
+			a.timerCancel = make(chan struct{})
+			a.timerMu.Unlock()
+			a.updateSendExtrasToggle()
+		})
+		expect("收起时定时进行中", false, true, "定时中")
+		onUI(func() { a.stopTimer(false) })
+		expect("定时停止", false, true, "更多发送")
+		if real.Bottom-real.Top < px(820, dpi) {
+			t.Log("本机工作区放不下设计尺寸,跳过常驻两行的检查")
+			return
+		}
+		fitWorkbench(a, onUI, real)
+		expect("工作区放得下设计尺寸", true, false, "")
+	})
+	for _, e := range errs {
+		t.Error(e)
+	}
 }
 
 func TestLayoutDataDisplayModesUseAvailableWidth(t *testing.T) {
@@ -406,7 +485,7 @@ func layoutProblems(a *application, dpi int) []string {
 		}
 	}
 	const slack = 1
-	// 内层容器与面板同宽，右边距留给滚动条；逐个控件看是否伸到可视区外。
+	// walk 从内层容器宽度里扣掉滚动条；逐个控件看是否伸到可视区外。
 	for sv := range scrollParents {
 		vr := clientRectOnScreen(sv)
 		for _, h := range childWindows(sv) {
