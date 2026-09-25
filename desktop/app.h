@@ -4,7 +4,7 @@
 void RunApp(void);
 void UIAppend(const char *text);
 void UIAppendLog(const char *text);
-void UIMonitorAppend(const char *text);
+void UIMonitorAppendJSON(const char *json);
 void UIConnectionClosed(void);
 // Update download progress; total may be 0 when unknown.
 void UIUpdateProgress(long long done, long long total);
@@ -29,6 +29,9 @@ char *GoStartSerialServer(char *serialName, int baud, int dataBits, int stopBits
                           char *protocol, char *role, char *address, int hexView);
 char *GoConnectHTTP(char *url);
 char *GoHTTPRequest(char *path);
+char *GoHTTPSend(char *specJSON);
+char *GoParseCURL(char *command);
+char *GoFormatCURL(char *specJSON);
 char *GoAddVSerial(char *address);
 void GoRemoveVSerial(int id);
 char *GoListVSerialLinks(void);

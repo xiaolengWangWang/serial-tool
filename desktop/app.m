@@ -72,9 +72,24 @@ int RunLayoutChecks(id delegate, NSString *directory);
     NSProgressIndicator *_updateBar;
     NSTextField *_updateStatus;
     long long _updateTotal;              // 当前下载总字节,0 表示未知
+    NSMutableArray *_monitorEntries;     // 监控条目 {ts,dir,conn,source,hex,ascii},限长
+    NSMutableArray *_monitorPending;     // 待批量刷新的新条目
+    BOOL _monitorFlushScheduled;         // 已排定一次批量刷新
+    NSTextField *_monitorFilter;         // 关键字过滤
+    NSButton *_monitorHexToggle;         // HEX / ASCII 切换
+    // HTTP 工作区
+    NSWindow *_httpWindow;
+    NSPopUpButton *_httpMethod;
+    NSComboBox *_httpURL;
+    NSTextField *_httpTimeout, *_httpConnect;
+    NSButton *_httpFollow, *_httpInsecure, *_httpPretty;
+    NSTextView *_httpHeaders, *_httpBody, *_httpCurl, *_httpRespBody, *_httpRespHeaders;
+    NSTextField *_httpStatus;
+    NSString *_httpRawBody, *_httpPrettyBody; // 用于“格式化 JSON”开关切换
+    BOOL _httpSending;
 }
 - (void)appendText:(NSString *)text;
-- (void)appendMonitorText:(NSString *)text;
+- (void)appendMonitorEntry:(NSDictionary *)entry;
 - (NSString *)sendCurrentData;
 - (void)stopTimer;
 - (void)addPacketWithTS:(NSString *)ts dir:(NSString *)dir hex:(NSString *)hex ascii:(NSString *)ascii kind:(NSString *)kind len:(NSInteger)len;
@@ -347,6 +362,9 @@ static void Submenu(NSMenu *mainMenu, NSString *title, NSMenu *submenu) {
     NSMenuItem *item = [mainMenu addItemWithTitle:title action:NULL keyEquivalent:@""];
     item.submenu = submenu;
 }
+
+// 监控窗口最多保留的条目数,超出丢最旧的,防止长时间跑吃内存。
+static const NSUInteger kMonitorMaxEntries = 5000;
 
 static NSString *humanBytes(long long n) {
     if (n < 1024) return [NSString stringWithFormat:@"%lld B", n];
@@ -655,14 +673,23 @@ static NSString *humanBytes(long long n) {
     dataItem.label = @"接收数据"; dataItem.view = dataContainer;
     [tabView addTabViewItem:dataItem];
 
-    NSScrollView *logScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 700, 290)] autorelease];
+    NSView *logContainer = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 700, 290)] autorelease];
+    logContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    NSButton *logClear = [NSButton buttonWithTitle:@"清空" target:self action:@selector(clearLog:)];
+    logClear.frame = NSMakeRect(430, 258, 80, 28); logClear.autoresizingMask = NSViewMinYMargin | NSViewMinXMargin; [logContainer addSubview:logClear];
+    NSButton *logCopy = [NSButton buttonWithTitle:@"复制" target:self action:@selector(copyLog:)];
+    logCopy.frame = NSMakeRect(520, 258, 80, 28); logCopy.autoresizingMask = NSViewMinYMargin | NSViewMinXMargin; [logContainer addSubview:logCopy];
+    NSButton *logExport = [NSButton buttonWithTitle:@"导出" target:self action:@selector(exportSysLog:)];
+    logExport.frame = NSMakeRect(610, 258, 80, 28); logExport.autoresizingMask = NSViewMinYMargin | NSViewMinXMargin; [logContainer addSubview:logExport];
+    NSScrollView *logScroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 700, 250)] autorelease];
     logScroll.borderType = NSBezelBorder; logScroll.hasVerticalScroller = YES;
     logScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _sysLog = [[NSTextView alloc] initWithFrame:logScroll.contentView.bounds];
     _sysLog.editable = NO; _sysLog.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
     _sysLog.autoresizingMask = NSViewWidthSizable; logScroll.documentView = _sysLog;
+    [logContainer addSubview:logScroll];
     NSTabViewItem *logItem = [[[NSTabViewItem alloc] initWithIdentifier:@"log"] autorelease];
-    logItem.label = @"日志"; logItem.view = logScroll;
+    logItem.label = @"日志"; logItem.view = logContainer;
     [tabView addTabViewItem:logItem];
 
     [view addSubview:tabView];
@@ -1011,6 +1038,7 @@ static NSString *humanBytes(long long n) {
     Item(actionMenu, @"刷新串口", @selector(refresh:), @"r", NSEventModifierFlagCommand);
     Item(actionMenu, @"虚拟串口映射", @selector(openVSerialManager:), @"v", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Item(actionMenu, @"连接管理", @selector(openConnectionsManager:), @"c", NSEventModifierFlagCommand | NSEventModifierFlagShift);
+    Item(actionMenu, @"HTTP 工作区", @selector(openHTTPWorkspace:), @"u", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Item(actionMenu, @"工具箱", @selector(openToolbox:), @"b", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Item(actionMenu, @"AI 增强分析设置", @selector(openAISettings:), @"i", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Item(actionMenu, @"继续追问 AI", @selector(aiFollowUp:), @"k", NSEventModifierFlagCommand | NSEventModifierFlagShift);
@@ -2344,6 +2372,183 @@ static NSString *humanBytes(long long n) {
     [_dataTable selectRowIndexes:indexes byExtendingSelection:NO];
 }
 
+// addHTTPTextView 在容器里放一个带边框、可滚动的等宽文本框并返回它。
+- (NSTextView *)addHTTPTextView:(NSView *)parent frame:(NSRect)frame editable:(BOOL)editable resizeH:(BOOL)resizeH {
+    NSScrollView *scroll = [[[NSScrollView alloc] initWithFrame:frame] autorelease];
+    scroll.borderType = NSBezelBorder; scroll.hasVerticalScroller = YES;
+    scroll.autoresizingMask = NSViewWidthSizable | (resizeH ? NSViewHeightSizable : NSViewMinYMargin);
+    NSTextView *tv = [[NSTextView alloc] initWithFrame:scroll.contentView.bounds];
+    tv.editable = editable;
+    tv.automaticQuoteSubstitutionEnabled = NO;
+    tv.automaticDashSubstitutionEnabled = NO;
+    tv.richText = NO;
+    tv.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
+    tv.autoresizingMask = NSViewWidthSizable;
+    scroll.documentView = tv;
+    [parent addSubview:scroll];
+    return tv;
+}
+
+- (void)openHTTPWorkspace:(id)sender {
+    if (!_httpWindow) {
+        _httpWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 820, 760)
+            styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
+            backing:NSBackingStoreBuffered defer:NO];
+        _httpWindow.title = @"HTTP 工作区";
+        _httpWindow.releasedWhenClosed = NO;
+        _httpWindow.contentMinSize = NSMakeSize(760, 640);
+        NSView *v = _httpWindow.contentView;
+
+        NSButton *send = [NSButton buttonWithTitle:@"发送请求" target:self action:@selector(httpSend:)];
+        send.frame = NSMakeRect(680, 716, 100, 28); send.keyEquivalent = @"\r";
+        send.autoresizingMask = NSViewMinYMargin | NSViewMinXMargin; [v addSubview:send];
+        _httpMethod = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(20, 716, 92, 26)];
+        [_httpMethod addItemsWithTitles:@[@"GET", @"POST", @"PUT", @"PATCH", @"DELETE", @"HEAD", @"OPTIONS"]];
+        _httpMethod.autoresizingMask = NSViewMinYMargin; [v addSubview:_httpMethod];
+        _httpURL = [[NSComboBox alloc] initWithFrame:NSMakeRect(118, 716, 554, 26)];
+        _httpURL.stringValue = @"http://127.0.0.1:8080/";
+        [_httpURL addItemWithObjectValue:@"http://127.0.0.1:8080/"];
+        _httpURL.autoresizingMask = NSViewMinYMargin | NSViewWidthSizable; [v addSubview:_httpURL];
+
+        NSTextField *tLabel = Label(@"总超时(s)", NSMakeRect(20, 686, 62, 20)); tLabel.autoresizingMask = NSViewMinYMargin; [v addSubview:tLabel];
+        _httpTimeout = [[NSTextField alloc] initWithFrame:NSMakeRect(84, 684, 48, 24)]; _httpTimeout.stringValue = @"30";
+        _httpTimeout.autoresizingMask = NSViewMinYMargin; [v addSubview:_httpTimeout];
+        NSTextField *cLabel = Label(@"连接超时(s)", NSMakeRect(144, 686, 78, 20)); cLabel.autoresizingMask = NSViewMinYMargin; [v addSubview:cLabel];
+        _httpConnect = [[NSTextField alloc] initWithFrame:NSMakeRect(224, 684, 48, 24)]; _httpConnect.stringValue = @"10";
+        _httpConnect.autoresizingMask = NSViewMinYMargin; [v addSubview:_httpConnect];
+        _httpFollow = [NSButton checkboxWithTitle:@"跟随重定向" target:nil action:nil];
+        _httpFollow.state = NSControlStateValueOn; _httpFollow.frame = NSMakeRect(288, 684, 110, 24);
+        _httpFollow.autoresizingMask = NSViewMinYMargin; [v addSubview:_httpFollow];
+        _httpInsecure = [NSButton checkboxWithTitle:@"跳过 TLS 证书验证" target:nil action:nil];
+        _httpInsecure.frame = NSMakeRect(404, 684, 170, 24);
+        _httpInsecure.autoresizingMask = NSViewMinYMargin; [v addSubview:_httpInsecure];
+
+        NSTextField *hLabel = Label(@"请求头(每行 Name: Value,可重复)", NSMakeRect(20, 658, 400, 20)); hLabel.textColor = NSColor.secondaryLabelColor; hLabel.autoresizingMask = NSViewMinYMargin; [v addSubview:hLabel];
+        _httpHeaders = [self addHTTPTextView:v frame:NSMakeRect(20, 566, 780, 86) editable:YES resizeH:NO];
+        _httpHeaders.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+
+        NSTextField *bLabel = Label(@"请求体", NSMakeRect(20, 540, 200, 20)); bLabel.textColor = NSColor.secondaryLabelColor; bLabel.autoresizingMask = NSViewMinYMargin; [v addSubview:bLabel];
+        _httpBody = [self addHTTPTextView:v frame:NSMakeRect(20, 448, 780, 86) editable:YES resizeH:NO];
+        _httpBody.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+
+        NSTextField *curlLabel = Label(@"cURL(仅解析,不执行 shell;导出可能含认证信息)", NSMakeRect(20, 422, 520, 20)); curlLabel.textColor = NSColor.secondaryLabelColor; curlLabel.autoresizingMask = NSViewMinYMargin; [v addSubview:curlLabel];
+        _httpCurl = [self addHTTPTextView:v frame:NSMakeRect(20, 356, 650, 60) editable:YES resizeH:NO];
+        _httpCurl.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+        NSButton *importCurl = [NSButton buttonWithTitle:@"导入请求" target:self action:@selector(httpImportCurl:)];
+        importCurl.frame = NSMakeRect(680, 386, 110, 28); importCurl.autoresizingMask = NSViewMinYMargin | NSViewMinXMargin; [v addSubview:importCurl];
+        NSButton *genCurl = [NSButton buttonWithTitle:@"生成 cURL" target:self action:@selector(httpGenerateCurl:)];
+        genCurl.frame = NSMakeRect(680, 352, 110, 28); genCurl.autoresizingMask = NSViewMinYMargin | NSViewMinXMargin; [v addSubview:genCurl];
+
+        _httpPretty = [NSButton checkboxWithTitle:@"格式化 JSON" target:self action:@selector(httpTogglePretty:)];
+        _httpPretty.state = NSControlStateValueOn; _httpPretty.frame = NSMakeRect(20, 20, 130, 24);
+        _httpPretty.autoresizingMask = NSViewMaxYMargin; [v addSubview:_httpPretty];
+        _httpStatus = Label(@"就绪;先在主窗口选择 HTTP 客户端并连接,再发送", NSMakeRect(160, 22, 640, 20));
+        _httpStatus.textColor = NSColor.secondaryLabelColor; _httpStatus.autoresizingMask = NSViewMaxYMargin | NSViewWidthSizable; [v addSubview:_httpStatus];
+
+        NSTabView *respTabs = [[[NSTabView alloc] initWithFrame:NSMakeRect(20, 52, 780, 290)] autorelease];
+        respTabs.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        NSView *bodyTab = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 760, 260)] autorelease];
+        bodyTab.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        _httpRespBody = [self addHTTPTextView:bodyTab frame:NSMakeRect(0, 0, 760, 260) editable:NO resizeH:YES];
+        NSTabViewItem *bi = [[[NSTabViewItem alloc] initWithIdentifier:@"rb"] autorelease]; bi.label = @"响应正文"; bi.view = bodyTab; [respTabs addTabViewItem:bi];
+        NSView *headTab = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 760, 260)] autorelease];
+        headTab.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        _httpRespHeaders = [self addHTTPTextView:headTab frame:NSMakeRect(0, 0, 760, 260) editable:NO resizeH:YES];
+        NSTabViewItem *hi = [[[NSTabViewItem alloc] initWithIdentifier:@"rh"] autorelease]; hi.label = @"响应头"; hi.view = headTab; [respTabs addTabViewItem:hi];
+        [v addSubview:respTabs];
+
+        [_httpWindow center];
+    }
+    [_httpWindow makeKeyAndOrderFront:nil];
+}
+
+// httpSpecJSON 把当前工作区控件收成请求参数 JSON。
+- (NSString *)httpSpecJSON {
+    NSDictionary *spec = @{
+        @"method": _httpMethod.titleOfSelectedItem ?: @"GET",
+        @"url": _httpURL.stringValue ?: @"",
+        @"headers": _httpHeaders.string ?: @"",
+        @"body": _httpBody.string ?: @"",
+        @"timeoutSec": @(_httpTimeout.doubleValue),
+        @"connectSec": @(_httpConnect.doubleValue),
+        @"follow": @(_httpFollow.state == NSControlStateValueOn),
+        @"insecure": @(_httpInsecure.state == NSControlStateValueOn),
+    };
+    NSData *d = [NSJSONSerialization dataWithJSONObject:spec options:0 error:NULL];
+    return [[[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] autorelease];
+}
+
+- (void)httpSend:(id)sender {
+    if (_httpSending) return;
+    _httpSending = YES;
+    _httpStatus.textColor = NSColor.secondaryLabelColor;
+    _httpStatus.stringValue = @"正在请求…";
+    NSString *specJSON = [self httpSpecJSON];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        char *raw = GoHTTPSend((char *)specJSON.UTF8String);
+        NSData *data = [[NSData alloc] initWithBytes:(raw ?: "{}") length:(raw ? strlen(raw) : 2)]; free(raw);
+        NSDictionary *r = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL]; [data release];
+        NSDictionary *res = [r isKindOfClass:[NSDictionary class]] ? r : @{};
+        dispatch_async(dispatch_get_main_queue(), ^{
+            _httpSending = NO;
+            if (![res[@"ok"] boolValue]) {
+                _httpStatus.textColor = NSColor.systemRedColor;
+                _httpStatus.stringValue = [NSString stringWithFormat:@"请求失败:%@", res[@"error"] ?: @"未知错误"];
+                return;
+            }
+            _httpRawBody = [res[@"rawBody"] ?: @"" copy];
+            _httpPrettyBody = [res[@"body"] ?: @"" copy];
+            _httpRespHeaders.string = res[@"headers"] ?: @"";
+            long code = [res[@"statusCode"] longValue];
+            _httpStatus.textColor = (code >= 200 && code < 400) ? NSColor.systemGreenColor : NSColor.systemOrangeColor;
+            _httpStatus.stringValue = [NSString stringWithFormat:@"%@ · 耗时 %@ ms · %@ 字节",
+                res[@"status"] ?: @"", res[@"durationMs"] ?: @0, humanBytes([res[@"size"] longLongValue])];
+            [self httpTogglePretty:nil];
+        });
+    });
+}
+
+- (void)httpTogglePretty:(id)sender {
+    BOOL pretty = _httpPretty.state == NSControlStateValueOn;
+    _httpRespBody.string = (pretty ? _httpPrettyBody : _httpRawBody) ?: @"";
+}
+
+- (void)httpImportCurl:(id)sender {
+    NSString *cmd = _httpCurl.string;
+    if (!cmd.length) { [self alert:@"请先在 cURL 框粘贴命令"]; return; }
+    char *raw = GoParseCURL((char *)cmd.UTF8String);
+    NSData *data = [[NSData alloc] initWithBytes:(raw ?: "{}") length:(raw ? strlen(raw) : 2)]; free(raw);
+    NSDictionary *r = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL]; [data release];
+    if (![r isKindOfClass:[NSDictionary class]] || ![r[@"ok"] boolValue]) {
+        [self alert:[NSString stringWithFormat:@"cURL 解析失败:%@", ([r isKindOfClass:[NSDictionary class]] ? r[@"error"] : nil) ?: @"格式错误"]];
+        return;
+    }
+    NSString *method = r[@"method"] ?: @"GET";
+    if ([_httpMethod itemWithTitle:method]) [_httpMethod selectItemWithTitle:method];
+    _httpURL.stringValue = r[@"url"] ?: @"";
+    _httpHeaders.string = r[@"headers"] ?: @"";
+    _httpBody.string = r[@"body"] ?: @"";
+    if ([r[@"timeoutSec"] doubleValue] > 0) _httpTimeout.stringValue = [NSString stringWithFormat:@"%g", [r[@"timeoutSec"] doubleValue]];
+    if ([r[@"connectSec"] doubleValue] > 0) _httpConnect.stringValue = [NSString stringWithFormat:@"%g", [r[@"connectSec"] doubleValue]];
+    _httpFollow.state = [r[@"follow"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
+    _httpInsecure.state = [r[@"insecure"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
+    _httpStatus.textColor = NSColor.secondaryLabelColor;
+    _httpStatus.stringValue = r[@"note"] ? r[@"note"] : @"已从 cURL 导入到请求";
+}
+
+- (void)httpGenerateCurl:(id)sender {
+    char *raw = GoFormatCURL((char *)[self httpSpecJSON].UTF8String);
+    NSData *data = [[NSData alloc] initWithBytes:(raw ?: "{}") length:(raw ? strlen(raw) : 2)]; free(raw);
+    NSDictionary *r = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL]; [data release];
+    if (![r isKindOfClass:[NSDictionary class]] || ![r[@"ok"] boolValue]) {
+        [self alert:[NSString stringWithFormat:@"生成 cURL 失败:%@", ([r isKindOfClass:[NSDictionary class]] ? r[@"error"] : nil) ?: @"未知错误"]];
+        return;
+    }
+    _httpCurl.string = r[@"curl"] ?: @"";
+    _httpStatus.textColor = NSColor.secondaryLabelColor;
+    _httpStatus.stringValue = @"已生成 cURL(可能含认证信息,请勿随意分享)";
+}
+
 - (void)openMonitor:(id)sender {
     if (!_monitorWindow) {
         _monitorWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 800, 500)
@@ -2353,8 +2558,14 @@ static NSString *humanBytes(long long n) {
         _monitorWindow.contentMinSize = NSMakeSize(800, 500);
         _monitorWindow.releasedWhenClosed = NO;
         NSView *view = _monitorWindow.contentView;
-        NSTextField *hint = Label(@"仅显示实时接收数据", NSMakeRect(20, 464, 220, 24));
-        hint.textColor = NSColor.secondaryLabelColor; [view addSubview:hint];
+        _monitorHexToggle = [NSButton checkboxWithTitle:@"HEX" target:self action:@selector(monitorViewChanged:)];
+        _monitorHexToggle.state = NSControlStateValueOn;
+        _monitorHexToggle.frame = NSMakeRect(20, 462, 60, 24); [view addSubview:_monitorHexToggle];
+        _monitorFilter = [[NSTextField alloc] initWithFrame:NSMakeRect(86, 460, 200, 26)];
+        [_monitorFilter.cell setPlaceholderString:@"过滤:关键字/RX/TX"];
+        _monitorFilter.target = self; _monitorFilter.action = @selector(monitorViewChanged:);
+        ((NSTextFieldCell *)_monitorFilter.cell).sendsActionOnEndEditing = YES;
+        [view addSubview:_monitorFilter];
         NSButton *database = [NSButton buttonWithTitle:@"数据库位置" target:self action:@selector(revealDatabase:)];
         database.frame = NSMakeRect(350, 460, 120, 30); database.autoresizingMask = NSViewMinXMargin; [view addSubview:database];
         NSButton *pause = [NSButton buttonWithTitle:@"暂停滚动" target:self action:@selector(toggleMonitorPause:)];
@@ -2371,6 +2582,7 @@ static NSString *humanBytes(long long n) {
         _monitorLog.autoresizingMask = NSViewWidthSizable; scroll.documentView = _monitorLog; [view addSubview:scroll];
         [_monitorWindow center];
     }
+    [self renderMonitor];
     [_monitorWindow makeKeyAndOrderFront:nil];
 }
 
@@ -2380,7 +2592,72 @@ static NSString *humanBytes(long long n) {
     if (!_monitorPaused) [_monitorLog scrollRangeToVisible:NSMakeRange(_monitorLog.string.length, 0)];
 }
 
-- (void)clearMonitor:(id)sender { [_monitorLog setString:@""]; }
+- (void)clearMonitor:(id)sender {
+    [_monitorEntries removeAllObjects];
+    [_monitorPending removeAllObjects];
+    [_monitorLog setString:@""];
+}
+
+// monitorViewChanged: 过滤词或 HEX/ASCII 变化时整表重绘。
+- (void)monitorViewChanged:(id)sender { [self renderMonitor]; }
+
+// monitorLineForEntry: 把一条报文按当前 HEX/ASCII 模式格式化成一行。
+- (NSString *)monitorLineForEntry:(NSDictionary *)e {
+    BOOL hex = _monitorHexToggle.state == NSControlStateValueOn;
+    NSString *payload = hex ? (e[@"hex"] ?: @"") : (e[@"ascii"] ?: @"");
+    return [NSString stringWithFormat:@"[%@ %@ %@ %@] %@\n",
+        e[@"ts"] ?: @"", e[@"dir"] ?: @"", e[@"connection_id"] ?: @"", e[@"source"] ?: @"", payload];
+}
+
+// monitorEntryMatches: 关键字对方向/来源/HEX/ASCII 任一命中即显示;空过滤全显示。
+- (BOOL)monitorEntryMatches:(NSDictionary *)e filter:(NSString *)kw {
+    if (!kw.length) return YES;
+    for (NSString *key in @[@"dir", @"source", @"connection_id", @"hex", @"ascii"]) {
+        NSString *v = e[key];
+        if ([v isKindOfClass:[NSString class]] && [v.lowercaseString containsString:kw]) return YES;
+    }
+    return NO;
+}
+
+- (void)renderMonitor {
+    if (!_monitorLog) return;
+    NSString *kw = _monitorFilter.stringValue.lowercaseString;
+    NSMutableString *out = [NSMutableString string];
+    for (NSDictionary *e in _monitorEntries)
+        if ([self monitorEntryMatches:e filter:kw]) [out appendString:[self monitorLineForEntry:e]];
+    [_monitorLog setString:out];
+    [_monitorPending removeAllObjects];
+    if (!_monitorPaused) [_monitorLog scrollRangeToVisible:NSMakeRange(_monitorLog.string.length, 0)];
+}
+
+// appendMonitorEntry: 每条报文进入监控缓存(限长),排定一次批量刷新而非逐条重绘。
+- (void)appendMonitorEntry:(NSDictionary *)entry {
+    if (!_monitorEntries) _monitorEntries = [[NSMutableArray alloc] init];
+    if (!_monitorPending) _monitorPending = [[NSMutableArray alloc] init];
+    [_monitorEntries addObject:entry];
+    if (_monitorEntries.count > kMonitorMaxEntries)
+        [_monitorEntries removeObjectsInRange:NSMakeRange(0, _monitorEntries.count - kMonitorMaxEntries)];
+    [_monitorPending addObject:entry];
+    if (_monitorFlushScheduled) return;
+    _monitorFlushScheduled = YES;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{ [self flushMonitor]; });
+}
+
+- (void)flushMonitor {
+    _monitorFlushScheduled = NO;
+    if (!_monitorLog || _monitorPending.count == 0) { [_monitorPending removeAllObjects]; return; }
+    NSString *kw = _monitorFilter.stringValue.lowercaseString;
+    NSMutableString *chunk = [NSMutableString string];
+    for (NSDictionary *e in _monitorPending)
+        if ([self monitorEntryMatches:e filter:kw]) [chunk appendString:[self monitorLineForEntry:e]];
+    [_monitorPending removeAllObjects];
+    if (chunk.length) {
+        [_monitorLog.textStorage appendAttributedString:[[[NSAttributedString alloc] initWithString:chunk] autorelease]];
+        capTextView(_monitorLog, 400000);
+        if (!_monitorPaused) [_monitorLog scrollRangeToVisible:NSMakeRange(_monitorLog.string.length, 0)];
+    }
+}
 - (void)revealDatabase:(id)sender {
     char *raw = GoDatabaseInfo();
     NSString *path = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
@@ -2390,16 +2667,50 @@ static NSString *humanBytes(long long n) {
     }
     [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:path]]];
 }
-- (void)appendMonitorText:(NSString *)text {
-    if (!_monitorLog) return;
-    [_monitorLog.textStorage appendAttributedString:[[[NSAttributedString alloc] initWithString:text] autorelease]];
-    if (!_monitorPaused) [_monitorLog scrollRangeToVisible:NSMakeRange(_monitorLog.string.length, 0)];
+// logLevelColor 按内容粗判日志级别上色:错误红、连接/成功类绿,其余默认。
+static NSColor *logLevelColor(NSString *text) {
+    for (NSString *k in @[@"错误", @"失败", @"无法", @"异常", @"error", @"Error"])
+        if ([text containsString:k]) return [NSColor systemRedColor];
+    for (NSString *k in @[@"已连接", @"已启动", @"正在监听", @"成功", @"已就绪", @"已创建"])
+        if ([text containsString:k]) return [NSColor systemGreenColor];
+    return [NSColor labelColor];
+}
+
+// capTextView 把文本框裁到上限以内,按行边界裁,并多裁 20% 避免每次追加都触发。
+static void capTextView(NSTextView *tv, NSUInteger limit) {
+    NSUInteger len = tv.textStorage.length;
+    if (len <= limit) return;
+    NSUInteger cut = len - limit + limit / 5;
+    if (cut > len) cut = len;
+    NSString *s = tv.string;
+    NSRange scan = NSMakeRange(cut, MIN((NSUInteger)2000, len - cut));
+    NSRange nl = [s rangeOfString:@"\n" options:0 range:scan];
+    if (nl.location != NSNotFound) cut = nl.location + 1;
+    [tv.textStorage deleteCharactersInRange:NSMakeRange(0, cut)];
 }
 
 - (void)appendLogText:(NSString *)text {
     if (!_sysLog) return;
-    [_sysLog.textStorage appendAttributedString:[[[NSAttributedString alloc] initWithString:text] autorelease]];
+    NSString *msg = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!msg.length) return;
+    static NSDateFormatter *fmt;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ fmt = [[NSDateFormatter alloc] init]; fmt.dateFormat = @"HH:mm:ss.SSS"; });
+    NSString *line = [NSString stringWithFormat:@"%@  %@\n", [fmt stringFromDate:[NSDate date]], msg];
+    NSDictionary *attrs = @{NSForegroundColorAttributeName: logLevelColor(msg), NSFontAttributeName: _sysLog.font};
+    [_sysLog.textStorage appendAttributedString:[[[NSAttributedString alloc] initWithString:line attributes:attrs] autorelease]];
+    capTextView(_sysLog, 200000);
     [_sysLog scrollRangeToVisible:NSMakeRange(_sysLog.string.length, 0)];
+}
+
+- (void)clearLog:(id)sender { [_sysLog setString:@""]; }
+- (void)copyLog:(id)sender {
+    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+    [pb clearContents];
+    [pb setString:(_sysLog.string ?: @"") forType:NSPasteboardTypeString];
+}
+- (void)exportSysLog:(id)sender {
+    [self saveText:_sysLog.string prefix:@"CommBox-日志" window:_window];
 }
 
 - (void)clear:(id)sender {
@@ -2679,10 +2990,14 @@ void UIAppendLog(const char *text) {
     [value release];
 }
 
-void UIMonitorAppend(const char *text) {
-    NSString *value = [[NSString alloc] initWithUTF8String:text ?: ""];
-    dispatch_async(dispatch_get_main_queue(), ^{ [(AppDelegate *)NSApp.delegate appendMonitorText:value]; });
-    [value release];
+void UIMonitorAppendJSON(const char *json) {
+    NSData *data = [[NSData alloc] initWithBytes:(json ?: "") length:(json ? strlen(json) : 0)];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSDictionary *entry = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+        if ([entry isKindOfClass:[NSDictionary class]])
+            [(AppDelegate *)NSApp.delegate appendMonitorEntry:entry];
+        [data release];
+    });
 }
 
 void UIConnectionClosed(void) {

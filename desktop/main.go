@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -107,10 +108,9 @@ func onPacket(packet wincore.Packet) {
 	data, _ := json.Marshal(packetModel(packet))
 	raw := C.CString(string(data))
 	C.UIAddPacketJSON(raw)
+	// 监控窗口复用同一份报文模型:含 ts/dir/hex/ascii/source,支持 HEX/ASCII 切换与过滤。
+	C.UIMonitorAppendJSON(raw)
 	C.free(unsafe.Pointer(raw))
-	line := C.CString(fmt.Sprintf("[%s %s %s %s] % X\n", packet.Timestamp.Local().Format("15:04:05.000"), packet.Direction, packet.ConnectionID, packet.Source, packet.Data))
-	C.UIMonitorAppend(line)
-	C.free(unsafe.Pointer(line))
 }
 
 //export GoConnections
@@ -799,4 +799,141 @@ func GoCancelUpdateDownload() {
 		updateCancel()
 	}
 	updateMu.Unlock()
+}
+
+// ---- HTTP 工作区 ----
+
+// httpUISpec 是 HTTP 工作区与 Go 之间的请求参数,字段与界面控件一一对应。
+type httpUISpec struct {
+	Method     string  `json:"method"`
+	URL        string  `json:"url"`
+	Headers    string  `json:"headers"` // 每行 "Name: Value"
+	Body       string  `json:"body"`
+	TimeoutSec float64 `json:"timeoutSec"`
+	ConnectSec float64 `json:"connectSec"`
+	Follow     bool    `json:"follow"`
+	Insecure   bool    `json:"insecure"`
+}
+
+func parseHeaderLines(s string) http.Header {
+	h := http.Header{}
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		i := strings.IndexByte(line, ':')
+		if i <= 0 {
+			continue
+		}
+		h.Add(strings.TrimSpace(line[:i]), strings.TrimSpace(line[i+1:]))
+	}
+	return h
+}
+
+func headerLines(h http.Header) string {
+	keys := make([]string, 0, len(h))
+	for k := range h {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		for _, v := range h[k] {
+			fmt.Fprintf(&b, "%s: %s\n", k, v)
+		}
+	}
+	return b.String()
+}
+
+func uiSpecToRequest(u httpUISpec) wincore.HTTPRequestSpec {
+	spec := wincore.HTTPRequestSpec{
+		Method:          u.Method,
+		URL:             u.URL,
+		Headers:         parseHeaderLines(u.Headers),
+		Body:            []byte(u.Body),
+		FollowRedirects: u.Follow,
+		Insecure:        u.Insecure,
+	}
+	if u.TimeoutSec > 0 {
+		spec.Timeout = time.Duration(u.TimeoutSec * float64(time.Second))
+	}
+	if u.ConnectSec > 0 {
+		spec.ConnectTimeout = time.Duration(u.ConnectSec * float64(time.Second))
+	}
+	return spec
+}
+
+// GoHTTPSend 用工作区参数执行一次请求(复用已连接 HTTP 客户端的 Cookie),
+// 结果以 JSON 返回。由后台队列调用(会阻塞)。
+//
+//export GoHTTPSend
+func GoHTTPSend(specJSON *C.char) *C.char {
+	var u httpUISpec
+	if err := json.Unmarshal([]byte(C.GoString(specJSON)), &u); err != nil {
+		return jsonCString(map[string]any{"ok": false, "error": "参数解析失败: " + err.Error()})
+	}
+	spec := uiSpecToRequest(u)
+	timeout := spec.Timeout
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout+10*time.Second)
+	defer cancel()
+	res, err := engine.DoHTTPRequest(ctx, spec)
+	if err != nil {
+		return jsonCString(map[string]any{"ok": false, "error": err.Error()})
+	}
+	body := res.PrettyBody
+	if len(body) == 0 {
+		body = res.RawBody
+	}
+	return jsonCString(map[string]any{
+		"ok": true, "statusCode": res.StatusCode, "status": res.Status,
+		"durationMs": res.Duration.Milliseconds(), "size": res.ByteSize, "url": res.URL,
+		"headers": headerLines(res.Headers), "body": string(body), "rawBody": string(res.RawBody),
+	})
+}
+
+// GoParseCURL 解析 cURL 命令(仅解析,不执行 shell),把字段回填工作区。
+//
+//export GoParseCURL
+func GoParseCURL(cmd *C.char) *C.char {
+	spec, err := wincore.ParseCURL(C.GoString(cmd))
+	if err != nil {
+		return jsonCString(map[string]any{"ok": false, "error": err.Error()})
+	}
+	body := string(spec.Body)
+	if body == "" && len(spec.Data) > 0 {
+		parts := make([]string, 0, len(spec.Data))
+		for _, d := range spec.Data {
+			parts = append(parts, d.Value)
+		}
+		body = strings.Join(parts, "&")
+	}
+	u := map[string]any{
+		"ok": true, "method": spec.Method, "url": spec.URL,
+		"headers": headerLines(spec.Headers), "body": body,
+		"timeoutSec": spec.Timeout.Seconds(), "connectSec": spec.ConnectTimeout.Seconds(),
+		"follow": spec.FollowRedirects, "insecure": spec.Insecure,
+	}
+	if len(spec.Form) > 0 {
+		u["note"] = "该 cURL 含 form/文件上传,请求体未导入,请手动处理"
+	}
+	return jsonCString(u)
+}
+
+// GoFormatCURL 把工作区参数导出成 cURL 命令。导出内容可能含认证信息,只返回给界面显示。
+//
+//export GoFormatCURL
+func GoFormatCURL(specJSON *C.char) *C.char {
+	var u httpUISpec
+	if err := json.Unmarshal([]byte(C.GoString(specJSON)), &u); err != nil {
+		return jsonCString(map[string]any{"ok": false, "error": err.Error()})
+	}
+	cmd, err := wincore.FormatCURL(uiSpecToRequest(u))
+	if err != nil {
+		return jsonCString(map[string]any{"ok": false, "error": err.Error()})
+	}
+	return jsonCString(map[string]any{"ok": true, "curl": cmd})
 }
