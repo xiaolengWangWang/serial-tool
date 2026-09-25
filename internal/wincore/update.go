@@ -41,6 +41,11 @@ type UpdateInfo struct {
 	Newer     bool   // 是否比传入的当前版本新
 }
 
+// ShouldAutoPrompt 判断启动时的自动检查是否值得弹窗:有新版本,且这次发布
+// 带了本平台的安装包。各平台共用同一个"最新发布",只发 macOS 的版本不该
+// 在 Windows 上每次启动都弹一个没法下载的提示(反之亦然);手动检查照常告知。
+func (i UpdateInfo) ShouldAutoPrompt() bool { return i.Newer && i.AssetURL != "" }
+
 // CheckUpdate 查询最新发布版本并与 current 比较。
 func CheckUpdate(ctx context.Context, current string) (UpdateInfo, error) {
 	return checkUpdateFrom(ctx, UpdateAPIURL, current)

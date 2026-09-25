@@ -69,7 +69,13 @@ type HTTPResponseResult struct {
 	Duration   time.Duration
 	ByteSize   int64
 	URL        string
+	Truncated  bool // 正文超过 httpMaxResponseBody,RawBody 只保留前面部分
 }
+
+// httpMaxResponseBody 是工作区读取响应正文的上限。工作区是调试接口用的,
+// 误请求一个大文件时整包读进内存(界面侧还要再复制几份)会把程序撑崩。
+// 测试会调小它。
+var httpMaxResponseBody = 64 << 20
 
 func (s HTTPRequestSpec) requestBody() ([]byte, error) {
 	body, _, err := s.buildBody()
@@ -277,6 +283,8 @@ func (e *Engine) DoHTTPRequest(ctx context.Context, spec HTTPRequestSpec) (HTTPR
 			transport.TLSClientConfig.InsecureSkipVerify = true // user explicitly requested curl -k semantics.
 		}
 		client.Transport = transport
+		// 每次请求临时克隆的连接池不会被复用,用完就关,不让空闲连接挂到超时。
+		defer transport.CloseIdleConnections()
 	}
 	start := time.Now()
 	resp, err := client.Do(req)
@@ -284,9 +292,16 @@ func (e *Engine) DoHTTPRequest(ctx context.Context, spec HTTPRequestSpec) (HTTPR
 		return HTTPResponseResult{}, err
 	}
 	defer resp.Body.Close()
-	raw, readErr := io.ReadAll(resp.Body)
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, int64(httpMaxResponseBody)+1))
 	if readErr != nil {
 		return HTTPResponseResult{}, readErr
 	}
-	return HTTPResponseResult{StatusCode: resp.StatusCode, Status: resp.Status, Headers: resp.Header.Clone(), RawBody: raw, PrettyBody: prettyJSON(resp.Header.Get("Content-Type"), raw), Duration: time.Since(start), ByteSize: int64(len(raw)), URL: resp.Request.URL.String()}, nil
+	truncated := len(raw) > httpMaxResponseBody
+	var pretty []byte
+	if truncated {
+		raw = raw[:httpMaxResponseBody]
+	} else {
+		pretty = prettyJSON(resp.Header.Get("Content-Type"), raw) // 截断的 JSON 本就无法格式化
+	}
+	return HTTPResponseResult{StatusCode: resp.StatusCode, Status: resp.Status, Headers: resp.Header.Clone(), RawBody: raw, PrettyBody: pretty, Duration: time.Since(start), ByteSize: int64(len(raw)), URL: resp.Request.URL.String(), Truncated: truncated}, nil
 }

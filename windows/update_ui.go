@@ -65,6 +65,10 @@ func (a *application) autoCheckUpdate() {
 		a.appendLog(fmt.Sprintf("已是最新版本 v%s", wincore.Version))
 		return
 	}
+	if !info.ShouldAutoPrompt() {
+		a.appendLog(fmt.Sprintf("发现 v%s,但该版本没有 Windows 安装包,暂不提示", info.Version))
+		return
+	}
 	a.mw.Synchronize(func() {
 		if !a.closed.Load() {
 			a.showUpdateDialog(info)

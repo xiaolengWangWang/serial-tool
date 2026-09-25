@@ -194,3 +194,31 @@ func TestDoHTTPRequestHonorsTimeoutAndInsecureTLS(t *testing.T) {
 		t.Fatalf("insecure TLS result = %#v, %v", result, err)
 	}
 }
+
+func TestDoHTTPRequestTruncatesOversizedBody(t *testing.T) {
+	old := httpMaxResponseBody
+	httpMaxResponseBody = 16
+	t.Cleanup(func() { httpMaxResponseBody = old })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(r.URL.Query().Get("body")))
+	}))
+	defer srv.Close()
+	e := newHTTPTestEngine(t, srv.URL)
+
+	res, err := e.DoHTTPRequest(context.Background(), HTTPRequestSpec{URL: srv.URL + "/?body=" + strings.Repeat("x", 40)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Truncated || len(res.RawBody) != 16 || res.ByteSize != 16 || res.PrettyBody != nil {
+		t.Fatalf("oversized = truncated %v, %d bytes, pretty %q", res.Truncated, len(res.RawBody), res.PrettyBody)
+	}
+	// 恰好等于上限不算截断,且连接超时走临时连接池的分支也要正常返回。
+	res, err = e.DoHTTPRequest(context.Background(), HTTPRequestSpec{URL: srv.URL + "/?body=" + strings.Repeat("y", 16), ConnectTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Truncated || string(res.RawBody) != strings.Repeat("y", 16) {
+		t.Fatalf("exact limit = truncated %v, body %q", res.Truncated, res.RawBody)
+	}
+}

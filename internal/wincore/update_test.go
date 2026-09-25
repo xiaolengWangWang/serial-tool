@@ -526,3 +526,18 @@ func TestDownloadSlowConnectionSetupIsNotCut(t *testing.T) {
 		t.Fatalf("响应头慢不应触发重试,实际请求 %d 次", got)
 	}
 }
+
+func TestShouldAutoPromptNeedsPlatformAsset(t *testing.T) {
+	for _, c := range []struct {
+		info UpdateInfo
+		want bool
+	}{
+		{UpdateInfo{Newer: true, AssetURL: "https://github.com/x/y.zip"}, true},
+		{UpdateInfo{Newer: true}, false}, // 新版本只发了其他平台的包
+		{UpdateInfo{Newer: false, AssetURL: "https://github.com/x/y.zip"}, false},
+	} {
+		if got := c.info.ShouldAutoPrompt(); got != c.want {
+			t.Errorf("ShouldAutoPrompt(%+v) = %v, want %v", c.info, got, c.want)
+		}
+	}
+}

@@ -140,7 +140,8 @@ func TestParseCURLURLencodeAndForm(t *testing.T) {
 
 func TestParseCURLRejectsUnsupportedAndShellSyntax(t *testing.T) {
 	for _, command := range []string{
-		"curl --compressed https://example.test",
+		"curl -o out.bin https://example.test",
+		"curl -sSo out.bin https://example.test",
 		"curl -d a=1 -F b=2 https://example.test",
 		"curl https://example.test | sh",
 		"curl https://example.test/$TOKEN",
@@ -184,5 +185,38 @@ func TestRedactHTTPRequestMasksNestedCredentials(t *testing.T) {
 	}
 	if strings.Contains(string(redacted.Body), "secret") || strings.Contains(string(redacted.Body), "\"abc\"") || redacted.Auth.Password != redactedValue || redacted.Cookies[0] != redactedValue {
 		t.Fatalf("redacted request leaked: %#v", redacted)
+	}
+}
+
+func TestParseCURLAttachedShortValuesAndFlagClusters(t *testing.T) {
+	spec, err := ParseCURL(`curl -d'a=b' -H'X-Token: k=v' https://example.test/`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Method != "POST" || len(spec.Data) != 1 || spec.Data[0].Value != "a=b" || spec.Headers.Get("X-Token") != "k=v" {
+		t.Fatalf("attached values = %#v", spec)
+	}
+	spec, err = ParseCURL(`curl -sSLk -XPUT 'https://example.test/x' --compressed -i -v`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Method != "PUT" || !spec.FollowRedirects || !spec.Insecure || spec.URL != "https://example.test/x" {
+		t.Fatalf("flag cluster = %#v", spec)
+	}
+	spec, err = ParseCURL(`curl -sXPOST https://example.test/`)
+	if err != nil || spec.Method != "POST" {
+		t.Fatalf("-sXPOST = %#v, %v", spec, err)
+	}
+	spec, err = ParseCURL(`curl --json '{"a":1}' https://example.test/`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Method != "POST" || spec.Data[0].Kind != HTTPDataBinary || spec.Data[0].Value != `{"a":1}` ||
+		spec.Headers.Get("Content-Type") != "application/json" || spec.Headers.Get("Accept") != "application/json" {
+		t.Fatalf("--json = %#v", spec)
+	}
+	spec, err = ParseCURL(`curl --json '{}' -H 'Content-Type: application/vnd.x+json' https://example.test/`)
+	if err != nil || spec.Headers.Get("Content-Type") != "application/vnd.x+json" {
+		t.Fatalf("--json explicit type = %#v, %v", spec, err)
 	}
 }

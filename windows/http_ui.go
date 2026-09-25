@@ -73,7 +73,11 @@ func (a *application) openHTTPWorkspace() {
 								return
 							}
 							result = r
-							status.SetText(fmt.Sprintf("%s  |  %d bytes  |  %s", r.Status, r.ByteSize, r.Duration.Round(time.Millisecond)))
+							text := fmt.Sprintf("%s  |  %d bytes  |  %s", r.Status, r.ByteSize, r.Duration.Round(time.Millisecond))
+							if r.Truncated {
+								text += "  |  正文过大,只读取了前面部分"
+							}
+							status.SetText(text)
 							responseHeaders.SetText(httpWorkspaceBounded(httpWorkspaceHeaders(r.Headers)))
 							showBody()
 						})

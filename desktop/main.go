@@ -759,6 +759,7 @@ func GoCheckUpdate() *C.char {
 	m["notes"] = info.Notes
 	m["pageURL"] = info.PageURL
 	m["hasAsset"] = info.AssetURL != ""
+	m["autoPrompt"] = info.ShouldAutoPrompt()
 	m["assetName"] = info.AssetName
 	m["assetSizeText"] = wincore.FormatBytes(uint64(info.AssetSize))
 	return jsonCString(m)
@@ -908,6 +909,7 @@ func GoHTTPSend(specJSON *C.char) *C.char {
 		"ok": true, "statusCode": res.StatusCode, "status": res.Status,
 		"durationMs": res.Duration.Milliseconds(), "size": res.ByteSize, "url": res.URL,
 		"headers": headerLines(res.Headers), "body": string(body), "rawBody": string(res.RawBody),
+		"truncated": res.Truncated,
 	})
 }
 

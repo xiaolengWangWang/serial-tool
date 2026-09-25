@@ -18,8 +18,9 @@ func ParseCURL(command string) (HTTPRequestSpec, error) {
 	if len(args) == 0 || args[0] != "curl" {
 		return HTTPRequestSpec{}, fmt.Errorf("command must start with curl")
 	}
+	args = expandCurlShortFlags(args)
 	spec := HTTPRequestSpec{Method: http.MethodGet, Headers: make(http.Header)}
-	methodSet, options := false, true
+	methodSet, options, jsonBody := false, true, false
 	for i := 1; i < len(args); i++ {
 		arg := args[i]
 		if options && arg == "--" {
@@ -150,6 +151,21 @@ func ParseCURL(command string) (HTTPRequestSpec, error) {
 			if err != nil {
 				return HTTPRequestSpec{}, fmt.Errorf("invalid --max-time: %w", err)
 			}
+		case "--json":
+			value, err = need()
+			if err != nil {
+				return HTTPRequestSpec{}, err
+			}
+			spec.Data = append(spec.Data, HTTPDataPart{Kind: HTTPDataBinary, Value: value})
+			jsonBody = true
+			if !methodSet {
+				spec.Method = http.MethodPost
+			}
+		case "--compressed", "-s", "--silent", "-S", "--show-error", "-i", "--include", "-v", "--verbose":
+			// 只影响 curl 自身的输出或解压;Go 客户端默认就会透明解压 gzip。
+			if hasValue {
+				return HTTPRequestSpec{}, fmt.Errorf("curl option %s does not take an argument", name)
+			}
 		case "-k", "--insecure":
 			if hasValue {
 				return HTTPRequestSpec{}, fmt.Errorf("curl option %s does not take an argument", name)
@@ -170,21 +186,55 @@ func ParseCURL(command string) (HTTPRequestSpec, error) {
 	if len(spec.Data) > 0 && len(spec.Form) > 0 {
 		return HTTPRequestSpec{}, fmt.Errorf("curl --data and --form cannot be combined")
 	}
+	if jsonBody {
+		// 与 curl 一致:--json 补默认的 JSON 类型头,显式 -H 优先。
+		if spec.Headers.Get("Content-Type") == "" {
+			spec.Headers.Set("Content-Type", "application/json")
+		}
+		if spec.Headers.Get("Accept") == "" {
+			spec.Headers.Set("Accept", "application/json")
+		}
+	}
 	return spec, nil
 }
 
 func errorsf(s string) error { return fmt.Errorf("%s", s) }
 
+// curlShortWithArg 是带参数的短选项,值可以连写(-XPOST、-d'a=b')。
+var curlShortWithArg = []string{"-X", "-H", "-d", "-F", "-b", "-u", "-A", "-m"}
+
+// curlShortNoArg 是可以组合写的无参数短选项字母(-sSL、-sk)。
+const curlShortNoArg = "sSivLk"
+
+// curlOption 拆出选项名和连写的值。长选项按 "=" 拆;短选项的连写值里
+// 可能本身含 "="(-d'a=b'、-H'X: a=b'),所以短选项先按前缀识别。
 func curlOption(arg string) (name, value string, hasValue bool) {
-	if name, value, hasValue = strings.Cut(arg, "="); hasValue {
-		return
+	if strings.HasPrefix(arg, "--") {
+		return strings.Cut(arg, "=")
 	}
-	for _, short := range []string{"-X", "-H", "-d", "-F", "-b", "-u", "-A", "-m"} {
+	for _, short := range curlShortWithArg {
 		if strings.HasPrefix(arg, short) && len(arg) > len(short) {
 			return short, arg[len(short):], true
 		}
 	}
 	return arg, "", false
+}
+
+// expandCurlShortFlags 把组合短选项拆开:-sSL → -s -S -L,-sXPOST → -s -XPOST。
+// 只在打头字母是无参数选项时拆,其余原样交给 curlOption。"--" 之后不再处理。
+func expandCurlShortFlags(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i, arg := range args {
+		if arg == "--" {
+			return append(out, args[i:]...)
+		}
+		for len(arg) > 2 && arg[0] == '-' && arg[1] != '-' && strings.IndexByte(curlShortNoArg, arg[1]) >= 0 {
+			out = append(out, arg[:2])
+			arg = "-" + arg[2:]
+		}
+		out = append(out, arg)
+	}
+	return out
 }
 
 func curlSeconds(s string) (time.Duration, error) {

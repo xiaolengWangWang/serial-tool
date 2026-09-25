@@ -1127,6 +1127,8 @@ static NSString *humanBytes(long long n) {
     }
     BOOL newer = [info[@"newer"] boolValue];
     NSString *current = info[@"current"] ?: @"";
+    // 自动检查只在新版本带了 macOS 安装包时打扰;只发 Windows 的版本静默跳过。
+    if (!manual && ![info[@"autoPrompt"] boolValue]) return;
     if (!newer) {
         if (!manual) return;
         [self alert:[NSString stringWithFormat:@"已是最新版本 v%@。", current]];
@@ -2514,6 +2516,8 @@ static NSString *humanBytes(long long n) {
             _httpStatus.textColor = (code >= 200 && code < 400) ? NSColor.systemGreenColor : NSColor.systemOrangeColor;
             _httpStatus.stringValue = [NSString stringWithFormat:@"%@ · 耗时 %@ ms · %@ 字节",
                 res[@"status"] ?: @"", res[@"durationMs"] ?: @0, humanBytes([res[@"size"] longLongValue])];
+            if ([res[@"truncated"] boolValue])
+                _httpStatus.stringValue = [_httpStatus.stringValue stringByAppendingString:@" · 正文过大,只读取了前面部分"];
             [self httpTogglePretty:nil];
         });
     });
