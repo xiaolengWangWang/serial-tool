@@ -54,6 +54,7 @@ int RunLayoutChecks(id delegate, NSString *directory);
     NSInteger _rxCount, _txCount;
     BOOL _connected;
     BOOL _connecting;                    // 后台连接进行中,防止重复点击
+    BOOL _closedWhileConnecting;         // 连接回调到达前已收到被动断开
     BOOL _sending;                       // 后台手动发送进行中
     BOOL _timerSending;                  // 定时发送的上一拍仍在后台发送
     NSUInteger _timerGen;                // 定时器代数:每次开始/停止加一,识别晚到的结果
@@ -1995,6 +1996,9 @@ static NSString *humanBytes(long long n) {
 
 // 连接被动断开(远端关闭、串口拔出等),由 Go 引擎的 onClosed 回调触发。
 - (void)connectionClosed {
+    // 后台连接成功的回调还没回到主线程时,被动断开的通知可能先到:记下来,
+    // 由连接回调收尾,否则界面会停在"已连接"而引擎已断开。
+    if (_connecting) { _closedWhileConnecting = YES; return; }
     if (!_connected) return;
     GoDisconnect();
     [self resetToDisconnected];
@@ -2037,6 +2041,7 @@ static NSString *humanBytes(long long n) {
     NSString *protocol = _bridgeProtocol.titleOfSelectedItem ?: @"";
     NSString *role = _role.titleOfSelectedItem ?: @"";
     _connecting = YES;
+    _closedWhileConnecting = NO;
     _connect.enabled = NO; _connect.title = @"连接中…"; _mode.enabled = NO;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         char *err;
@@ -2073,6 +2078,10 @@ static NSString *humanBytes(long long n) {
             else
                 [self appendText:[NSString stringWithFormat:@"[%@ %@ %@]\n", server ? @"正在监听" : @"已连接", modeDesc, endpoint]];
             [self reloadHistory];
+            if (_closedWhileConnecting) {
+                _closedWhileConnecting = NO;
+                [self connectionClosed];
+            }
         });
     });
 }

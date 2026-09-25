@@ -226,6 +226,30 @@ int RunLayoutChecks(id delegate, NSString *directory) {
     }
     }
     }
+    // 独立窗口:工具箱(v0.9.13 加了转换行和多行结果区)与 HTTP 工作区。
+    for (NSString *appearance in @[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]) {
+        for (NSArray *item in @[@[@"openToolbox:", @"toolboxWindow", @"toolbox"], @[@"openHTTPWorkspace:", @"httpWindow", @"http-workspace"]]) {
+            [delegate performSelector:NSSelectorFromString(item[0]) withObject:nil];
+            NSWindow *w = [delegate valueForKey:item[1]];
+            if (!w) { [errors addObject:[NSString stringWithFormat:@"%@ window missing", item[2]]]; continue; }
+            w.appearance = [NSAppearance appearanceNamed:appearance];
+            if ([item[2] isEqualToString:@"toolbox"]) {
+                [[delegate valueForKey:@"toolboxInput"] setStringValue:@"-129"];
+                [[delegate valueForKey:@"toolboxOutput"] setStringValue:@"0xFF7F（2 字节）\n大端：FF 7F\n小端：7F FF"];
+            }
+            [w.contentView layoutSubtreeIfNeeded];
+            CheckView(w.contentView, errors);
+            [w display];
+            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+            // 截整个窗框视图:普通 contentView 不画窗口背景,深色下白字会落在透明底上看不见。
+            NSView *frameView = w.contentView.superview ?: w.contentView;
+            NSBitmapImageRep *rep = [frameView bitmapImageRepForCachingDisplayInRect:frameView.bounds];
+            [frameView cacheDisplayInRect:frameView.bounds toBitmapImageRep:rep];
+            [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:[directory stringByAppendingPathComponent:[NSString stringWithFormat:@"%@-%@.png", item[2], appearance]] atomically:YES];
+            [w orderOut:nil];
+            cases++;
+        }
+    }
     for (NSString *error in [NSOrderedSet orderedSetWithArray:errors]) fprintf(stderr, "%s\n", error.UTF8String);
     fprintf(stderr, "Layout check: %lu failures (%lu window/mode/tab cases, hidden and shown analysis)\n", (unsigned long)errors.count, (unsigned long)cases);
     return errors.count ? 1 : 0;

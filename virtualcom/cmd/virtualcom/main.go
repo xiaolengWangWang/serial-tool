@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"virtualcom/internal/vcom"
@@ -77,7 +78,14 @@ func cmdPorts() error {
 	for n := range used {
 		names = append(names, n)
 	}
-	sort.Slice(names, func(i, j int) bool { return len(names[i]) < len(names[j]) || names[i] < names[j] })
+	// 先比长度再比字符串,COM9 排在 COM10 前。原来的 "长度小 || 字符串小" 不是
+	// 合法的排序关系(COM9 与 COM10 互相"小于"),输出顺序会乱。
+	sort.Slice(names, func(i, j int) bool {
+		if len(names[i]) != len(names[j]) {
+			return len(names[i]) < len(names[j])
+		}
+		return names[i] < names[j]
+	})
 	fmt.Printf("系统已占用 %d 个 COM 编号:\n%s\n", len(names), strings.Join(names, " "))
 	return nil
 }
@@ -133,8 +141,10 @@ func cmdRun(specs []string) error {
 	fmt.Println("\n串口对已就绪。用串口软件打开上面两个编号即可互通。")
 	fmt.Print("按 Ctrl+C 退出并清理。\n\n")
 
+	// 点控制台窗口的 X、注销或关机时 Go 收到的是 SIGTERM,只监听 Ctrl+C 会
+	// 直接被杀掉、来不及拆端口,COM 编号就残留到下次 cleanup。
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
