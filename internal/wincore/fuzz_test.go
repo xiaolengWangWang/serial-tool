@@ -36,7 +36,7 @@ func FuzzCURLRoundTrip(f *testing.F) {
 		if err != nil {
 			t.Fatalf("FormatCURL output rejected\nin:  %q\nout: %q\nerr: %v", cmd, out, err)
 		}
-		if normMethod(again.Method) != normMethod(spec.Method) || again.URL != spec.URL || len(again.Data) != len(spec.Data) || len(again.Form) != len(spec.Form) || again.Insecure != spec.Insecure || again.FollowRedirects != spec.FollowRedirects {
+		if normMethod(again) != normMethod(spec) || again.URL != spec.URL || len(again.Data) != len(spec.Data) || len(again.Form) != len(spec.Form) || again.Insecure != spec.Insecure || again.FollowRedirects != spec.FollowRedirects {
 			t.Fatalf("round trip changed request\nin:  %q\nout: %q\n%#v\n%#v", cmd, out, spec, again)
 		}
 		for i := range spec.Data {
@@ -72,9 +72,13 @@ func FuzzToolboxAndHTTPTarget(f *testing.F) {
 	})
 }
 
-func normMethod(m string) string {
-	m = strings.ToUpper(strings.TrimSpace(m))
+// normMethod 按实际发送时的规则归一方法:空白方法在有请求体时按 POST 发,否则 GET。
+func normMethod(spec HTTPRequestSpec) string {
+	m := strings.ToUpper(strings.TrimSpace(spec.Method))
 	if m == "" {
+		if len(spec.Data) > 0 || len(spec.Form) > 0 || len(spec.Body) > 0 {
+			return "POST"
+		}
 		return "GET"
 	}
 	return m

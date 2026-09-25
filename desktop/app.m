@@ -55,6 +55,8 @@ int RunLayoutChecks(id delegate, NSString *directory);
     BOOL _connected;
     BOOL _connecting;                    // 后台连接进行中,防止重复点击
     BOOL _sending;                       // 后台手动发送进行中
+    BOOL _timerSending;                  // 定时发送的上一拍仍在后台发送
+    NSUInteger _timerGen;                // 定时器代数:每次开始/停止加一,识别晚到的结果
     BOOL _monitorPaused;
     BOOL _displayPaused;              // 暂停显示：只冻结表格，接收与入库继续
     NSButton *_displayPauseButton;
@@ -92,7 +94,7 @@ int RunLayoutChecks(id delegate, NSString *directory);
 }
 - (void)appendText:(NSString *)text;
 - (void)appendMonitorEntry:(NSDictionary *)entry;
-- (NSString *)sendCurrentData;
+- (void)sendInBackground:(void (^)(NSString *message))done;
 - (void)stopTimer;
 - (void)addPacketWithTS:(NSString *)ts dir:(NSString *)dir hex:(NSString *)hex ascii:(NSString *)ascii kind:(NSString *)kind len:(NSInteger)len;
 - (void)addPacketModel:(NSDictionary *)model;
@@ -1727,36 +1729,48 @@ static NSString *humanBytes(long long n) {
 
 - (void)openToolbox:(id)sender {
     if (!_toolboxWindow) {
-        _toolboxWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 560, 270)
+        _toolboxWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 560, 380)
             styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
             backing:NSBackingStoreBuffered defer:NO];
         _toolboxWindow.title = @"工具箱";
         _toolboxWindow.releasedWhenClosed = NO;
         NSView *v = _toolboxWindow.contentView;
 
-        [v addSubview:Label(@"输入(HEX 校验用 01 03 00 0A；Base64/Unix 时间戳直接输文本/数字)", NSMakeRect(16, 228, 520, 20))];
-        _toolboxInput = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 196, 528, 26)];
+        [v addSubview:Label(@"输入(HEX 如 01 03 00 0A；文本、十进制、Base64、Unix 时间戳直接输入)", NSMakeRect(16, 348, 528, 20))];
+        _toolboxInput = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 316, 528, 26)];
         [v addSubview:_toolboxInput];
 
         NSArray *titles = @[@"CRC16 Modbus", @"CRC16", @"CRC32", @"XOR", @"SUM"];
         for (NSUInteger i = 0; i < titles.count; i++) {
             NSButton *b = [NSButton buttonWithTitle:titles[i] target:self action:@selector(calcChecksum:)];
-            b.frame = NSMakeRect(16 + i * 108, 158, 104, 28);
+            b.frame = NSMakeRect(16 + i * 108, 278, 104, 28);
             b.tag = (NSInteger)i;
             [v addSubview:b];
         }
-        NSArray *titles2 = @[@"Base64 编码", @"Base64 解码", @"Unix 时间戳"];
-        NSArray *kinds2  = @[@"base64enc",   @"base64dec",   @"unixtime"];
-        for (NSUInteger i = 0; i < titles2.count; i++) {
-            NSButton *b = [NSButton buttonWithTitle:titles2[i] target:self action:@selector(calcToolbox:)];
-            b.frame = NSMakeRect(16 + i * 120, 120, 116, 28);
-            b.tag = (NSInteger)i;
-            [v addSubview:b];
-            objc_setAssociatedObject(b, "kind", kinds2[i], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        // 两行通用转换:按钮上挂 kind,统一走 calcToolbox:。
+        NSArray *rows = @[
+            @[@[@"Base64 编码", @"base64enc"], @[@"Base64 解码", @"base64dec"], @[@"Unix 时间戳", @"unixtime"]],
+            @[@[@"HEX → 文本", @"hex2text"], @[@"文本 → HEX", @"text2hex"], @[@"HEX → 十进制", @"hex2dec"], @[@"十进制 → HEX", @"dec2hex"]],
+        ];
+        for (NSUInteger r = 0; r < rows.count; r++) {
+            NSArray *row = rows[r];
+            for (NSUInteger i = 0; i < row.count; i++) {
+                NSButton *b = [NSButton buttonWithTitle:row[i][0] target:self action:@selector(calcToolbox:)];
+                b.frame = NSMakeRect(16 + i * 132, 240 - r * 38, 128, 28);
+                [v addSubview:b];
+                objc_setAssociatedObject(b, "kind", row[i][1], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
         }
-        _toolboxOutput = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 76, 528, 26)];
-        _toolboxOutput.editable = NO; _toolboxOutput.bordered = NO; _toolboxOutput.drawsBackground = NO;
+        // 结果可能多行(十进制/HEX 转换),用可换行、可选中的只读文本,方便复制。
+        _toolboxOutput = [NSTextField wrappingLabelWithString:@""];
+        _toolboxOutput.frame = NSMakeRect(16, 52, 528, 138);
+        _toolboxOutput.selectable = YES;
+        _toolboxOutput.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
+        [_toolboxOutput retain];
         [v addSubview:_toolboxOutput];
+        NSButton *copy = [NSButton buttonWithTitle:@"复制结果" target:self action:@selector(copyToolboxResult:)];
+        copy.frame = NSMakeRect(16, 14, 100, 28);
+        [v addSubview:copy];
         [_toolboxWindow center];
     }
     [_toolboxWindow makeKeyAndOrderFront:nil];
@@ -1768,6 +1782,12 @@ static NSString *humanBytes(long long n) {
     char *raw = GoChecksum((char *)kind.UTF8String, (char *)_toolboxInput.stringValue.UTF8String);
     NSString *result = [NSString stringWithUTF8String:raw ?: ""]; free(raw);
     _toolboxOutput.stringValue = result;
+}
+
+- (void)copyToolboxResult:(id)sender {
+    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+    [pb clearContents];
+    [pb setString:(_toolboxOutput.stringValue ?: @"") forType:NSPasteboardTypeString];
 }
 
 - (void)calcToolbox:(NSButton *)sender {
@@ -2057,42 +2077,44 @@ static NSString *humanBytes(long long n) {
     });
 }
 
-- (NSString *)sendCurrentData {
-    BOOL hex = _hexSend.state == NSControlStateValueOn;
-    char *err;
-    if ([self isHTTPMode])
-        err = GoHTTPRequest((char *)_send.string.UTF8String);
-    else
-        err = GoSend((char *)_send.string.UTF8String, hex, (char *)_eol.stringValue.UTF8String);
-    NSString *message = [NSString stringWithUTF8String:err ?: ""]; free(err);
-    return message;
-}
-
-// send: 手动发送放到后台:HTTP 模式要等响应(客户端超时 10 秒),TCP 对端不收时
-// 写入最多阻塞 5 秒,同步调用会卡住窗口。定时发送仍走 sendCurrentData。
-- (void)send:(id)sender {
-    if (_sending) return;
+// sendInBackground: 读当前发送框内容,在后台发送,完成后在主线程回调 done
+// (message 为空表示成功)。HTTP 模式要等响应(客户端超时 10 秒),TCP 对端
+// 不收时写入最多阻塞 5 秒,放主线程会卡住窗口。
+- (void)sendInBackground:(void (^)(NSString *message))done {
     BOOL http = [self isHTTPMode], hex = _hexSend.state == NSControlStateValueOn;
     NSString *text = [[_send.string copy] autorelease];
     NSString *eol = _eol.stringValue ?: @"";
-    _sending = YES;
+    void (^finish)(NSString *) = [[done copy] autorelease];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         char *err = http ? GoHTTPRequest((char *)text.UTF8String)
                          : GoSend((char *)text.UTF8String, hex, (char *)eol.UTF8String);
         NSString *message = [NSString stringWithUTF8String:err ?: ""]; free(err);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            _sending = NO;
-            if (message.length) [self alert:message];
-        });
+        dispatch_async(dispatch_get_main_queue(), ^{ finish(message); });
     });
 }
 
+- (void)send:(id)sender {
+    if (_sending) return;
+    _sending = YES;
+    [self sendInBackground:^(NSString *message) {
+        _sending = NO;
+        if (message.length) [self alert:message];
+    }];
+}
+
+// timerFired: 定时发送也在后台发。上一次还没发完就跳过这一拍,不堆积;
+// 发送失败时若定时器已被停掉或重开(代数变了),这是停止/断开带来的预期失败,
+// 不弹窗,也不能去停掉新开的定时器。
 - (void)timerFired:(NSTimer *)timer {
-    NSString *message = [self sendCurrentData];
-    if (message.length) {
+    if (_timerSending) return;
+    _timerSending = YES;
+    NSUInteger gen = _timerGen;
+    [self sendInBackground:^(NSString *message) {
+        _timerSending = NO;
+        if (!message.length || gen != _timerGen || !_sendTimer) return;
         [self stopTimer];
         [self alert:[@"定时发送已停止：" stringByAppendingString:message]];
-    }
+    }];
 }
 
 - (void)toggleTimer:(id)sender {
@@ -2104,6 +2126,7 @@ static NSString *humanBytes(long long n) {
     }
     NSInteger milliseconds = _interval.integerValue;
     if (milliseconds < 10) { [self alert:@"定时间隔不能小于 10 ms"]; return; }
+    _timerGen++;
     _sendTimer = [NSTimer scheduledTimerWithTimeInterval:milliseconds / 1000.0 target:self
         selector:@selector(timerFired:) userInfo:nil repeats:YES];
     _interval.enabled = NO; _loopCount.enabled = NO; _loopSend.enabled = NO;
@@ -2114,6 +2137,7 @@ static NSString *humanBytes(long long n) {
 - (void)stopTimer {
     if (!_sendTimer) return;
     [_sendTimer invalidate]; _sendTimer = nil;
+    _timerGen++;
     _interval.enabled = YES; _loopCount.enabled = YES; _loopSend.enabled = YES;
     _timerButton.title = @"开始定时"; _quickTimerButton.title = @"开始定时"; _loopButton.enabled = YES;
     [self appendText:@"\n[已停止定时发送]\n"];

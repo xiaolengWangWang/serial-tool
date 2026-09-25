@@ -234,3 +234,27 @@ func TestParseCURLDashLeadingValuesAreNotFlags(t *testing.T) {
 		t.Fatalf("value was parsed as a flag: %#v", spec)
 	}
 }
+
+// Chrome「复制为 cURL (bash)」对含引号、换行的请求体使用 $'...'。
+func TestParseCURLChromeANSICQuoting(t *testing.T) {
+	cmd := "curl 'https://api.example.test/v1/items' \\\n" +
+		"  -H 'accept: application/json' \\\n" +
+		"  -H 'content-type: application/json' \\\n" +
+		`  --data-raw $'{"name":"it\'s","note":"a\\nb","cn":"中","tab":"\x41\t","oct":"\101"}'`
+	spec, err := ParseCURL(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"name":"it's","note":"a\nb","cn":"中","tab":"A` + "\t" + `","oct":"A"}`
+	if spec.Method != "POST" || len(spec.Data) != 1 || spec.Data[0].Value != want {
+		t.Fatalf("data = %q\nwant  %q", spec.Data, want)
+	}
+	if spec.Headers.Get("Content-Type") != "application/json" || spec.URL != "https://api.example.test/v1/items" {
+		t.Fatalf("spec = %#v", spec)
+	}
+	for _, bad := range []string{`curl $'unterminated`, `curl https://x/$HOME`, `curl "https://x/$'a'"`} {
+		if _, err := ParseCURL(bad); err == nil {
+			t.Errorf("ParseCURL(%q) succeeded", bad)
+		}
+	}
+}

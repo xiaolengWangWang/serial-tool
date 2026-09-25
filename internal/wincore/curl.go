@@ -259,6 +259,18 @@ func splitCurlCommand(command string) ([]string, error) {
 	}
 	for i := 0; i < len(command); i++ {
 		c := command[i]
+		// Chrome「复制为 cURL (bash)」遇到换行、引号等会写成 $'...'(ANSI-C 引号)。
+		// 这只是字面量写法,不是变量展开,按 bash 规则还原转义即可。
+		if quote == 0 && c == '$' && i+1 < len(command) && command[i+1] == '\'' {
+			value, next, err := ansiCQuoted(command, i+2)
+			if err != nil {
+				return nil, err
+			}
+			current.WriteString(value)
+			inToken = true
+			i = next
+			continue
+		}
 		if quote != '\'' && (c == '$' || c == '`') {
 			return nil, fmt.Errorf("shell expansion is unsupported")
 		}
@@ -318,6 +330,89 @@ func splitCurlCommand(command string) ([]string, error) {
 	}
 	flush()
 	return args, nil
+}
+
+// ansiCQuoted 解析 $'...' 的内容,start 指向开头引号之后。返回还原后的值和
+// 结尾引号的下标。转义规则同 bash:\a \b \e \f \n \r \t \v \\ \' \" \?、
+// \xHH、\uHHHH、\UHHHHHHHH、\NNN(八进制)、\cX;未知转义保留反斜杠。
+func ansiCQuoted(command string, start int) (string, int, error) {
+	var b strings.Builder
+	for i := start; i < len(command); i++ {
+		c := command[i]
+		if c == '\'' {
+			return b.String(), i, nil
+		}
+		if c != '\\' {
+			b.WriteByte(c)
+			continue
+		}
+		if i+1 >= len(command) {
+			break
+		}
+		i++
+		e := command[i]
+		switch e {
+		case 'a':
+			b.WriteByte('\a')
+		case 'b':
+			b.WriteByte('\b')
+		case 'e', 'E':
+			b.WriteByte(0x1b)
+		case 'f':
+			b.WriteByte('\f')
+		case 'n':
+			b.WriteByte('\n')
+		case 'r':
+			b.WriteByte('\r')
+		case 't':
+			b.WriteByte('\t')
+		case 'v':
+			b.WriteByte('\v')
+		case '\\', '\'', '"', '?':
+			b.WriteByte(e)
+		case 'c':
+			if i+1 < len(command) {
+				i++
+				b.WriteByte(command[i] & 0x1f)
+			}
+		case 'x', 'u', 'U':
+			max := map[byte]int{'x': 2, 'u': 4, 'U': 8}[e]
+			j := i + 1
+			for j < len(command) && j-i-1 < max && isHexDigit(command[j]) {
+				j++
+			}
+			if j == i+1 {
+				b.WriteByte('\\')
+				b.WriteByte(e)
+				continue
+			}
+			n, _ := strconv.ParseUint(command[i+1:j], 16, 32)
+			if e == 'x' {
+				b.WriteByte(byte(n))
+			} else {
+				b.WriteRune(rune(n))
+			}
+			i = j - 1
+		default:
+			if e >= '0' && e <= '7' {
+				j := i
+				for j < len(command) && j-i < 3 && command[j] >= '0' && command[j] <= '7' {
+					j++
+				}
+				n, _ := strconv.ParseUint(command[i:j], 8, 16)
+				b.WriteByte(byte(n))
+				i = j - 1
+				continue
+			}
+			b.WriteByte('\\')
+			b.WriteByte(e)
+		}
+	}
+	return "", 0, fmt.Errorf("unterminated $'...' quote")
+}
+
+func isHexDigit(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }
 
 // FormatCURL emits a safely single-quoted curl command for the supported request semantics.

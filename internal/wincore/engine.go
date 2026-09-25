@@ -258,9 +258,6 @@ func (e *Engine) RecentSessions(limit int) ([]SessionInfo, error) {
 
 func (e *Engine) DataDir() string { return e.store.Dir() }
 
-func (e *Engine) GetSetting(key string) string       { return e.store.GetSetting(key) }
-func (e *Engine) SetSetting(key, value string) error { return e.store.SetSetting(key, value) }
-
 func normalizeHTTPURL(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

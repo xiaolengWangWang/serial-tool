@@ -64,7 +64,7 @@ type application struct {
 	notifyIcon                            *walk.NotifyIcon
 	toolboxWindow                         *walk.MainWindow
 	toolboxInput                          *walk.TextEdit
-	toolboxOutput                         *walk.Label
+	toolboxOutput                         *walk.TextEdit
 	searchEdit                            *walk.LineEdit
 	dirFilter                             *walk.ComboBox
 	packetTable                           *walk.TableView
@@ -1030,8 +1030,49 @@ func (a *application) updateStatus(st wincore.Stats) {
 		a.footer.SetToolTipText(footer)
 	}
 	if a.timeFilter.CurrentIndex() > 0 {
-		a.applyFilter()
+		a.expireTimeWindow()
 	}
+}
+
+// expireTimeWindow 让「最近 N 分钟」过滤随时间滑动。此前每秒整表 refilter,
+// 表格每秒重置一次,选中的行和滚动位置都保不住,开着时间过滤几乎没法选行复制。
+// 现在只在确有报文滑出窗口时才更新,并按报文 ID 恢复选中。
+func (a *application) expireTimeWindow() {
+	m := a.packetModel
+	if m == nil || a.packetTable == nil {
+		return
+	}
+	since := a.sinceTime()
+	m.since = since
+	n := 0 // visible 按到达顺序排列,过期的都在前面
+	for n < len(m.visible) && m.visible[n].TS.Before(since) {
+		n++
+	}
+	if n == 0 {
+		return
+	}
+	selected := map[string]bool{}
+	for _, i := range a.packetTable.SelectedIndexes() {
+		if i >= n && i < len(m.visible) {
+			selected[m.visible[i].Raw.ID] = true
+		}
+	}
+	m.visible = m.visible[n:]
+	m.PublishRowsReset()
+	var keep []int
+	for i, p := range m.visible {
+		if selected[p.Raw.ID] {
+			keep = append(keep, i)
+		}
+	}
+	if len(keep) > 0 {
+		_ = a.packetTable.SetSelectedIndexes(keep)
+		a.packetTable.EnsureItemVisible(keep[0])
+	} else if a.autoScroll.Checked() && len(m.visible) > 0 {
+		a.packetTable.EnsureItemVisible(len(m.visible) - 1)
+	}
+	a.updatePacketStats()
+	a.updateSelectionLabel()
 }
 
 func (a *application) refreshSendHistory() {
@@ -1065,8 +1106,8 @@ func (a *application) refreshRecentConn() {
 	items := make([]string, len(sessions))
 	for i, s := range sessions {
 		ep := s.Endpoint
-		if len(ep) > 24 {
-			ep = ep[:21] + "..."
+		if r := []rune(ep); len(r) > 24 { // 按字符截,含中文的 URL 不会被切成乱码
+			ep = string(r[:21]) + "..."
 		}
 		items[i] = fmt.Sprintf("%s %s", s.Mode, ep)
 	}
@@ -1311,9 +1352,9 @@ func (a *application) setupTray() (err error) {
 func (a *application) openToolbox() {
 	if a.toolboxWindow == nil || a.toolboxWindow.IsDisposed() {
 		if err := (MainWindow{
-			AssignTo: &a.toolboxWindow, Title: "校验与转换", MinSize: Size{Width: 520, Height: 340}, Size: Size{Width: 580, Height: 400}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 12}, Spacing: 8},
+			AssignTo: &a.toolboxWindow, Title: "校验与转换", MinSize: Size{Width: 560, Height: 420}, Size: Size{Width: 620, Height: 480}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 12}, Spacing: 8},
 			Children: []Widget{
-				Label{Text: "输入(HEX 校验用 01 03 00 0A；Base64/Unix 时间戳直接输文本或数字)"},
+				Label{Text: "输入(HEX 如 01 03 00 0A；文本、十进制、Base64、Unix 时间戳直接输入)"},
 				TextEdit{AssignTo: &a.toolboxInput, MinSize: Size{Height: 60}},
 				Composite{Layout: HBox{Alignment: AlignHNearVCenter}, Children: []Widget{
 					PushButton{Text: "CRC16 Modbus", MinSize: Size{Height: btnH}, OnClicked: func() { a.runToolbox("modbus") }},
@@ -1329,7 +1370,23 @@ func (a *application) openToolbox() {
 					PushButton{Text: "Unix 时间戳", MinSize: Size{Height: btnH}, OnClicked: func() { a.runToolbox("unixtime") }},
 					HSpacer{},
 				}},
-				Label{AssignTo: &a.toolboxOutput, Text: "结果", MinSize: Size{Height: 44}},
+				Composite{Layout: HBox{Alignment: AlignHNearVCenter}, Children: []Widget{
+					PushButton{Text: "HEX → 文本", MinSize: Size{Height: btnH}, OnClicked: func() { a.runToolbox("hex2text") }},
+					PushButton{Text: "文本 → HEX", MinSize: Size{Height: btnH}, OnClicked: func() { a.runToolbox("text2hex") }},
+					PushButton{Text: "HEX → 十进制", MinSize: Size{Height: btnH}, OnClicked: func() { a.runToolbox("hex2dec") }},
+					PushButton{Text: "十进制 → HEX", MinSize: Size{Height: btnH}, OnClicked: func() { a.runToolbox("dec2hex") }},
+					HSpacer{},
+				}},
+				// 结果用只读文本框而不是 Label:Label 选不中,结果没法复制。
+				TextEdit{AssignTo: &a.toolboxOutput, ReadOnly: true, VScroll: true, MinSize: Size{Height: 72}, StretchFactor: 1},
+				Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true}, Children: []Widget{
+					PushButton{Text: "复制结果", MinSize: Size{Height: btnH}, OnClicked: func() {
+						if err := walk.Clipboard().SetText(a.toolboxOutput.Text()); err != nil {
+							a.showError(err)
+						}
+					}},
+					HSpacer{},
+				}},
 			},
 		}).Create(); err != nil {
 			a.showError(err)
@@ -1343,8 +1400,10 @@ func (a *application) openToolbox() {
 }
 
 func (a *application) runToolbox(kind string) {
+	// 输入原样交给核心:文本 → HEX 要保留回车键输入的 CRLF。输出里的 LF 换成
+	// CRLF,否则 TextEdit 会把多行结果连成一行。
 	result := wincore.ParseToolbox(kind, a.toolboxInput.Text())
-	a.toolboxOutput.SetText(result)
+	a.toolboxOutput.SetText(strings.ReplaceAll(result, "\n", "\r\n"))
 }
 
 func (a *application) exportText(text, prefix string, owner walk.Form) {
