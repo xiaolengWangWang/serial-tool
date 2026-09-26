@@ -49,9 +49,9 @@ func (w *assistantPanel) widget() Widget {
 		return PushButton{Text: text, MinSize: Size{Width: 100, Height: btnH}, MaxSize: Size{Width: 112}, OnClicked: func() { w.analyze(text) }}
 	}
 	// 窄面板可纵向滚动；「发送追问」独占一行，「停止」与「AI 设置」并排。
-	// 最窄 270，中栏按 minMonitorWidth 仍能占 70%（见 workbench_ui.go）。
+	// 宽度上下限与中栏占比的关系见 workbench_ui.go 的 minMonitorWidth。
 	// 滚动条宽度由 walk 自己预留，右边距与左边距相同即可。
-	return ScrollView{AssignTo: &w.panel, HorizontalFixed: true, Visible: false, MinSize: Size{Width: 270}, MaxSize: Size{Width: 296}, Background: SolidColorBrush{Color: colorPanel}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 8}, Children: []Widget{
+	return ScrollView{AssignTo: &w.panel, HorizontalFixed: true, Visible: false, MinSize: Size{Width: assistantMinWidth}, MaxSize: Size{Width: assistantMaxWidth}, Background: SolidColorBrush{Color: colorPanel}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 8}, Children: []Widget{
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 			Label{Text: "AI 通信助手", Font: fontSection, TextColor: colorBlue, Alignment: AlignHNearVCenter},
 			HSpacer{},

@@ -75,6 +75,9 @@ type application struct {
 	dataPane, sendPane, sendExtras        *walk.Composite
 	sendExtrasToggle                      *walk.PushButton
 	sendExtrasOpen, balancingSend         bool
+	connectionPageButton, dataPageButton  *walk.PushButton
+	narrow, connectionPage, refitPending  bool
+	movingWindow                          bool
 	viewData, viewLog                     *walk.RadioButton
 	loopCount                             *walk.LineEdit
 	loopButton                            *walk.PushButton
@@ -105,6 +108,9 @@ type application struct {
 	lastDetails, lastStatusText      string
 	connecting, sending              bool
 	closed                           atomic.Bool
+	// workArea 返回窗口当前该待的工作区（物理像素），默认取所在显示器；
+	// 布局测试换成模拟的屏幕，运行中的收窗检查就按模拟屏幕判断。
+	workArea func() (win.RECT, bool)
 }
 
 // Packet is a captured data frame shown in the packet table.

@@ -13,6 +13,7 @@ import (
 	"serial-tool/internal/wincore"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 	"unsafe"
 )
@@ -26,10 +27,9 @@ func (a *application) createWindow() error {
 		AssignTo: &a.mw,
 		Title:    "CommBox v" + wincore.Version + " · Windows",
 		Size:     Size{Width: 1280, Height: 820},
-		// 最小尺寸由内容决定（数据表至少 3 行、发送框至少 4 行），这里只兜底。
-		// 1600x900@150%、1366x768@125% 等屏幕的工作区只有约 1024x552，
-		// 原来的 1024x620 放不进去，底部发送区会压在任务栏下面。
-		MinSize:    Size{Width: 960, Height: 480},
+		// 最小尺寸由内容决定（数据表至少 3 行、发送框至少 3 行），这里只兜底，
+		// 要低于窄屏单栏时的内容下限：800x600 屏幕的工作区只有 800x552。
+		MinSize:    Size{Width: 640, Height: 400},
 		Font:       Font{Family: fontUI, PointSize: sizeBody},
 		Background: SolidColorBrush{Color: colorCanvas},
 		Layout:     VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 6, Right: 10, Bottom: 4}, Spacing: 6},
@@ -56,7 +56,7 @@ func (a *application) createWindow() error {
 		return err
 	}
 	// 按逻辑像素切换窄屏布局，展开助手不会把窗口撑出工作区。
-	a.mw.SizeChanged().Attach(a.enforceAssistantWidth)
+	a.mw.SizeChanged().Attach(func() { a.arrangePanes(a.assistant.panel.Visible()) })
 	// DPI 变化时 walk 按新字体重算选项宽度，随后窗口改尺寸，在这里再压回去。
 	// 左栏三个下拉框的选项来自本机与历史，同样不能决定左栏宽度。
 	compactCombos := []*walk.ComboBox{a.sendHistory, a.favorites, a.recentConn, a.ports, a.netIP}
@@ -74,6 +74,8 @@ func (a *application) createWindow() error {
 	a.updateSelectionLabel()
 	a.updateFooterIcon()
 	a.initViewSwitch()
+	a.workArea = func() (win.RECT, bool) { return workAreaFor(a.mw.Handle()) }
+	a.watchWorkArea()
 	a.fitToWorkArea()
 	return nil
 }
@@ -99,14 +101,21 @@ func (a *application) connectionPanel() Widget {
 	// 左栏 240~250：扣掉左右边距 20 与纵向滚动条约 17，内容约 203 宽，下面各行按此定宽。
 	// walk 自己在最小宽度里算上滚动条、排版时再从内容宽度里扣掉，右边距不必再给
 	// 滚动条留位；多留的那一截会把左栏撑宽。
-	return ScrollView{AssignTo: &a.connectionPane, HorizontalFixed: true, MinSize: Size{Width: 240}, MaxSize: Size{Width: 250}, Background: SolidColorBrush{Color: colorPanel},
+	return ScrollView{AssignTo: &a.connectionPane, HorizontalFixed: true, MinSize: Size{Width: connectionPaneMinWidth}, MaxSize: Size{Width: connectionPaneMaxWidth}, Background: SolidColorBrush{Color: colorPanel},
 		Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 6, Right: 10, Bottom: 10}, Spacing: 8}, Children: []Widget{
-			Label{Text: "连接配置", Font: fontSection, TextColor: colorBlue},
+			Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
+				Label{Text: "连接配置", Font: fontSection, TextColor: colorBlue},
+				HSpacer{},
+				// 只在窄屏单栏时显示：连接栏占满窗口，由这里回到数据监控。
+				PushButton{AssignTo: &a.dataPageButton, Text: "返回数据", Visible: false, MinSize: Size{Width: 88, Height: btnH}, MaxSize: Size{Width: 88}, OnClicked: a.showDataPage},
+			}},
 			ComboBox{AssignTo: &a.mode, ToolTipText: "串口 / TCP / UDP / 串口服务器 / HTTP 客户端", Model: modes, CurrentIndex: 1, MinSize: Size{Height: rowH}, OnCurrentIndexChanged: a.updateMode},
 			Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 				inlineLabel("最近连接", 64),
 				// 左栏定宽，上限按栏内可用宽度给：不设时最长的连接名会把整栏内容撑到栏外。
 				ComboBox{AssignTo: &a.recentConn, ToolTipText: "选择最近使用的连接，自动回填参数", StretchFactor: stretchFill, MinSize: Size{Width: 130, Height: rowH}, MaxSize: Size{Width: 142}, OnCurrentIndexChanged: a.onRecentConnSelected},
+				// 窄屏单栏时左栏占满窗口，富余宽度留在行尾，下拉框紧跟标签。
+				HSpacer{},
 			}},
 			// 两列栅格：标签列按最长标签自动定宽，每个字段只占一行，
 			// 左栏内容不再溢出到需要滚动才能看到“最近连接”。
@@ -161,6 +170,8 @@ func (a *application) monitorPanel() Widget {
 				RadioButton{AssignTo: &a.viewLog, Text: "日志", MinSize: Size{Width: 56}, MaxSize: Size{Width: 56}, OnClicked: func() { a.showLogView(true) }},
 			}},
 			HSpacer{StretchFactor: stretchFill},
+			// 只在窄屏单栏时显示：左栏收起后从这里打开连接配置。
+			PushButton{AssignTo: &a.connectionPageButton, Text: "连接配置", Visible: false, MinSize: Size{Width: 88, Height: btnH}, MaxSize: Size{Width: 88}, OnClicked: a.showConnectionPage},
 			toolButton("清空", "clear", 80, func() { a.packetModel.clear(); a.updatePacketStats(); a.updateSelectionLabel() }),
 			toolButton("保存", "save", 80, func() { a.exportText(a.packetModel.exportText(), "commbox", a.mw) }),
 			toolButton("AI 分析", "ai", 104, func() { a.showAssistant(); a.assistant.analyze("全面诊断") }),
@@ -255,13 +266,21 @@ const (
 //
 // 宽度：左栏最窄 240、AI 面板最窄 270，加窗口左右边距 20、栏间距 10。中栏下限按
 // 较宽的 AI 面板定为 706：只开左栏约占 72%，改开 AI 约占 70.2%，窗口外框约 1022，
-// 仍放得进最紧的 1024 宽工作区。两侧栏同时展开按上限 250 + 296 算，客户区要到
-// 1954 才保得住 70%，更窄时展开 AI 先收起左栏。
+// 仍放得进标准缩放下最窄的 1024 宽工作区。两侧栏同时展开按上限 250 + 296 算，
+// 客户区要到 1954 才保得住 70%，更窄时展开 AI 先收起左栏。
+//
+// 工作区比 wideLayoutWidth 还窄时（800x600、很小的远程桌面窗口）连「左栏 + 中栏」
+// 也放不下，改为窄屏单栏：三栏一次只显示一栏，侧栏占满窗口，见 arrangePanes。
 const (
-	dataSharePercent   = 70
-	dataSendSpacing    = 4
-	minMonitorWidth    = 706
-	bothSidePanesWidth = 1954
+	dataSharePercent       = 70
+	dataSendSpacing        = 4
+	minMonitorWidth        = 706
+	bothSidePanesWidth     = 1954
+	connectionPaneMinWidth = 240
+	connectionPaneMaxWidth = 250
+	assistantMinWidth      = 270
+	assistantMaxWidth      = 296
+	wideLayoutWidth        = 1000 // 左栏 + 中栏的窗口外框约 992
 )
 
 // 发送区按格式与目标、报文、历史与快捷、定时与循环分行。放不下完整发送区时，
@@ -523,10 +542,10 @@ func (a *application) showVirtualCOMHelp() {
 // 默认 1280x820 在小屏或高缩放比下会越过工作区下沿，底部的发送区被任务栏盖住；
 // 只在放不下时才缩小，放得下就仅调整位置，不牺牲数据表高度。
 func (a *application) fitToWorkArea() {
-	if a.mw == nil {
+	if a.mw == nil || a.workArea == nil {
 		return
 	}
-	if rc, ok := workAreaFor(a.mw.Handle()); ok {
+	if rc, ok := a.workArea(); ok {
 		a.fitIntoWorkArea(rc)
 	}
 }
@@ -550,6 +569,8 @@ func (a *application) fitIntoWorkArea(rc win.RECT) {
 	if availW <= 0 || availH <= 0 {
 		return
 	}
+	// 先定栏位再改尺寸：窄屏收起左栏后最小宽度才降下来，窗口才缩得进去。
+	a.updateNarrow(rc)
 	// 宽度上限取工作区的 85%：1280x820 在 175% 缩放的屏幕上换算后接近满屏，
 	// 留出余量才便于和其他窗口并排。高度与并排无关，放不下时用满工作区：
 	// 1920x1080@150% 上按 85% 收缩会白白少掉约 100px，数据表只剩三行。
@@ -567,14 +588,172 @@ func (a *application) fitIntoWorkArea(rc win.RECT) {
 	})
 }
 
-// 窄窗口先让出连接栏空间，关闭助手后恢复。使用逻辑像素以适配 DPI 缩放。
-func (a *application) enforceAssistantWidth() {
-	if a.mw == nil || a.connectionPane == nil || a.assistant == nil || a.assistant.panel == nil || a.arrangingPanes {
+// 窗口在任何时候都不能比所在屏幕的工作区大。启动时由 fitToWorkArea 收一次；
+// 运行中换到另一块屏、改分辨率或缩放、任务栏变高之后，walk 只按系统建议的矩形
+// 保持逻辑尺寸，窗口可能越过屏幕。这里子类化窗口过程，在这些事件之后再检查一次。
+var (
+	workAreaWatch     = map[win.HWND]*application{}
+	workAreaWatchPrev = map[win.HWND]uintptr{}
+	workAreaWatchProc = syscall.NewCallback(func(h win.HWND, msg uint32, wp, lp uintptr) uintptr {
+		a, prev := workAreaWatch[h], workAreaWatchPrev[h]
+		r := win.CallWindowProc(prev, h, msg, wp, lp)
+		const spiSetWorkArea = 0x002F
+		if a == nil {
+			return r
+		}
+		switch msg {
+		case win.WM_ENTERSIZEMOVE:
+			a.movingWindow = true
+		case win.WM_EXITSIZEMOVE:
+			a.movingWindow = false
+			a.scheduleKeepInWorkArea()
+		case win.WM_DISPLAYCHANGE, win.WM_DPICHANGED:
+			a.scheduleKeepInWorkArea()
+		case win.WM_SETTINGCHANGE:
+			if wp == spiSetWorkArea {
+				a.scheduleKeepInWorkArea()
+			}
+		case win.WM_WINDOWPOSCHANGED:
+			// 贴靠、Win+Shift+方向键换屏不经过拖动循环；拖动中不打断用户。
+			if !a.movingWindow {
+				a.scheduleKeepInWorkArea()
+			}
+		case win.WM_NCDESTROY:
+			delete(workAreaWatch, h)
+			delete(workAreaWatchPrev, h)
+		}
+		return r
+	})
+)
+
+func (a *application) watchWorkArea() {
+	h := a.mw.Handle()
+	workAreaWatch[h] = a
+	workAreaWatchPrev[h] = win.SetWindowLongPtr(h, win.GWLP_WNDPROC, workAreaWatchProc)
+}
+
+// scheduleKeepInWorkArea 把检查推到当前消息处理完之后：walk 处理 DPI 变化时还要
+// 重排、改尺寸，在窗口过程里直接改尺寸会和它打架。连续多个事件只检查一次。
+func (a *application) scheduleKeepInWorkArea() {
+	if a == nil || a.refitPending || a.mw == nil || a.workArea == nil {
+		return
+	}
+	a.refitPending = true
+	a.mw.Synchronize(func() {
+		// 检查期间保持 refitPending：keepInside 自己改尺寸引起的 WM_WINDOWPOSCHANGED
+		// 不再排新的检查。否则最小尺寸比工作区还大时，系统把尺寸抬回去又触发检查，
+		// 会一直循环。
+		defer func() { a.refitPending = false }()
+		if rc, ok := a.workArea(); ok {
+			a.keepInside(rc)
+		}
+	})
+}
+
+// keepInside 只在窗口比工作区大时才收缩并移回屏幕内；放得下的窗口不动，
+// 用户自己拖到半出屏幕的位置也保留。最大化、最小化时由系统管，不插手。
+func (a *application) keepInside(rc win.RECT) {
+	h := a.mw.Handle()
+	if win.IsIconic(h) || win.IsZoomed(h) {
+		return
+	}
+	a.updateNarrow(rc)
+	b := a.mw.BoundsPixels()
+	availW, availH := int(rc.Right-rc.Left), int(rc.Bottom-rc.Top)
+	if b.Width <= availW && b.Height <= availH {
+		return
+	}
+	w, hh := min(b.Width, availW), min(b.Height, availH)
+	x := min(max(b.X, int(rc.Left)), int(rc.Right)-w)
+	y := min(max(b.Y, int(rc.Top)), int(rc.Bottom)-hh)
+	_ = a.mw.SetBoundsPixels(walk.Rectangle{X: x, Y: y, Width: w, Height: hh})
+}
+
+// updateNarrow 按工作区宽度（逻辑像素）切换窄屏单栏。回到宽屏时恢复左栏常驻。
+func (a *application) updateNarrow(rc win.RECT) {
+	narrow := walk.IntTo96DPI(int(rc.Right-rc.Left), a.mw.DPI()) < wideLayoutWidth
+	if narrow == a.narrow {
+		return
+	}
+	a.narrow = narrow
+	a.connectionPage = false
+	a.arrangePanes(a.assistant.panel.Visible())
+}
+
+// arrangePanes 按 AI 面板是否展开（ai）决定三栏的显隐。
+// 常规屏幕：中栏常驻；AI 展开且客户区不足 bothSidePanesWidth 时收起左栏。
+// 窄屏单栏：一次只显示一栏，默认中栏；左栏、AI 面板显示时取消宽度上限、占满窗口，
+// 中栏也不再需要为侧栏保留 70% 的下限。
+func (a *application) arrangePanes(ai bool) {
+	if a.mw == nil || a.connectionPane == nil || a.monitorPane == nil || a.assistant == nil || a.assistant.panel == nil || a.arrangingPanes {
 		return
 	}
 	a.arrangingPanes = true
 	defer func() { a.arrangingPanes = false }()
-	a.connectionPane.SetVisible(!a.assistant.panel.Visible() || a.mw.ClientBounds().Width >= bothSidePanesWidth)
+	conn, monitor := !ai || a.mw.ClientBounds().Width >= bothSidePanesWidth, true
+	connMax, aiMax, monitorMin := connectionPaneMaxWidth, assistantMaxWidth, minMonitorWidth
+	if a.narrow {
+		conn, monitor = a.connectionPage && !ai, !ai && !a.connectionPage
+		connMax, aiMax, monitorMin = 0, 0, 0
+	}
+	setWidthLimits(a.connectionPane, connectionPaneMinWidth, connMax)
+	setWidthLimits(a.assistant.panel, assistantMinWidth, aiMax)
+	setWidthLimits(a.monitorPane, monitorMin, 0)
+	// walk 的 ScrollView 关掉横向滚动后不能横向拉伸，去掉宽度上限也照样停在最小宽度。
+	// 窄屏单栏时打开横向滚动让侧栏占满窗口；侧栏比内容宽，不会真的出现横向滚动条。
+	setHorizontalScroll(a.connectionPane, a.narrow)
+	setHorizontalScroll(a.assistant.panel, a.narrow)
+	setVisible(a.connectionPageButton, a.narrow)
+	setVisible(a.dataPageButton, a.narrow)
+	// 先收起再展开：反过来 walk 会先按多出的一栏把窗口撑宽。
+	if !conn {
+		setVisible(a.connectionPane, false)
+	}
+	if !monitor {
+		setVisible(a.monitorPane, false)
+	}
+	setVisible(a.connectionPane, conn)
+	setVisible(a.monitorPane, monitor)
+}
+
+// setWidthLimits 与 setVisible 只在值变化时才写：每次写都会整窗重排，
+// 而 arrangePanes 在拖动改尺寸时每一步都会被调用。
+func setWidthLimits(w walk.Widget, minW, maxW int) {
+	lo, hi := walk.Size{Width: minW}, walk.Size{Width: maxW}
+	if w.MinSize() != lo || w.MaxSize() != hi {
+		_ = w.SetMinMaxSize(lo, hi)
+	}
+}
+
+func setVisible(w walk.Widget, visible bool) {
+	if w.Visible() != visible {
+		w.SetVisible(visible)
+	}
+}
+
+// 打开横向滚动后 walk 不再从内容宽度里扣掉纵向滚动条，内容会伸到滚动条下面，
+// 右边距补上滚动条的宽度（96 DPI 下 17）。两个侧栏平时的右边距都是 10。
+func setHorizontalScroll(sv *walk.ScrollView, on bool) {
+	if h, v := sv.Scrollbars(); h != on {
+		sv.SetScrollbars(on, v)
+		m := sv.Layout().Margins()
+		m.HFar = 10
+		if on {
+			m.HFar += 17
+		}
+		_ = sv.Layout().SetMargins(m)
+		sv.RequestLayout()
+	}
+}
+
+func (a *application) showConnectionPage() {
+	a.connectionPage = true
+	a.arrangePanes(false)
+}
+
+func (a *application) showDataPage() {
+	a.connectionPage = false
+	a.arrangePanes(a.assistant.panel.Visible())
 }
 
 // Win32 在重排时会收起下拉列表。用户选项期间暂缓统计区刷新，
@@ -718,17 +897,18 @@ func (a *application) toggleAssistant() {
 	if a.assistant.panel.Visible() {
 		a.assistant.stop()
 		a.assistant.panel.SetVisible(false)
-		a.enforceAssistantWidth()
+		a.arrangePanes(false)
 	} else {
 		a.showAssistant()
 	}
 }
+
+// showAssistant 先按「AI 已展开」收好其他栏再显示 AI，防止 walk 先把整个窗口
+// 扩到多一栏的最小宽度。
 func (a *application) showAssistant() {
+	a.connectionPage = false
+	a.arrangePanes(true)
 	a.arrangingPanes = true
-	// 在显示 AI 之前隐藏连接栏，防止 Walk 先把整个窗口扩到三栏最小宽度。
-	if a.mw.ClientBounds().Width < bothSidePanesWidth {
-		a.connectionPane.SetVisible(false)
-	}
 	a.assistant.panel.SetVisible(true)
 	a.arrangingPanes = false
 }

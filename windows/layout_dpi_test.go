@@ -172,11 +172,36 @@ func driveWorkbench(a *application, steps func(onUI func(func()))) {
 }
 
 // fitWorkbench 模拟启动:先回到设计尺寸,再按工作区收缩,等布局应用后再返回。
+// 运行中的收窗检查也改按这块模拟屏幕判断,否则会把窗口拉回本机真实屏幕。
 func fitWorkbench(a *application, onUI func(func()), work win.RECT) {
-	onUI(func() { _ = a.mw.SetSize(walk.Size{Width: 1280, Height: 820}) })
+	onUI(func() {
+		a.workArea = func() (win.RECT, bool) { return work, true }
+		_ = a.mw.SetSize(walk.Size{Width: 1280, Height: 820})
+	})
 	time.Sleep(300 * time.Millisecond)
 	onUI(func() { a.fitIntoWorkArea(work) })
 	time.Sleep(700 * time.Millisecond)
+}
+
+// 系统默认把顶层窗口的尺寸上限定在屏幕加边框(WM_GETMINMAXINFO 的 ptMaxTrackSize),
+// walk 只改下限。测试里子类化窗口过程放开上限,窗口就能比本机屏幕大,
+// 小屏或高缩放的测试机也能量 1920x1080 @100% 这类大屏组合,不必跳过。
+var (
+	oversizePrev = map[win.HWND]uintptr{}
+	oversizeProc = syscall.NewCallback(func(h win.HWND, msg uint32, wp, lp uintptr) uintptr {
+		r := win.CallWindowProc(oversizePrev[h], h, msg, wp, lp)
+		if msg == win.WM_GETMINMAXINFO {
+			// lParam 是系统给的结构体地址;经 &lp 转换,vet 不把它当成可能失效的 uintptr 指针。
+			(*(**win.MINMAXINFO)(unsafe.Pointer(&lp))).PtMaxTrackSize = win.POINT{X: 1 << 14, Y: 1 << 14}
+		}
+		return r
+	})
+)
+
+func allowOversizeWindow(h win.HWND) {
+	if _, ok := oversizePrev[h]; !ok {
+		oversizePrev[h] = win.SetWindowLongPtr(h, win.GWLP_WNDPROC, oversizeProc)
+	}
 }
 
 func runLayoutCases(t *testing.T, beforeCreate func(), setup func(*application), displays []layoutDisplay) {
@@ -184,13 +209,13 @@ func runLayoutCases(t *testing.T, beforeCreate func(), setup func(*application),
 	a := newWorkbenchForTestWith(t, beforeCreate)
 	var (
 		reports []layoutReport
-		skipped []string
 		dpi     int
 		aware   string
 	)
 	driveWorkbench(a, func(onUI func(func())) {
 		var real win.RECT
 		onUI(func() {
+			allowOversizeWindow(a.mw.Handle())
 			if setup != nil {
 				setup(a)
 			}
@@ -199,10 +224,7 @@ func runLayoutCases(t *testing.T, beforeCreate func(), setup func(*application),
 			dpi, aware = a.mw.DPI(), threadDPIAwareness()
 		})
 		for _, d := range displays {
-			if px(d.w, dpi) > real.Right-real.Left || px(d.h, dpi) > real.Bottom-real.Top {
-				skipped = append(skipped, d.name)
-				continue
-			}
+			// 比本机屏幕大的工作区照样从屏幕左上角起算,窗口伸到屏幕外也照常排版与测量。
 			work := win.RECT{Left: real.Left, Top: real.Top, Right: real.Left + px(d.w, dpi), Bottom: real.Top + px(d.h, dpi)}
 			fitWorkbench(a, onUI, work)
 			onUI(func() { reports = append(reports, measureLayout(a, d, work, dpi)) })
@@ -210,9 +232,6 @@ func runLayoutCases(t *testing.T, beforeCreate func(), setup func(*application),
 	})
 
 	t.Logf("DPI %d(线程 DPI 感知:%s)", dpi, aware)
-	for _, name := range skipped {
-		t.Logf("%-26s 跳过:按此 DPI 比本机屏幕大", name)
-	}
 	var failed bool
 	for _, r := range reports {
 		t.Log(r)
@@ -225,9 +244,6 @@ func runLayoutCases(t *testing.T, beforeCreate func(), setup func(*application),
 		if r.unusedTableW > 24 {
 			t.Errorf("%s: 数据列没有利用 %d px 的可用宽度", r.display.name, r.unusedTableW)
 		}
-	}
-	if len(reports) == 0 {
-		t.Skip("本机工作区装不下任何待测显示组合")
 	}
 	if failed {
 		t.Errorf("有显示组合不满足:窗口放进工作区、发送框 ≥ %d 行、数据表 ≥ %d 行、控件不重叠不裁切", minSendLines, minTableRows)
@@ -281,10 +297,14 @@ func TestSendExtrasFollowAvailableHeight(t *testing.T) {
 		var real win.RECT
 		var dpi int
 		onUI(func() {
+			allowOversizeWindow(a.mw.Handle())
 			win.ShowWindow(a.mw.Handle(), win.SW_SHOWNOACTIVATE)
 			real, _ = workAreaFor(a.mw.Handle())
 			dpi = a.mw.DPI()
 		})
+		workFor := func(d layoutDisplay) win.RECT {
+			return win.RECT{Left: real.Left, Top: real.Top, Right: real.Left + px(d.w, dpi), Bottom: real.Top + px(d.h, dpi)}
+		}
 		// text 为空表示按钮隐藏,文字无所谓。
 		expect := func(step string, open, toggle bool, text string) {
 			time.Sleep(300 * time.Millisecond)
@@ -300,8 +320,7 @@ func TestSendExtrasFollowAvailableHeight(t *testing.T) {
 				}
 			})
 		}
-		tight := layoutDisplays[0]
-		fitWorkbench(a, onUI, win.RECT{Left: real.Left, Top: real.Top, Right: real.Left + px(tight.w, dpi), Bottom: real.Top + px(tight.h, dpi)})
+		fitWorkbench(a, onUI, workFor(layoutDisplays[0]))
 		expect("最紧工作区", false, true, "更多发送")
 		onUI(a.toggleSendExtras)
 		expect("点更多发送", true, true, "收起发送")
@@ -316,12 +335,157 @@ func TestSendExtrasFollowAvailableHeight(t *testing.T) {
 		expect("收起时定时进行中", false, true, "定时中")
 		onUI(func() { a.stopTimer(false) })
 		expect("定时停止", false, true, "更多发送")
-		if real.Bottom-real.Top < px(820, dpi) {
-			t.Log("本机工作区放不下设计尺寸,跳过常驻两行的检查")
-			return
+		fitWorkbench(a, onUI, workFor(layoutDisplays[len(layoutDisplays)-1]))
+		expect("1920x1080 @100%(放得下设计尺寸)", true, false, "")
+	})
+	for _, e := range errs {
+		t.Error(e)
+	}
+}
+
+// windowFits 判断窗口外框是否没超出工作区的宽高(位置不论)。
+func windowFits(h win.HWND, work win.RECT) bool {
+	wr := windowRect(h)
+	return wr.Right-wr.Left <= work.Right-work.Left && wr.Bottom-wr.Top <= work.Bottom-work.Top
+}
+
+// 800x600 这类连「左栏 + 中栏」都放不下的屏幕:三栏一次只显示一栏,
+// 中栏标题行的「连接配置」与左栏的「返回数据」切换,侧栏占满窗口,窗口始终放得下。
+func TestNarrowScreenShowsOnePaneAtATime(t *testing.T) {
+	a := newWorkbenchForTestWith(t, nil)
+	var errs []string
+	driveWorkbench(a, func(onUI func(func())) {
+		var real win.RECT
+		var dpi int
+		onUI(func() {
+			allowOversizeWindow(a.mw.Handle())
+			win.ShowWindow(a.mw.Handle(), win.SW_SHOWNOACTIVATE)
+			real, _ = workAreaFor(a.mw.Handle())
+			dpi = a.mw.DPI()
+		})
+		screen := layoutDisplay{"800x600 @100%", 800, 552}
+		work := win.RECT{Left: real.Left, Top: real.Top, Right: real.Left + px(screen.w, dpi), Bottom: real.Top + px(screen.h, dpi)}
+		// buttons 表示窄屏切换按钮是否启用;按钮所在的栏隐藏时它自然也不可见。
+		expect := func(step string, conn, monitor, ai, buttons bool) {
+			time.Sleep(500 * time.Millisecond)
+			onUI(func() {
+				format := "连接栏=%v 中栏=%v AI=%v 「连接配置」=%v 「返回数据」=%v 放得下=%v"
+				got := fmt.Sprintf(format, a.connectionPane.Visible(), a.monitorPane.Visible(), a.assistant.panel.Visible(), a.connectionPageButton.Visible(), a.dataPageButton.Visible(), windowFits(a.mw.Handle(), work))
+				want := fmt.Sprintf(format, conn, monitor, ai, buttons && monitor, buttons && conn, true)
+				if got != want {
+					errs = append(errs, step+": "+got+",应为 "+want)
+				}
+				for _, p := range layoutProblems(a, dpi) {
+					errs = append(errs, step+": "+p)
+				}
+				// 侧栏单独显示时占满客户区(减去左右边距 20)。
+				client := lg(clientRectOnScreen(a.mw.Handle()).Right-clientRectOnScreen(a.mw.Handle()).Left, dpi)
+				for _, pane := range []*walk.ScrollView{a.connectionPane, a.assistant.panel} {
+					if pane.Visible() && !monitor {
+						if w := lg(windowRect(pane.Handle()).Right-windowRect(pane.Handle()).Left, dpi); w < client-24 {
+							errs = append(errs, fmt.Sprintf("%s: 侧栏只有 %d 宽,客户区 %d", step, w, client))
+						}
+					}
+				}
+			})
 		}
-		fitWorkbench(a, onUI, real)
-		expect("工作区放得下设计尺寸", true, false, "")
+		fitWorkbench(a, onUI, work)
+		onUI(func() {
+			r := measureLayout(a, screen, work, dpi)
+			t.Log(r)
+			if r.overW > 0 || r.overH > 0 || r.sendLines < minSendLines || r.tableRows < minTableRows || len(r.problems) > 0 {
+				errs = append(errs, fmt.Sprintf("800x600 数据页: %v %v", r, r.problems))
+			}
+		})
+		expect("800x600 默认显示中栏", false, true, false, true)
+		onUI(a.showConnectionPage)
+		expect("点「连接配置」", true, false, false, true)
+		onUI(a.showDataPage)
+		expect("点「返回数据」", false, true, false, true)
+		onUI(a.showAssistant)
+		expect("展开 AI", false, false, true, true)
+		onUI(a.toggleAssistant)
+		expect("关闭 AI", false, true, false, true)
+		onUI(a.showConnectionPage)
+		work = win.RECT{Left: real.Left, Top: real.Top, Right: real.Left + px(1024, dpi), Bottom: real.Top + px(552, dpi)}
+		fitWorkbench(a, onUI, work)
+		expect("回到 1024 宽", true, true, false, false)
+	})
+	for _, e := range errs {
+		t.Error(e)
+	}
+}
+
+// 运行中工作区变小(换屏、改分辨率、任务栏变高)或窗口被改得比屏幕大时收回来;
+// 放得下的窗口哪怕被拖到半出屏幕也不动。
+func TestWindowStaysWithinWorkArea(t *testing.T) {
+	a := newWorkbenchForTestWith(t, nil)
+	var errs []string
+	driveWorkbench(a, func(onUI func(func())) {
+		var real win.RECT
+		var dpi int
+		onUI(func() {
+			allowOversizeWindow(a.mw.Handle())
+			win.ShowWindow(a.mw.Handle(), win.SW_SHOWNOACTIVATE)
+			real, _ = workAreaFor(a.mw.Handle())
+			dpi = a.mw.DPI()
+		})
+		area := func(w, h int) win.RECT {
+			return win.RECT{Left: real.Left, Top: real.Top, Right: real.Left + px(w, dpi), Bottom: real.Top + px(h, dpi)}
+		}
+		var work win.RECT
+		// change 模拟一次显示变化:换掉工作区后发出 msg。
+		change := func(step string, w, h int, msg uint32, wp uintptr) {
+			work = area(w, h)
+			onUI(func() {
+				a.workArea = func() (win.RECT, bool) { return work, true }
+				win.SendMessage(a.mw.Handle(), msg, wp, 0)
+			})
+			time.Sleep(700 * time.Millisecond)
+			onUI(func() {
+				if !windowFits(a.mw.Handle(), work) {
+					wr := windowRect(a.mw.Handle())
+					errs = append(errs, fmt.Sprintf("%s: 窗口 %dx%d 超出工作区 %dx%d", step, lg(wr.Right-wr.Left, dpi), lg(wr.Bottom-wr.Top, dpi), w, h))
+				}
+			})
+		}
+		fitWorkbench(a, onUI, area(1920, 1032))
+		change("分辨率改小到 1024x552", 1024, 552, win.WM_DISPLAYCHANGE, 32)
+		change("任务栏变高,工作区只剩 800x552", 800, 552, win.WM_SETTINGCHANGE, 0x002F)
+		onUI(func() {
+			if !a.narrow || a.connectionPane.Visible() {
+				errs = append(errs, "工作区 800 宽时没有切到窄屏单栏")
+			}
+		})
+		change("回到 1920x1032", 1920, 1032, win.WM_DISPLAYCHANGE, 32)
+		onUI(func() {
+			if a.narrow || !a.connectionPane.Visible() {
+				errs = append(errs, "回到宽屏后左栏没有恢复")
+			}
+		})
+		// 程序或系统把窗口改得比工作区大:窗口位置改变之后收回来。
+		onUI(func() {
+			_ = a.mw.SetBoundsPixels(walk.Rectangle{X: int(work.Left), Y: int(work.Top), Width: int(work.Right - work.Left + px(200, dpi)), Height: int(work.Bottom - work.Top + px(100, dpi))})
+		})
+		time.Sleep(700 * time.Millisecond)
+		onUI(func() {
+			if !windowFits(a.mw.Handle(), work) {
+				errs = append(errs, "窗口被改得比工作区大后没有收回")
+			}
+		})
+		// 放得下的窗口被拖到一半出屏幕:保持用户的位置。
+		var before walk.Rectangle
+		onUI(func() {
+			b := a.mw.BoundsPixels()
+			before = walk.Rectangle{X: int(work.Right) - b.Width/2, Y: b.Y, Width: min(b.Width, int(px(1280, dpi))), Height: min(b.Height, int(px(820, dpi)))}
+			_ = a.mw.SetBoundsPixels(before)
+		})
+		time.Sleep(700 * time.Millisecond)
+		onUI(func() {
+			if b := a.mw.BoundsPixels(); b != before {
+				errs = append(errs, fmt.Sprintf("放得下的窗口被挪动了: %v → %v", before, b))
+			}
+		})
 	})
 	for _, e := range errs {
 		t.Error(e)
