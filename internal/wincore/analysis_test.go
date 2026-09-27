@@ -14,6 +14,30 @@ func TestAnalyzeHexPacketModbusCRC(t *testing.T) {
 	}
 }
 
+func TestModbusSummary(t *testing.T) {
+	for _, c := range []struct {
+		name, transport, hex, want string
+	}{
+		{"RTU 请求", "SERIAL", "01 03 00 00 00 0A C5 CD", "Modbus RTU 从站 1 功能码 0x03 读保持寄存器 地址 0 数量/值 10，CRC 通过"},
+		{"RTU 响应", "SERIAL", "01 03 08 00 64 01 F4 FF 9C 00 0A 70 28", "Modbus RTU 从站 1 功能码 0x03 读保持寄存器 数据字节数 8，CRC 通过"},
+		{"RTU CRC 被改坏", "SERIAL", "01 03 08 00 67 01 F4 FF 9C 00 0A 43 D7", "数据字节数 8，CRC 不匹配（收到 0xD743，应为 0x2843）"},
+		{"RTU 异常响应", "SERIAL", "01 83 02 C0 F1", "功能码 0x83 读保持寄存器（异常响应）异常码 0x02，CRC 通过"},
+		{"Modbus TCP", "TCP", "00 01 00 00 00 06 01 03 00 00 00 0A", "Modbus TCP 事务 0x0001 单元 1 功能码 0x03 读保持寄存器"},
+		{"普通文本不算 Modbus", "SERIAL", "48 65 6C 6C 6F 0D 0A", ""},
+		{"功能码对但长度对不上且 CRC 错", "SERIAL", "01 03 00 00 00 0A 12 34 56", ""},
+		{"TCP 长度字段不符", "TCP", "00 01 00 00 00 09 01 03 00 00 00 0A", ""},
+	} {
+		data, err := ParseData(c.hex, true, "无")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := ModbusSummary(c.transport, data)
+		if c.want == "" && got != "" || c.want != "" && !strings.Contains(got, c.want) {
+			t.Errorf("%s: ModbusSummary = %q, want contains %q", c.name, got, c.want)
+		}
+	}
+}
+
 func TestAnalyzeModbusTCP(t *testing.T) {
 	report := AnalyzeTransportPacket("TCP", "00 01 00 00 00 06 01 03 00 00 00 0A")
 	for _, want := range []string{"Modbus TCP", "单元号 1", "读保持寄存器", "起始地址：0，数量/值：10"} {

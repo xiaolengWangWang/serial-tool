@@ -84,6 +84,72 @@ func appendDataTypeReport(out *strings.Builder, data []byte) {
 	}
 }
 
+// modbusFunctionNames 是常用功能码的中文名，本地报告与 ModbusSummary 共用。
+var modbusFunctionNames = map[byte]string{1: "读线圈", 2: "读离散输入", 3: "读保持寄存器", 4: "读输入寄存器", 5: "写单线圈", 6: "写单寄存器", 15: "写多线圈", 16: "写多寄存器"}
+
+// ModbusSummary 把一帧按 Modbus 解析成一行结论，随报文一起交给 AI：CRC、功能码这类
+// 要精确计算的事实由程序给出，模型自己算 CRC 并不可靠（实测把改坏 CRC 的帧判成正常）。
+// 只有像 Modbus 的帧才给结论：功能码已知，且 CRC 通过或帧长与功能码吻合；
+// 其他数据返回空串，免得把普通文本也标成「CRC 不匹配的 Modbus 帧」误导分析。
+func ModbusSummary(transport string, data []byte) string {
+	if transport == "TCP" {
+		if len(data) < 8 || data[2] != 0 || data[3] != 0 || int(data[4])<<8|int(data[5]) != len(data)-6 {
+			return ""
+		}
+		function := data[7]
+		name, ok := modbusFunctionNames[function&0x7f]
+		if !ok {
+			return ""
+		}
+		s := fmt.Sprintf("Modbus TCP 事务 0x%04X 单元 %d 功能码 0x%02X %s", uint16(data[0])<<8|uint16(data[1]), data[6], function, name)
+		if function&0x80 != 0 && len(data) >= 9 {
+			s += fmt.Sprintf("（异常响应）异常码 0x%02X", data[8])
+		}
+		return s
+	}
+	if len(data) < 5 || data[0] == 0 || data[0] > 247 {
+		return ""
+	}
+	function := data[1]
+	name, ok := modbusFunctionNames[function&0x7f]
+	if !ok {
+		return ""
+	}
+	want := CRC16Modbus(data[:len(data)-2])
+	got := uint16(data[len(data)-2]) | uint16(data[len(data)-1])<<8
+	if want != got && !modbusLengthFits(function, data) {
+		return ""
+	}
+	s := fmt.Sprintf("Modbus RTU 从站 %d 功能码 0x%02X %s", data[0], function, name)
+	switch {
+	case function&0x80 != 0:
+		s += fmt.Sprintf("（异常响应）异常码 0x%02X", data[2])
+	case len(data) == 8:
+		s += fmt.Sprintf(" 地址 %d 数量/值 %d", uint16(data[2])<<8|uint16(data[3]), uint16(data[4])<<8|uint16(data[5]))
+	default:
+		s += fmt.Sprintf(" 数据字节数 %d", data[2])
+	}
+	if want == got {
+		return s + "，CRC 通过"
+	}
+	return s + fmt.Sprintf("，CRC 不匹配（收到 0x%04X，应为 0x%04X）", got, want)
+}
+
+// modbusLengthFits 判断 RTU 帧长与功能码是否吻合，CRC 不对时据此区分
+// 「传坏了的 Modbus 帧」与「根本不是 Modbus」。
+func modbusLengthFits(function byte, data []byte) bool {
+	n := len(data)
+	switch {
+	case function&0x80 != 0:
+		return n == 5
+	case function >= 1 && function <= 6:
+		return n == 8 || function <= 4 && n == 5+int(data[2])
+	case function == 15 || function == 16:
+		return n == 8 || n >= 9 && n == 9+int(data[6])
+	}
+	return false
+}
+
 func appendModbusReport(out *strings.Builder, transport string, data []byte) {
 	offset, tcp := 1, false
 	if transport == "TCP" && len(data) >= 8 && data[2] == 0 && data[3] == 0 {
@@ -104,7 +170,7 @@ func appendModbusReport(out *strings.Builder, transport string, data []byte) {
 		return
 	}
 	function := data[offset]
-	name := map[byte]string{1: "读线圈", 2: "读离散输入", 3: "读保持寄存器", 4: "读输入寄存器", 5: "写单线圈", 6: "写单寄存器", 15: "写多线圈", 16: "写多寄存器"}[function&0x7f]
+	name := modbusFunctionNames[function&0x7f]
 	if name == "" {
 		name = "未知"
 	}

@@ -290,13 +290,17 @@ func AnalyzeDatabases(dir string, filenames []string, start, end, direction stri
 		if int64(len(raw)) != p.size {
 			return "", fmt.Errorf("记录 %d 原始负载长度不一致", p.id)
 		}
-		// 只输出原始 HEX，由 AI 据字节自行判定，不再附带可能误导的派生解析；
-		// 大包仅预览前若干字节，避免报告膨胀。
+		// 输出原始 HEX，协议由 AI 据字节判定，不附带可能误导的派生解析（数据类型候选等）；
+		// 大包仅预览前若干字节，避免报告膨胀。例外是 ModbusSummary：CRC 这类要精确计算的
+		// 结论模型算不准，而它只在帧确实像 Modbus 时才给，不会把普通数据标成 Modbus。
 		const hexPreview = 512
 		if len(raw) > hexPreview {
 			fmt.Fprintf(&out, "HEX（前 %d/%d 字节）：% X …\n", hexPreview, len(raw), raw[:hexPreview])
 		} else {
 			fmt.Fprintf(&out, "HEX：% X\n", raw)
+		}
+		if s := ModbusSummary(analysisTransport(p.mode), raw); s != "" {
+			fmt.Fprintf(&out, "本地解析：%s\n", s)
 		}
 	}
 	return out.String(), nil

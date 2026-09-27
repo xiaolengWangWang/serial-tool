@@ -17,17 +17,14 @@ import (
 )
 
 // All analysis state belongs to its dialog; workers receive immutable snapshots.
+// 右侧对话与 AI 面板共用 aiChat；AI 服务设置与是否启用也与面板共用，不再各存一份。
 type analysisWindow struct {
-	app                    *application
-	dlg                    *walk.Dialog
-	report, chat, question *walk.TextEdit
-	status                 *walk.Label
-	run, send              *walk.PushButton
-	enabled                *walk.CheckBox
-	base, key, model       *walk.LineEdit
-	turns                  []analysisTurn
-	cancel                 context.CancelFunc
-	busy                   bool
+	app    *application
+	dlg    *walk.Dialog
+	report *walk.TextEdit
+	run    *walk.PushButton
+	chat   *aiChat
+	busy   bool
 }
 
 func (a *application) openAnalysisCenter() {
@@ -69,7 +66,7 @@ func (a *application) openAnalysisCenter() {
 				return
 			}
 			snapshot := analysisSelection(raw, indices)
-			w.work(func(context.Context) (string, error) { return analysisPacketReport(snapshot) }, false)
+			w.work(func(context.Context) (string, error) { return analysisPacketReport(snapshot) })
 		}}, PushButton{Text: "分析数据库…", OnClicked: a.openDatabaseAnalysis}}},
 	}
 	w.open("分析中心", controls)
@@ -86,7 +83,7 @@ func (a *application) openDatabaseAnalysis() {
 			return
 		}
 		w.busy = true
-		w.status.SetText("读取数据库列表…")
+		w.chat.status.SetText("读取数据库列表…")
 		go func() {
 			files, err := wincore.ListAnalysisDatabases(a.engine.DataDir())
 			a.mw.Synchronize(func() {
@@ -103,7 +100,7 @@ func (a *application) openDatabaseAnalysis() {
 				if len(names) > 0 {
 					list.SetSelectedIndexes([]int{len(names) - 1})
 				}
-				w.status.SetText(fmt.Sprintf("%d 个数据库；Ctrl / Shift 可多选", len(names)))
+				w.chat.status.SetText(fmt.Sprintf("%d 个数据库；Ctrl / Shift 可多选", len(names)))
 			})
 		}()
 	}
@@ -129,7 +126,7 @@ func (a *application) openDatabaseAnalysis() {
 			start, end, dir := from.Text(), to.Text(), direction.Text()
 			w.work(func(context.Context) (string, error) {
 				return wincore.AnalyzeDatabases(a.engine.DataDir(), selected, start, end, dir, n)
-			}, false)
+			})
 		}},
 	}
 	w.openWithInit("数据库分析", controls, refresh)
@@ -139,138 +136,98 @@ func (w *analysisWindow) fail(err error) {
 	walk.MsgBox(w.dlg, "分析", err.Error(), walk.MsgBoxIconError)
 }
 func (w *analysisWindow) open(title string, controls []Widget) { w.openWithInit(title, controls, nil) }
+
+// openWithInit 左侧是本地报告，右侧是 AI 对话：本地分析完成后报告就是对话的数据，
+// 第一次提问附带报告（最多 32 KiB）；不输入问题直接发送时用默认问题。
 func (w *analysisWindow) openWithInit(title string, controls []Widget, init func()) {
-	setting := func(key, fallback string) string {
-		value := w.app.engine.GetSetting("deepseek." + key)
-		if value == "" {
-			return fallback
-		}
-		return value
+	panel := w.app.assistant
+	w.chat = &aiChat{app: w.app, owner: func() walk.Form { return w.dlg }, config: panel.aiConfig, settings: func() { panel.settingsFor(w.dlg) },
+		hint: "请分析报告中的协议、异常和排查建议。", onBusy: func(busy bool) { w.run.SetEnabled(!busy && !w.busy) }}
+	state := "AI 未启用：本地分析不上传数据；点对话下方「设置」启用后可提问"
+	if _, enabled := panel.aiConfig(); enabled {
+		state = "AI 已启用：本地分析不上传数据，提问时附带本地报告"
 	}
+	chatColumn := append([]Widget{Label{Text: "AI 对话", Font: Font{Family: fontUI, PointSize: sizeBody, Bold: true}}}, w.chat.widgets()...)
 	children := append(controls,
-		Label{AssignTo: &w.status, Text: "本地分析不上传数据。AI 仅在启用后点击发送时请求所填服务。"},
-		TabWidget{StretchFactor: 1, Pages: []TabPage{
-			{Title: "本地报告", Layout: VBox{Alignment: AlignHNearVNear}, Children: []Widget{TextEdit{AssignTo: &w.report, ReadOnly: true, VScroll: true, HScroll: true, MinSize: Size{Height: 170}}}},
-			{Title: "AI 设置与对话", Layout: VBox{Alignment: AlignHNearVNear}, Children: []Widget{
-				CheckBox{AssignTo: &w.enabled, Text: "启用 AI：允许点击发送时上传报告和对话（默认关闭）"},
-				Composite{Layout: Grid{Alignment: AlignHNearVCenter, Columns: 2}, Children: []Widget{Label{Text: "Base URL"}, LineEdit{AssignTo: &w.base, Text: setting("base_url", "https://api.deepseek.com")}, Label{Text: "模型"}, LineEdit{AssignTo: &w.model, Text: setting("model", "deepseek-chat")}, Label{Text: "API Key"}, LineEdit{AssignTo: &w.key, Text: setting("api_key", ""), PasswordMode: true}}},
-				PushButton{Text: "保存连接设置（Key 存于本地设置库）", OnClicked: func() {
-					for key, value := range map[string]string{"base_url": w.base.Text(), "model": w.model.Text(), "api_key": w.key.Text()} {
-						if err := w.app.engine.SetSetting("deepseek."+key, value); err != nil {
-							w.fail(err)
-							return
-						}
-					}
-					w.status.SetText("连接设置已保存；启用状态仅限当前窗口")
-				}},
-				TextEdit{AssignTo: &w.chat, ReadOnly: true, VScroll: true, StretchFactor: 1, MinSize: Size{Height: 100}},
-				TextEdit{AssignTo: &w.question, VScroll: true, MinSize: Size{Height: 50}, MaxSize: Size{Height: 80}, Text: "请分析报告中的协议、异常和排查建议。"},
-				Composite{Layout: HBox{Alignment: AlignHNearVCenter}, Children: []Widget{PushButton{AssignTo: &w.send, Text: "发送报告 / 继续追问", OnClicked: w.sendAI}, PushButton{Text: "清空对话", OnClicked: func() {
-					if !w.busy {
-						w.turns = nil
-						w.chat.SetText("")
-					}
-				}}, PushButton{Text: "取消 AI 请求", OnClicked: func() {
-					if w.cancel != nil {
-						w.cancel()
-					}
-				}}, HSpacer{}}},
+		Label{AssignTo: &w.chat.status, Text: state, EllipsisMode: EllipsisEnd},
+		Composite{StretchFactor: 1, Layout: HBox{Alignment: AlignHNearVNear, MarginsZero: true, Spacing: 12}, Children: []Widget{
+			Composite{StretchFactor: 1, Layout: VBox{Alignment: AlignHNearVNear, MarginsZero: true, Spacing: 6}, Children: []Widget{
+				Label{Text: "本地报告", Font: Font{Family: fontUI, PointSize: sizeBody, Bold: true}},
+				TextEdit{AssignTo: &w.report, ReadOnly: true, VScroll: true, HScroll: true, StretchFactor: 1, MinSize: Size{Height: 170}},
 			}},
+			Composite{StretchFactor: 1, Layout: VBox{Alignment: AlignHNearVNear, MarginsZero: true, Spacing: 6}, Children: chatColumn},
 		}},
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter}, Children: []Widget{PushButton{Text: "导出报告与对话…", OnClicked: w.export}, HSpacer{}, PushButton{Text: "关闭", OnClicked: func() { w.dlg.Cancel() }}}},
 	)
-	if err := (Dialog{AssignTo: &w.dlg, Title: title, Size: Size{Width: 980, Height: 780}, MinSize: Size{Width: 760, Height: 560}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 12}, Spacing: 8}, Children: children}).Create(w.app.mw); err != nil {
+	if err := (Dialog{AssignTo: &w.dlg, Title: title, Size: Size{Width: 1080, Height: 780}, MinSize: Size{Width: 760, Height: 560}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 12}, Spacing: 8}, Children: children}).Create(w.app.mw); err != nil {
 		w.app.showError(err)
 		return
 	}
 	defer w.dlg.Dispose()
-	w.dlg.Closing().Attach(func(_ *bool, _ walk.CloseReason) {
-		if w.cancel != nil {
-			w.cancel()
-		}
-	})
+	w.dlg.Closing().Attach(func(_ *bool, _ walk.CloseReason) { w.chat.stop() })
 	if init != nil {
 		init()
 	}
+	growDialog(w.app, w.dlg, 1080, 780)
 	w.dlg.Run()
 }
 
-func (w *analysisWindow) work(job func(context.Context) (string, error), ai bool) {
-	if w.busy {
+// growDialog 把对话框放大到期望尺寸（逻辑像素，不超过所在屏幕工作区）并居中。
+// walk 的 Dialog.Show 总把窗口设成内容的最小尺寸，声明的 Size 不起作用；这里排到
+// 消息循环开始之后再改。
+func growDialog(a *application, dlg *walk.Dialog, width, height int) {
+	a.mw.Synchronize(func() {
+		if dlg.IsDisposed() {
+			return
+		}
+		rc, ok := workAreaFor(dlg.Handle())
+		if !ok {
+			return
+		}
+		dpi, b := dlg.DPI(), dlg.BoundsPixels()
+		availW, availH := int(rc.Right-rc.Left), int(rc.Bottom-rc.Top)
+		w := min(max(b.Width, walk.IntFrom96DPI(width, dpi)), availW)
+		h := min(max(b.Height, walk.IntFrom96DPI(height, dpi)), availH)
+		_ = dlg.SetBoundsPixels(walk.Rectangle{X: int(rc.Left) + (availW-w)/2, Y: int(rc.Top) + (availH-h)/2, Width: w, Height: h})
+	})
+}
+
+// work 在后台跑本地分析，结果写进左侧报告，并作为右侧对话新一轮的数据。
+func (w *analysisWindow) work(job func(context.Context) (string, error)) {
+	if w.busy || w.chat.busy {
 		return
 	}
 	w.busy = true
 	w.run.SetEnabled(false)
-	w.send.SetEnabled(false)
-	w.status.SetText("分析中…")
-	ctx, cancel := context.WithCancel(context.Background())
-	w.cancel = cancel
+	w.chat.status.SetText("本地分析中…")
 	go func() {
-		result, err := job(ctx)
-		cancel()
+		result, err := job(context.Background())
 		w.app.mw.Synchronize(func() {
 			if w.dlg.IsDisposed() {
 				return
 			}
 			w.busy = false
-			w.cancel = nil
 			w.run.SetEnabled(true)
-			w.send.SetEnabled(true)
 			if err != nil {
-				w.status.SetText("分析未完成")
+				w.chat.status.SetText("分析未完成")
 				w.fail(err)
 				return
 			}
-			if ai {
-				w.turns = append(w.turns, analysisTurn{Role: "assistant", Content: result})
-				w.chat.SetText(w.chat.Text() + "\r\nAI：\r\n" + strings.ReplaceAll(result, "\n", "\r\n") + "\r\n")
+			w.report.SetText(strings.ReplaceAll(result, "\n", "\r\n"))
+			w.chat.setContext(analysisReportForAI(result), "已载入新的本地报告")
+			if _, enabled := w.app.assistant.aiConfig(); enabled {
+				w.chat.status.SetText("本地分析完成；可直接提问，不输入问题时按默认问题分析报告")
 			} else {
-				w.report.SetText(strings.ReplaceAll(result, "\n", "\r\n"))
-				w.turns = nil
-				w.chat.SetText("")
+				w.chat.status.SetText("本地分析完成 · 未上传数据；启用 AI 后可针对报告提问")
 			}
-			w.status.SetText("分析完成")
 		})
 	}()
 }
 
-func (w *analysisWindow) sendAI() {
-	if w.busy {
-		return
-	}
-	if !w.enabled.Checked() {
-		w.fail(errors.New("请先勾选启用 AI"))
-		return
-	}
-	question := strings.TrimSpace(w.question.Text())
-	if question == "" {
-		w.fail(errors.New("请输入问题"))
-		return
-	}
-	prompt := question
-	if len(w.turns) == 0 {
-		report := strings.TrimSpace(w.report.Text())
-		if report == "" {
-			w.fail(errors.New("请先完成本地分析"))
-			return
-		}
-		if len(report) > 32<<10 {
-			w.fail(errors.New("报告超过 32 KiB，请缩小范围后分析"))
-			return
-		}
-		prompt = "本地报告：\n" + report + "\n\n问题：" + question
-	}
-	cfg := analysisAIConfig{Enabled: true, Base: w.base.Text(), Key: w.key.Text(), Model: w.model.Text()}
-	turns := append(append([]analysisTurn(nil), w.turns...), analysisTurn{Role: "user", Content: prompt})
-	w.work(func(ctx context.Context) (string, error) { return analysisAIChat(ctx, cfg, turns) }, true)
-	w.turns = turns
-	w.chat.SetText(w.chat.Text() + "\r\n用户：" + question + "\r\n")
-}
-
 func (w *analysisWindow) export() {
 	content := w.report.Text()
-	if text := w.chat.Text(); text != "" {
-		content += "\r\n\r\n# AI 对话\r\n" + text
+	if len(w.chat.entries) > 0 {
+		content += "\r\n\r\n" + strings.ReplaceAll(chatMarkdown(w.chat.entries), "\n", "\r\n")
 	}
 	if strings.TrimSpace(content) == "" {
 		w.fail(errors.New("暂无可导出的内容"))
@@ -289,5 +246,5 @@ func (w *analysisWindow) export() {
 		w.fail(err)
 		return
 	}
-	w.status.SetText("已导出：" + fd.FilePath)
+	w.chat.status.SetText("已导出：" + fd.FilePath)
 }
