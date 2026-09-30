@@ -218,7 +218,7 @@ func (w *assistantPanel) settingsFor(owner walk.Form) {
 	if err := (Dialog{AssignTo: &dlg, Title: "AI 设置", Size: Size{Width: 580, Height: 400}, MinSize: Size{Width: 500, Height: 360}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 12}, Spacing: 8}, Children: []Widget{
 		CheckBox{AssignTo: &enabled, Text: "启用 AI（主动分析 / 提问时提交所选数据）", Checked: w.enabled},
 		Composite{Layout: Grid{Alignment: AlignHNearVCenter, Columns: 2}, Children: []Widget{Label{Text: "服务地址"}, LineEdit{AssignTo: &base, Text: w.config.Base}, Label{Text: "API Key"}, LineEdit{AssignTo: &key, Text: w.config.Key, PasswordMode: true}, Label{Text: "模型"}, LineEdit{AssignTo: &model, Text: w.config.Model}, Label{Text: "无响应超时 (s)"}, NumberEdit{AssignTo: &timeout, Value: w.config.Timeout.Seconds(), MinValue: 15, MaxValue: 300, Decimals: 0}, Label{Text: "最大上下文条数"}, NumberEdit{AssignTo: &limit, Value: float64(w.maxPackets), MinValue: 1, MaxValue: 500, Decimals: 0}}},
-		Label{Text: "支持 DeepSeek 及兼容 Chat Completions 的服务，回答边生成边显示。\r\n超时按「多久没有收到新内容」计算，长回答不会被截断。\r\nKey 保存在 Windows 凭据管理器；每次启动默认关闭 AI。"},
+		Label{Text: "支持 DeepSeek 及兼容 Chat Completions 的服务，回答边生成边显示。\r\n图片需支持视觉的模型（DeepSeek 可填 deepseek-flash）。\r\n超时按「多久没有收到新内容」计算，长回答不会被截断。\r\nKey 保存在 Windows 凭据管理器；每次启动默认关闭 AI。"},
 		PushButton{Text: "保存", OnClicked: func() {
 			w.stop()
 			w.enabled = enabled.Checked()

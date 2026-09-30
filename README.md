@@ -29,6 +29,8 @@ Windows 串口名可写 `COM3`。`./commbox -h` 查看全部参数。
 
 ## 桌面版功能总览
 
+- v0.9.17：Windows AI 对话支持随问题添加文本、DOCX、可选中文字的 PDF 和图片附件；本版同时提供 Windows、macOS 和 Linux 构建产物。
+- Windows AI 对话可添加文本日志、CSV、JSON、DOCX、可选中文字的 PDF 和 PNG/JPEG/GIF/WebP 图片；附件随提问发送，图片需使用支持视觉的模型（DeepSeek 可选 `deepseek-flash`）。每次最多 6 个附件，文本提取上限 64 KiB/个，PDF/DOCX 文件上限 5 MiB/个，PDF 单页解压内容上限 4 MiB，图片上限 2 MiB/个且不超过 3200 万像素；扫描版 PDF 暂不支持。PDF 在独立进程中解析，限时 20 秒；对话累计文字上限 512 KiB、图片编码上限 24 MiB。
 - v0.9.16：Windows AI 分析改为流式对话，回答边生成边显示，支持停止并保留已生成内容、连续追问、复制与导出；主面板和历史数据库分析共用同一套对话与设置。疑似 Modbus 帧由程序附加功能码、字节数和 CRC 校验结论，避免模型误算；长报告自动截取前 32 KiB，服务错误会说明 Key、余额、限流或网络原因
 - v0.9.15：Windows 版随本版发布(上一个 Windows 版是 v0.9.4,v0.9.5~v0.9.14 中适用于 Windows 的修复一并带上),附 VirtualCOM 0.2.2。Windows 界面:任何缩放下数据栏占「数据 + 发送」合计高度 70% 以上、中栏占窗口宽度 70% 以上;去掉数据与发送之间的可拖动分隔条,矮窗口把历史/快捷与定时/循环收进「更多发送」;左侧连接栏收窄到 240~250;筛选压成一行、报文改用 12pt、HEX/ASCII 列宽自适应,长下拉选项不再撑宽窗口
 - v0.9.14：macOS 后台连接期间若已被动断开,连接完成后立即收尾,界面不再停在“已连接”;布局自检覆盖工具箱与 HTTP 工作区(浅色/深色);新增进制转换与 `$'...'` 模糊测试。VirtualCOM 0.2.2(待 Windows 发布):`ports` 编号排序修正,点控制台窗口关闭/注销/关机时也会拆除端口
@@ -141,7 +143,7 @@ macOS/Linux 使用 PTY，无需额外驱动。Windows 的 TCP→虚拟串口创�
 
 ## 构建
 
-本 macOS 开发线仅同步和发布 macOS/Linux 构建产物；本工作流不修改、不构建或上传 Windows 产物。
+本仓库分别提供 Windows、macOS 和 Linux 构建产物，按各平台的构建与验证流程发布。
 
 Windows 发布包（两个 CommBox 程序、两个 VirtualCOM 程序、说明文档与 SHA256SUMS）由 `scripts/build-release.ps1` 生成，版本号从源码常量读取：
 

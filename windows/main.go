@@ -227,6 +227,9 @@ func (m *packetTableModel) clear() {
 }
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == pdfWorkerFlag {
+		os.Exit(runAIPDFWorker(os.Args[2]))
+	}
 	app := new(application)
 	configDir, err := os.UserConfigDir()
 	if err != nil {

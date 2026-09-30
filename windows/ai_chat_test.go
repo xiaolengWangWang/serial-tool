@@ -9,12 +9,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/lxn/win"
+	"serial-tool/internal/aiattachment"
 	"serial-tool/internal/wincore"
 )
 
@@ -48,6 +51,121 @@ func sseServer(t *testing.T, gap time.Duration, parts ...string) (*httptest.Serv
 	}))
 	t.Cleanup(srv.Close)
 	return srv, &bodies
+}
+
+func TestAssistantLoadsAttachmentWithoutBlockingUI(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "capture.log")
+	if err := os.WriteFile(path, []byte("RX 01 03"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := newWorkbenchForTest(t)
+	driveWorkbench(a, func(onUI func(func())) {
+		onUI(func() {
+			a.showAssistant()
+			c := a.assistant.chat
+			c.loadFiles([]string{path})
+			if !c.loading {
+				t.Error("file extraction blocked UI thread")
+			}
+		})
+		for i := 0; i < 100; i++ {
+			time.Sleep(10 * time.Millisecond)
+			var done bool
+			onUI(func() { done = !a.assistant.chat.loading })
+			if done {
+				break
+			}
+		}
+		onUI(func() {
+			c := a.assistant.chat
+			if c.loading || len(c.files) != 1 || c.files[0].Text != "RX 01 03" {
+				t.Errorf("attachment not loaded: %+v", c.files)
+			}
+		})
+	})
+}
+
+func TestAssistantRestoresAttachmentAfterRequestFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "service unavailable", http.StatusBadRequest)
+	}))
+	defer srv.Close()
+	a := newWorkbenchForTest(t)
+	driveWorkbench(a, func(onUI func(func())) {
+		onUI(func() {
+			a.showAssistant()
+			a.assistant.enabled = true
+			a.assistant.config.Base, a.assistant.config.Key, a.assistant.config.Model = srv.URL, "test", "vision-test"
+			c := a.assistant.chat
+			c.files = []aiattachment.Attachment{{Name: "capture.log", Text: "RX 01 03"}}
+			c.input.SetText("分析附件")
+			c.submit()
+		})
+		for i := 0; i < 100; i++ {
+			time.Sleep(10 * time.Millisecond)
+			var done bool
+			onUI(func() { done = !a.assistant.chat.busy })
+			if done {
+				break
+			}
+		}
+		onUI(func() {
+			c := a.assistant.chat
+			if c.busy || c.input.Text() != "分析附件" || len(c.files) != 1 || c.files[0].Name != "capture.log" {
+				t.Errorf("draft lost after failure: input=%q files=%+v", c.input.Text(), c.files)
+			}
+		})
+	})
+}
+
+func TestAssistantCanAskWithAttachmentBeforeAnalysis(t *testing.T) {
+	requests := make(chan map[string]any, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		requests <- body
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"已分析"}}]}`)
+	}))
+	defer srv.Close()
+	a := newWorkbenchForTest(t)
+	driveWorkbench(a, func(onUI func(func())) {
+		onUI(func() {
+			a.showAssistant()
+			c := a.assistant.chat
+			a.assistant.enabled = true
+			a.assistant.config.Base, a.assistant.config.Key, a.assistant.config.Model = srv.URL, "test", "vision-test"
+			c.files = []aiattachment.Attachment{{Name: "trace.log", Text: "RX 01 03"}, {Name: "frame.png", DataURL: "data:image/png;base64,iVBOR"}}
+			c.input.SetText("哪里有问题？")
+			c.submit()
+			if !c.busy || len(c.entries) != 2 || !strings.Contains(c.entries[0].text, "trace.log") || !strings.Contains(c.entries[0].text, "frame.png") {
+				t.Errorf("attachment question not sent: %+v", c.entries)
+			}
+		})
+		select {
+		case req := <-requests:
+			messages := req["messages"].([]any)
+			user := messages[len(messages)-1].(map[string]any)
+			parts := user["content"].([]any)
+			text := parts[0].(map[string]any)["text"].(string)
+			if !strings.Contains(text, "RX 01 03") || parts[1].(map[string]any)["type"] != "image_url" {
+				t.Errorf("request=%v", user)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("attachment request not sent")
+		}
+		for i := 0; i < 50; i++ {
+			time.Sleep(20 * time.Millisecond)
+			var busy bool
+			onUI(func() { busy = a.assistant.chat.busy })
+			if !busy {
+				return
+			}
+		}
+		t.Error("attachment request did not finish")
+	})
 }
 
 func TestAIStreamAssemblesDeltas(t *testing.T) {

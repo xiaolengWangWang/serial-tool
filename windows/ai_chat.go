@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
 	"github.com/lxn/win"
+	"serial-tool/internal/aiattachment"
 )
 
 // aiChat 是 AI 面板与数据库分析窗口共用的对话：分析结果与追问按时间依次排在同一段
@@ -30,9 +32,14 @@ type aiChat struct {
 	status   *walk.Label
 	hint     string // 输入框为空、本轮还没提问时使用的默认问题
 
-	view   *walk.TextEdit
-	input  *walk.LineEdit
-	button *walk.PushButton
+	view                *walk.TextEdit
+	input               *walk.LineEdit
+	button              *walk.PushButton
+	fileList            *walk.ComboBox
+	fileAdd, fileRemove *walk.PushButton
+	files               []aiattachment.Attachment
+	loading             bool
+	loadID              uint64
 
 	entries   []chatEntry
 	turns     []analysisTurn
@@ -50,6 +57,11 @@ type chatEntry struct {
 	took      time.Duration
 	streaming bool
 	stopped   bool
+}
+
+type chatDraft struct {
+	question string
+	files    []aiattachment.Attachment
 }
 
 func (c *aiChat) widgets() []Widget {
@@ -70,6 +82,11 @@ func (c *aiChat) widgets() []Widget {
 			}},
 		}},
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
+			PushButton{AssignTo: &c.fileAdd, Text: "添加附件", MinSize: Size{Width: 76, Height: btnH}, MaxSize: Size{Width: 76}, OnClicked: c.addFiles},
+			ComboBox{AssignTo: &c.fileList, Model: []string{"未添加附件"}, StretchFactor: stretchFill, MinSize: Size{Width: 70, Height: rowH}, MaxSize: Size{Width: 110}, ToolTipText: "选择要移除的附件"},
+			PushButton{AssignTo: &c.fileRemove, Text: "移除", MinSize: Size{Width: 52, Height: btnH}, MaxSize: Size{Width: 52}, Enabled: false, OnClicked: c.removeFile},
+		}},
+		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 			toolButton("清空", "", 56, c.clear),
 			toolButton("复制", "", 56, c.copyLast),
 			toolButton("导出", "", 56, c.export),
@@ -77,6 +94,110 @@ func (c *aiChat) widgets() []Widget {
 			HSpacer{},
 		}},
 	}
+}
+
+func (c *aiChat) addFiles() {
+	if c.busy || c.loading {
+		return
+	}
+	dlg := walk.FileDialog{Title: "添加到 AI 对话（发送时才上传）", Filter: "支持的文件 (*.txt;*.log;*.csv;*.json;*.md;*.xml;*.yaml;*.yml;*.pdf;*.docx;*.png;*.jpg;*.jpeg;*.gif;*.webp)|*.txt;*.log;*.csv;*.json;*.md;*.xml;*.yaml;*.yml;*.pdf;*.docx;*.png;*.jpg;*.jpeg;*.gif;*.webp|所有文件 (*.*)|*.*"}
+	ok, err := dlg.ShowOpenMultiple(c.owner())
+	if err != nil {
+		c.status.SetText("选择附件失败：" + err.Error())
+		return
+	}
+	if !ok {
+		return
+	}
+	c.loadFiles(dlg.FilePaths)
+}
+
+func (c *aiChat) loadFiles(paths []string) {
+	if c.busy || c.loading {
+		return
+	}
+	if len(paths) == 0 {
+		return
+	}
+	if len(c.files)+len(paths) > 6 {
+		c.status.SetText("一次最多添加 6 个附件")
+		return
+	}
+	c.loading = true
+	c.loadID++
+	id := c.loadID
+	c.fileAdd.SetEnabled(false)
+	c.fileRemove.SetEnabled(false)
+	c.status.SetText("正在读取附件…")
+	go func() {
+		var added []aiattachment.Attachment
+		var err error
+		for _, path := range paths {
+			var file aiattachment.Attachment
+			if strings.EqualFold(filepath.Ext(path), ".pdf") {
+				file, err = readPDFAttachment(path)
+			} else {
+				file, err = aiattachment.Read(path)
+			}
+			if err != nil {
+				break
+			}
+			added = append(added, file)
+		}
+		if c.app.closed.Load() {
+			return
+		}
+		c.app.mw.Synchronize(func() {
+			if c.fileList.IsDisposed() || id != c.loadID {
+				return
+			}
+			c.loading = false
+			c.fileAdd.SetEnabled(!c.busy)
+			if err != nil {
+				c.status.SetText(err.Error())
+				c.refreshFiles()
+				return
+			}
+			c.files = append(c.files, added...)
+			c.refreshFiles()
+			for _, file := range added {
+				if file.DataURL != "" {
+					c.status.SetText("图片需支持视觉的模型，例如 deepseek-flash")
+					return
+				}
+			}
+			c.status.SetText(fmt.Sprintf("已添加 %d 个附件 · 发送时才上传", len(c.files)))
+		})
+	}()
+}
+
+func (c *aiChat) removeFile() {
+	if c.busy || c.loading {
+		return
+	}
+	i := c.fileList.CurrentIndex()
+	if i < 0 || i >= len(c.files) {
+		return
+	}
+	c.files = append(c.files[:i], c.files[i+1:]...)
+	c.refreshFiles()
+	c.status.SetText(fmt.Sprintf("剩余 %d 个附件", len(c.files)))
+}
+
+func (c *aiChat) refreshFiles() {
+	if c.fileList == nil || c.fileList.IsDisposed() {
+		return
+	}
+	names := make([]string, len(c.files))
+	for i, file := range c.files {
+		names[i] = file.Name
+	}
+	if len(names) == 0 {
+		names = []string{"未添加附件"}
+	}
+	c.fileList.SetModel(names)
+	c.fileList.SetCurrentIndex(0)
+	c.fileRemove.SetEnabled(len(c.files) > 0 && !c.busy && !c.loading)
 }
 
 // setContext 开始新的一轮：之后第一次提问附带 data，此前的追问上下文不再发给服务。
@@ -129,7 +250,7 @@ func (c *aiChat) analyze(display string, job func(context.Context) (string, erro
 			default:
 				var question string
 				question, c.context = prompt(report)
-				c.request(ctx, cancel, cfg, []analysisTurn{{Role: "user", Content: question}})
+				c.request(ctx, cancel, cfg, []analysisTurn{{Role: "user", Content: question}}, nil)
 			}
 		})
 	}()
@@ -140,10 +261,18 @@ func (c *aiChat) submit() {
 	if c.busy {
 		return
 	}
+	if c.loading {
+		c.status.SetText("正在读取附件，请稍候")
+		return
+	}
 	cfg, enabled := c.config()
 	question := strings.TrimSpace(c.input.Text())
 	if question == "" && len(c.turns) == 0 {
-		question = c.hint
+		if len(c.files) > 0 {
+			question = "请分析附件。"
+		} else {
+			question = c.hint
+		}
 	}
 	switch {
 	case question == "":
@@ -152,26 +281,34 @@ func (c *aiChat) submit() {
 	case !enabled:
 		c.status.SetText("AI 未启用：点「设置」勾选启用后再提问")
 		return
-	case len(c.turns) == 0 && c.context == "":
-		c.status.SetText("请先分析数据，再针对结果提问")
+	case len(c.turns) == 0 && c.context == "" && len(c.files) == 0:
+		c.status.SetText("请先分析数据或添加附件，再提问")
 		return
 	}
 	content := question
-	if len(c.turns) == 0 {
+	if len(c.turns) == 0 && c.context != "" {
 		content = c.context + "\n\n问题：" + question
 	}
+	turns := append(append([]analysisTurn(nil), c.turns...), analysisTurn{Role: "user", Content: content, Files: append([]aiattachment.Attachment(nil), c.files...)})
+	if err := aiattachment.ValidateTurns(turns); err != nil {
+		c.status.SetText(err.Error())
+		return
+	}
+	draft := &chatDraft{question: question, files: c.files}
 	c.input.SetText("")
-	c.add(chatEntry{role: "user", text: question, at: time.Now()})
+	c.add(chatEntry{role: "user", text: aiattachment.Display(question, c.files), at: time.Now()})
+	c.files = nil
+	c.refreshFiles()
 	c.requestID++
 	ctx, cancel := context.WithCancel(context.Background())
 	c.cancel = cancel
 	c.setBusy(true)
-	c.request(ctx, cancel, cfg, append(append([]analysisTurn(nil), c.turns...), analysisTurn{Role: "user", Content: content}))
+	c.request(ctx, cancel, cfg, turns, draft)
 }
 
 // request 流式请求 turns，回答写进新的一条 AI 消息。成功后 turns 连同回答成为下次追问的
 // 上下文；失败或停止时不记入，下次提问会重新带上上下文。
-func (c *aiChat) request(ctx context.Context, cancel context.CancelFunc, cfg analysisAIConfig, turns []analysisTurn) {
+func (c *aiChat) request(ctx context.Context, cancel context.CancelFunc, cfg analysisAIConfig, turns []analysisTurn, draft *chatDraft) {
 	id := c.requestID
 	start := time.Now()
 	c.add(chatEntry{role: "assistant", at: start, streaming: true})
@@ -236,10 +373,12 @@ func (c *aiChat) request(ctx context.Context, cancel context.CancelFunc, cfg ana
 			c.setBusy(false)
 			switch {
 			case errors.Is(err, errAIStopped):
+				c.restoreDraft(draft)
 				e.stopped = true
 				c.refresh()
 				c.status.SetText("已停止 · 保留已生成的部分")
 			case err != nil:
+				c.restoreDraft(draft)
 				if strings.TrimSpace(answer) == "" {
 					c.entries = append(c.entries[:index], c.entries[index+1:]...)
 				} else {
@@ -253,6 +392,19 @@ func (c *aiChat) request(ctx context.Context, cancel context.CancelFunc, cfg ana
 			}
 		})
 	}()
+}
+
+func (c *aiChat) restoreDraft(draft *chatDraft) {
+	if draft == nil {
+		return
+	}
+	if c.input.Text() == "" {
+		c.input.SetText(draft.question)
+	}
+	if len(c.files) == 0 {
+		c.files = draft.files
+		c.refreshFiles()
+	}
 }
 
 func (c *aiChat) fail(err error) {
@@ -274,9 +426,13 @@ func (c *aiChat) setBusy(busy bool) {
 	if busy {
 		c.button.SetText("停止")
 		c.button.SetImage(uiIcon("stop"))
+		c.fileAdd.SetEnabled(false)
+		c.fileRemove.SetEnabled(false)
 	} else {
 		c.button.SetText("发送")
 		c.button.SetImage(uiIcon("send"))
+		c.fileAdd.SetEnabled(!c.loading)
+		c.fileRemove.SetEnabled(len(c.files) > 0)
 	}
 	if c.onBusy != nil {
 		c.onBusy(busy)
@@ -288,6 +444,11 @@ func (c *aiChat) clear() {
 		return
 	}
 	c.entries, c.turns = nil, nil
+	c.loadID++
+	c.loading = false
+	c.fileAdd.SetEnabled(true)
+	c.files = nil
+	c.refreshFiles()
 	c.refresh()
 	c.status.SetText("对话已清空；再提问会重新附带当前数据")
 }
