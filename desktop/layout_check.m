@@ -250,6 +250,36 @@ int RunLayoutChecks(id delegate, NSString *directory) {
             cases++;
         }
     }
+    [delegate performSelector:@selector(ensureAIChatWindow)];
+    NSWindow *chat = [delegate valueForKey:@"aiChatWindow"];
+    if (!chat) {
+        [errors addObject:@"AI chat window missing"];
+    } else {
+        for (NSString *appearance in @[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]) {
+            chat.appearance = [NSAppearance appearanceNamed:appearance];
+            for (NSArray *size in @[@[@500, @380], @[@720, @580]]) {
+                [chat setContentSize:NSMakeSize([size[0] doubleValue], [size[1] doubleValue])];
+                [chat.contentView layoutSubtreeIfNeeded];
+                CheckView(chat.contentView, errors);
+                NSTextField *question = [delegate valueForKey:@"aiQuestion"];
+                if (question.frame.size.width < 200) [errors addObject:@"AI question field too narrow"];
+                NSTextView *transcript = [delegate valueForKey:@"aiTranscript"];
+                NSScrollView *scroll = transcript.enclosingScrollView;
+                if (![scroll isKindOfClass:NSScrollView.class] || scroll.frame.size.height < 200)
+                    [errors addObject:@"AI transcript viewport too short"];
+                if ([size[0] integerValue] == 720) {
+                    [chat orderFront:nil]; [chat display];
+                    NSView *frameView = chat.contentView.superview ?: chat.contentView;
+                    NSBitmapImageRep *rep = [frameView bitmapImageRepForCachingDisplayInRect:frameView.bounds];
+                    [frameView cacheDisplayInRect:frameView.bounds toBitmapImageRep:rep];
+                    [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}]
+                        writeToFile:[directory stringByAppendingPathComponent:[NSString stringWithFormat:@"ai-chat-%@.png", appearance]] atomically:YES];
+                }
+                cases++;
+            }
+        }
+        [chat orderOut:nil];
+    }
     for (NSString *error in [NSOrderedSet orderedSetWithArray:errors]) fprintf(stderr, "%s\n", error.UTF8String);
     fprintf(stderr, "Layout check: %lu failures (%lu window/mode/tab cases, hidden and shown analysis)\n", (unsigned long)errors.count, (unsigned long)cases);
     return errors.count ? 1 : 0;

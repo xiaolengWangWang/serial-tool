@@ -70,7 +70,15 @@ int RunLayoutChecks(id delegate, NSString *directory);
     NSMutableArray *_aiMessages;         // 多轮对话消息（不含 system）
     NSMutableString *_aiDisplayMarkdown; // 展示与存档用的对话转写
     NSString *_aiMarkdownName;           // 本次会话存档文件名
-    NSTextView *_aiActiveView;           // 当前对话输出到的视图
+    NSWindow *_aiChatWindow;
+    NSTextView *_aiTranscript;
+    NSTextField *_aiQuestion, *_aiChatStatus;
+    NSButton *_aiSendButton, *_aiClearButton;
+    NSTimer *_aiPollTimer;
+    NSString *_aiPendingPrompt;
+    unsigned long long _aiStreamID;
+    NSUInteger _aiAnswerStart;
+    BOOL _aiBusy;
     NSMenuItem *_autoUpdateItem;         // “启动时自动检查更新”菜单项(带勾)
     BOOL _checkingUpdate;                // 防止重复触发检查
     NSWindow *_updateSheet;              // 下载进度 sheet
@@ -1048,7 +1056,7 @@ static NSString *humanBytes(long long n) {
     Item(actionMenu, @"HTTP 工作区", @selector(openHTTPWorkspace:), @"u", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Item(actionMenu, @"工具箱", @selector(openToolbox:), @"b", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Item(actionMenu, @"AI 增强分析设置", @selector(openAISettings:), @"i", NSEventModifierFlagCommand | NSEventModifierFlagShift);
-    Item(actionMenu, @"继续追问 AI", @selector(aiFollowUp:), @"k", NSEventModifierFlagCommand | NSEventModifierFlagShift);
+    Item(actionMenu, @"打开 AI 对话", @selector(aiFollowUp:), @"k", NSEventModifierFlagCommand | NSEventModifierFlagShift);
     Item(actionMenu, @"打开 AI 存档目录", @selector(openAIArchiveFolder:), @"", 0);
     Submenu(mainMenu, @"操作", actionMenu);
 
@@ -1497,7 +1505,7 @@ static NSString *humanBytes(long long n) {
 
 - (NSString *)newAIMarkdownName {
     NSDateFormatter *fmt = [[[NSDateFormatter alloc] init] autorelease];
-    fmt.dateFormat = @"yyyyMMdd-HHmmss";
+    fmt.dateFormat = @"yyyyMMdd-HHmmss-SSS";
     return [NSString stringWithFormat:@"analysis-%@.md", [fmt stringFromDate:[NSDate date]]];
 }
 
@@ -1508,43 +1516,159 @@ static NSString *humanBytes(long long n) {
     if ([res hasPrefix:@"错误"]) [self appendText:[NSString stringWithFormat:@"[AI 存档失败：%@]\n", res]];
 }
 
-// aiFirstTurn 用首次分析结果开启一段可继续追问的对话，并写入本地 Markdown 存档。
-- (void)aiFirstTurn:(NSString *)reply userContent:(NSString *)content title:(NSString *)title view:(NSTextView *)view {
-    [_aiMessages release];
-    _aiMessages = [[NSMutableArray alloc] init];
-    [_aiMessages addObject:@{@"role": @"user", @"content": content ?: @""}];
-    [_aiMessages addObject:@{@"role": @"assistant", @"content": reply ?: @""}];
-    [_aiDisplayMarkdown release];
-    _aiDisplayMarkdown = [[NSMutableString alloc] initWithFormat:@"# %@\n\n%@\n", title, reply ?: @""];
-    [_aiMarkdownName release];
-    _aiMarkdownName = [[self newAIMarkdownName] retain];
-    _aiActiveView = view;
-    [view.textStorage setAttributedString:mdPretty(_aiDisplayMarkdown)];
-    [self persistAIMarkdown];
+// AI 对话单独放在可调整大小的窗口中，分析中心继续显示本地报告。
+- (void)ensureAIChatWindow {
+    if (_aiChatWindow) return;
+    _aiChatWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 720, 580)
+        styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
+        backing:NSBackingStoreBuffered defer:NO];
+    _aiChatWindow.title = @"AI 数据分析对话";
+    _aiChatWindow.releasedWhenClosed = NO;
+    _aiChatWindow.minSize = NSMakeSize(500, 380);
+    NSView *root = _aiChatWindow.contentView;
+    _aiChatStatus = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    _aiChatStatus.editable = NO; _aiChatStatus.bordered = NO; _aiChatStatus.drawsBackground = NO;
+    _aiChatStatus.textColor = NSColor.secondaryLabelColor;
+    _aiChatStatus.stringValue = @"选择数据并点击“AI 深度分析”，或输入问题开始对话。";
+    NSScrollView *scroll = [[[NSScrollView alloc] initWithFrame:NSZeroRect] autorelease];
+    scroll.borderType = NSBezelBorder; scroll.hasVerticalScroller = YES;
+    _aiTranscript = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 650, 400)];
+    _aiTranscript.editable = NO; _aiTranscript.selectable = YES;
+    _aiTranscript.font = [NSFont systemFontOfSize:13];
+    _aiTranscript.textContainer.widthTracksTextView = YES;
+    _aiTranscript.autoresizingMask = NSViewWidthSizable;
+    scroll.documentView = _aiTranscript;
+    _aiQuestion = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    _aiQuestion.placeholderString = @"继续提问，按回车发送";
+    _aiQuestion.target = self; _aiQuestion.action = @selector(aiSendMessage:);
+    _aiSendButton = [[NSButton buttonWithTitle:@"发送" target:self action:@selector(aiSendMessage:)] retain];
+    _aiClearButton = [[NSButton buttonWithTitle:@"新对话" target:self action:@selector(aiClearConversation:)] retain];
+    for (NSView *item in @[_aiChatStatus, scroll, _aiQuestion, _aiSendButton, _aiClearButton]) {
+        item.translatesAutoresizingMaskIntoConstraints = NO;
+        [root addSubview:item];
+    }
+    [NSLayoutConstraint activateConstraints:@[
+        [_aiChatStatus.topAnchor constraintEqualToAnchor:root.topAnchor constant:14],
+        [_aiChatStatus.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:16],
+        [_aiChatStatus.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-16],
+        [_aiChatStatus.heightAnchor constraintEqualToConstant:22],
+        [scroll.topAnchor constraintEqualToAnchor:_aiChatStatus.bottomAnchor constant:10],
+        [scroll.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:16],
+        [scroll.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-16],
+        [scroll.bottomAnchor constraintEqualToAnchor:_aiQuestion.topAnchor constant:-12],
+        [_aiQuestion.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:16],
+        [_aiQuestion.bottomAnchor constraintEqualToAnchor:root.bottomAnchor constant:-16],
+        [_aiQuestion.heightAnchor constraintEqualToConstant:30],
+        [_aiQuestion.trailingAnchor constraintEqualToAnchor:_aiSendButton.leadingAnchor constant:-8],
+        [_aiSendButton.widthAnchor constraintEqualToConstant:72],
+        [_aiSendButton.bottomAnchor constraintEqualToAnchor:_aiQuestion.bottomAnchor],
+        [_aiClearButton.widthAnchor constraintEqualToConstant:72],
+        [_aiClearButton.bottomAnchor constraintEqualToAnchor:_aiQuestion.bottomAnchor],
+        [_aiClearButton.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-16],
+        [_aiSendButton.trailingAnchor constraintEqualToAnchor:_aiClearButton.leadingAnchor constant:-8]
+    ]];
+    [_aiChatWindow center];
+    [self resetAIConversation:@"AI 数据分析对话"];
+}
+
+- (void)showAIChatWindow {
+    [self ensureAIChatWindow];
+    [_aiChatWindow makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+}
+
+- (void)resetAIConversation:(NSString *)title {
+    [_aiMessages release]; _aiMessages = [[NSMutableArray alloc] init];
+    [_aiDisplayMarkdown release]; _aiDisplayMarkdown = [[NSMutableString alloc] initWithFormat:@"# %@\n", title];
+    [_aiMarkdownName release]; _aiMarkdownName = [[self newAIMarkdownName] retain];
+    [_aiTranscript.textStorage setAttributedString:mdPretty(_aiDisplayMarkdown)];
+    _aiChatStatus.stringValue = @"新对话 · 数据只在点击发送后上传";
+}
+
+- (void)aiClearConversation:(id)sender {
+    if (_aiBusy) return;
+    [self resetAIConversation:@"AI 数据分析对话"];
+    _aiQuestion.stringValue = @"";
+    [_aiChatWindow makeFirstResponder:_aiQuestion];
 }
 
 - (void)aiFollowUp:(id)sender {
-    if (!_aiMessages.count) { [self alert:@"请先做一次 AI 深度分析，再继续追问。"]; return; }
-    NSString *q = [self editableSendContent:@"" title:@"继续追问 AI（可编辑）"];
-    if (!q.length) return;
-    [_aiMessages addObject:@{@"role": @"user", @"content": q}];
-    [_aiDisplayMarkdown appendFormat:@"\n\n---\n\n## 追问\n\n%@\n\n## 回答\n\n（请求中……）\n", q];
-    NSTextView *view = _aiActiveView ?: _analysisResult;
-    [view.textStorage setAttributedString:mdPretty(_aiDisplayMarkdown)];
-    NSData *msgData = [NSJSONSerialization dataWithJSONObject:_aiMessages options:0 error:nil];
-    NSString *msgJSON = [[[NSString alloc] initWithData:msgData encoding:NSUTF8StringEncoding] autorelease];
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        char *raw = GoAIChat((char *)msgJSON.UTF8String);
-        NSString *reply = [[NSString alloc] initWithUTF8String:raw ?: "AI 分析失败"]; free(raw);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [_aiMessages addObject:@{@"role": @"assistant", @"content": reply}];
-            NSRange ph = [_aiDisplayMarkdown rangeOfString:@"（请求中……）" options:NSBackwardsSearch];
-            if (ph.location != NSNotFound) [_aiDisplayMarkdown replaceCharactersInRange:ph withString:reply];
-            [view.textStorage setAttributedString:mdPretty(_aiDisplayMarkdown)];
-            [self persistAIMarkdown];
-            [reply release];
-        });
-    });
+    [self showAIChatWindow];
+    [_aiChatWindow makeFirstResponder:_aiQuestion];
+}
+
+- (void)startAIRequest:(NSString *)prompt visibleQuestion:(NSString *)question {
+    if (_aiBusy || !prompt.length) return;
+    [self showAIChatWindow];
+    NSMutableArray *turns = [NSMutableArray arrayWithArray:_aiMessages];
+    [turns addObject:@{@"role": @"user", @"content": prompt}];
+    NSData *data = [NSJSONSerialization dataWithJSONObject:turns options:0 error:nil];
+    NSString *json = [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease];
+    char *raw = GoAIStartStream((char *)json.UTF8String);
+    NSData *response = [[NSString stringWithUTF8String:raw ?: "{}"] dataUsingEncoding:NSUTF8StringEncoding]; free(raw);
+    NSDictionary *started = [NSJSONSerialization JSONObjectWithData:response options:0 error:nil];
+    unsigned long long requestID = [started[@"id"] unsignedLongLongValue];
+    if (!requestID) {
+        _aiChatStatus.stringValue = started[@"error"] ?: @"AI 请求启动失败";
+        return;
+    }
+    [_aiPendingPrompt release]; _aiPendingPrompt = [prompt copy];
+    [_aiDisplayMarkdown appendFormat:@"\n---\n\n## %@\n\n%@\n\n## 回答\n\n", _aiMessages.count ? @"追问" : @"分析请求", question];
+    _aiAnswerStart = _aiDisplayMarkdown.length;
+    [_aiTranscript.textStorage setAttributedString:mdPretty(_aiDisplayMarkdown)];
+    [_aiTranscript scrollRangeToVisible:NSMakeRange(_aiTranscript.string.length, 0)];
+    _aiStreamID = requestID; _aiBusy = YES;
+    _aiSendButton.title = @"停止"; _aiClearButton.enabled = NO; _aiQuestion.enabled = NO;
+    _aiChatStatus.stringValue = @"AI 回答中…";
+    _aiPollTimer = [NSTimer scheduledTimerWithTimeInterval:0.1 target:self selector:@selector(pollAIStream:) userInfo:nil repeats:YES];
+}
+
+- (void)aiSendMessage:(id)sender {
+    if (_aiBusy) {
+        GoAIStopStream(_aiStreamID);
+        _aiChatStatus.stringValue = @"正在停止…";
+        return;
+    }
+    NSString *question = [_aiQuestion.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!question.length) return;
+    [self startAIRequest:question visibleQuestion:question];
+    if (_aiBusy) _aiQuestion.stringValue = @"";
+}
+
+- (void)pollAIStream:(NSTimer *)timer {
+    if (!_aiBusy || !_aiStreamID) return;
+    char *raw = GoAIPollStream(_aiStreamID);
+    NSData *data = [[NSString stringWithUTF8String:raw ?: "{}"] dataUsingEncoding:NSUTF8StringEncoding]; free(raw);
+    NSDictionary *state = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    NSString *delta = state[@"delta"];
+    if (delta.length) {
+        [_aiDisplayMarkdown appendString:delta];
+        [_aiTranscript.textStorage appendAttributedString:[[[NSAttributedString alloc] initWithString:delta] autorelease]];
+        [_aiTranscript scrollRangeToVisible:NSMakeRange(_aiTranscript.string.length, 0)];
+    }
+    if (![state[@"done"] boolValue]) return;
+    [_aiPollTimer invalidate]; _aiPollTimer = nil;
+    _aiBusy = NO; _aiStreamID = 0;
+    _aiSendButton.title = @"发送"; _aiClearButton.enabled = YES; _aiQuestion.enabled = YES;
+    NSString *answer = state[@"answer"] ?: @"";
+    [_aiDisplayMarkdown replaceCharactersInRange:NSMakeRange(_aiAnswerStart, _aiDisplayMarkdown.length - _aiAnswerStart) withString:answer];
+    NSString *error = state[@"error"] ?: @"";
+    if ([state[@"stopped"] boolValue]) {
+        [_aiDisplayMarkdown appendString:@"\n\n_已停止，保留已生成的部分。_"];
+        _aiChatStatus.stringValue = @"已停止 · 部分回答已保留";
+    } else if (error.length) {
+        [_aiDisplayMarkdown appendFormat:@"\n\n**错误：** %@", error];
+        _aiChatStatus.stringValue = error;
+    } else {
+        [_aiMessages addObject:@{@"role": @"user", @"content": _aiPendingPrompt ?: @""}];
+        [_aiMessages addObject:@{@"role": @"assistant", @"content": answer}];
+        _aiChatStatus.stringValue = @"回答完成 · 可以继续提问";
+    }
+    if (error.length && _aiMessages.count && !_aiQuestion.stringValue.length) _aiQuestion.stringValue = _aiPendingPrompt ?: @"";
+    [_aiPendingPrompt release]; _aiPendingPrompt = nil;
+    [_aiTranscript.textStorage setAttributedString:mdPretty(_aiDisplayMarkdown)];
+    [_aiTranscript scrollRangeToVisible:NSMakeRange(_aiTranscript.string.length, 0)];
+    [self persistAIMarkdown];
 }
 
 - (void)openAIArchiveFolder:(id)sender {
@@ -1554,23 +1678,55 @@ static NSString *humanBytes(long long n) {
     [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:arch isDirectory:YES]];
 }
 
-- (void)runAIAnalysis:(NSButton *)sender {
+- (BOOL)checkAIReady {
     char *enabled = GoGetAISetting((char *)"deepseek.enabled");
     char *key = GoGetAISetting((char *)"deepseek.api_key");
     BOOL ready = strcmp(enabled ?: "", "true") == 0 && strlen(key ?: "") > 0;
     free(enabled); free(key);
-    if (!ready) { [self alert:@"AI 未启用或 Key 未配置，请先打开“操作 → AI 增强分析设置”"]; return; }
+    if (!ready) [self alert:@"AI 未启用或 Key 未配置，请先打开“操作 → AI 增强分析设置”"];
+    return ready;
+}
+
+- (NSString *)preparedAIPromptKind:(NSString *)kind transport:(NSString *)transport content:(NSString *)content {
+    char *raw = GoAIPreparePrompt((char *)kind.UTF8String, (char *)transport.UTF8String, (char *)content.UTF8String);
+    NSData *data = [[NSString stringWithUTF8String:raw ?: "{}"] dataUsingEncoding:NSUTF8StringEncoding]; free(raw);
+    NSDictionary *result = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    NSString *error = result[@"error"];
+    if (error.length) { [self alert:error]; return nil; }
+    return result[@"prompt"];
+}
+
+- (void)beginAIAnalysisWithPrompt:(NSString *)prompt title:(NSString *)title summary:(NSString *)summary {
+    [self showAIChatWindow];
+    if (_aiBusy) { _aiChatStatus.stringValue = @"请先停止当前回答，再开始新的分析"; return; }
+    [self resetAIConversation:title];
+    _aiQuestion.stringValue = @"";
+    [self startAIRequest:prompt visibleQuestion:summary];
+}
+
+- (void)runAIPacketAnalysisWithInput:(NSString *)input title:(NSString *)title {
+    if (_aiBusy) { [self showAIChatWindow]; _aiChatStatus.stringValue = @"请先停止当前回答，再开始新的分析"; return; }
+    if (![self checkAIReady]) return;
+    NSString *edited = [self editableSendContent:input title:@"发送报文到 DeepSeek（可编辑）"];
+    if (!edited) return;
+    NSString *prompt = [self preparedAIPromptKind:@"packet" transport:_mode.titleOfSelectedItem content:edited];
+    if (!prompt) return;
+    NSString *summary = [NSString stringWithFormat:@"已确认发送 %@ 报文（%lu 字节）", _mode.titleOfSelectedItem, (unsigned long)[edited lengthOfBytesUsingEncoding:NSUTF8StringEncoding]];
+    [self beginAIAnalysisWithPrompt:prompt title:title summary:summary];
+}
+
+- (void)runAIAnalysis:(NSButton *)sender {
+    if (_aiBusy) { [self showAIChatWindow]; _aiChatStatus.stringValue = @"请先停止当前回答，再开始新的分析"; return; }
 
     // 当前展示的是数据库分析报告时，直接让 AI 深度分析这份数据库数据。
     if (_lastDatabaseReport.length > 0 && [_analysisResult.string isEqualToString:_lastDatabaseReport]) {
-        NSString *report = [[self editableSendContent:_lastDatabaseReport title:@"发送数据库分析报告到 DeepSeek（可编辑）"] retain];
+        if (![self checkAIReady]) return;
+        NSString *report = [self editableSendContent:_lastDatabaseReport title:@"发送数据库分析报告到 DeepSeek（可编辑）"];
         if (!report) return;
-        sender.enabled = NO; _analysisResult.string = @"AI 正在分析数据库报告……\n\n本地通信不会被阻塞。";
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-            char *raw = GoAIAnalyzeReport((char *)report.UTF8String);
-            NSString *result = [[NSString alloc] initWithUTF8String:raw ?: "AI 分析失败"]; free(raw);
-            dispatch_async(dispatch_get_main_queue(), ^{ [self aiFirstTurn:result userContent:report title:@"数据库 AI 深度分析" view:_analysisResult]; sender.enabled = YES; [result release]; [report release]; });
-        });
+        NSString *prompt = [self preparedAIPromptKind:@"report" transport:@"" content:report];
+        if (!prompt) return;
+        NSString *summary = [NSString stringWithFormat:@"已确认发送数据库报告（%lu 字节）", (unsigned long)[report lengthOfBytesUsingEncoding:NSUTF8StringEncoding]];
+        [self beginAIAnalysisWithPrompt:prompt title:@"数据库 AI 深度分析" summary:summary];
         return;
     }
 
@@ -1580,14 +1736,7 @@ static NSString *humanBytes(long long n) {
     NSString *conn = [self connectionInfoLine];
     if (conn.length) [input appendFormat:@"%@\n\n", conn];
     for (NSDictionary *p in packets) [input appendFormat:@"%@ %@\n", p[@"dir"] ?: @"", p[@"hex"] ?: @""];
-    NSString *edited = [self editableSendContent:input title:@"发送报文到 DeepSeek（可编辑）"];
-    if (!edited) return;
-    NSString *transport = [_mode.titleOfSelectedItem copy]; sender.enabled = NO; _analysisResult.string = @"AI 分析请求中……\n\n本地通信不会被阻塞。";
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        char *raw = GoAIAnalyze((char *)transport.UTF8String, (char *)edited.UTF8String);
-        NSString *result = [[NSString alloc] initWithUTF8String:raw ?: "AI 分析失败"]; free(raw);
-        dispatch_async(dispatch_get_main_queue(), ^{ [self aiFirstTurn:result userContent:edited title:@"AI 深度分析" view:_analysisResult]; sender.enabled = YES; [result release]; [transport release]; });
-    });
+    [self runAIPacketAnalysisWithInput:input title:@"AI 深度分析"];
 }
 
 - (void)toggleHexView:(id)sender {
@@ -2992,23 +3141,7 @@ static void capTextView(NSTextView *tv, NSUInteger limit) {
     [rows enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
         [input appendFormat:@"%@ %@\n", _visiblePackets[idx][@"dir"] ?: @"", _visiblePackets[idx][@"hex"] ?: @""];
     }];
-    NSString *edited = [self editableSendContent:input title:@"发送选中报文到 DeepSeek（可编辑）"];
-    if (!edited) return;
-    NSString *transport = [_mode.titleOfSelectedItem copy];
-    NSButton *button = (NSButton *)sender;
-    button.enabled = NO;
-    _detailView.string = @"AI 深度分析请求中……\n\n本地通信不会被阻塞。";
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        char *raw = GoAIAnalyze((char *)transport.UTF8String, (char *)edited.UTF8String);
-        NSString *result = [[NSString alloc] initWithUTF8String:raw ?: "AI 分析失败"];
-        free(raw);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self aiFirstTurn:result userContent:edited title:@"AI 深度分析（选中报文）" view:_detailView];
-            button.enabled = YES;
-            [result release];
-            [transport release];
-        });
-    });
+    [self runAIPacketAnalysisWithInput:input title:@"AI 深度分析（选中报文）"];
 }
 
 - (void)analyzePacket:(id)sender {
@@ -3036,7 +3169,12 @@ static void capTextView(NSTextView *tv, NSUInteger limit) {
     [_window makeKeyAndOrderFront:nil];
     return YES;
 }
-- (void)applicationWillTerminate:(NSNotification *)note { [self stopTimer]; GoDisconnect(); }
+- (void)applicationWillTerminate:(NSNotification *)note {
+    [_aiPollTimer invalidate];
+    if (_aiStreamID) GoAIStopStream(_aiStreamID);
+    [self stopTimer];
+    GoDisconnect();
+}
 @end
 
 void UIAppend(const char *text) {
