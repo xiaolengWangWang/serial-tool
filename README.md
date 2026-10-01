@@ -1,10 +1,11 @@
 # CommBox —— 通信调试工具
 
-一个跨平台的串口与网络调试工具:命令行 + macOS / Windows 原生桌面版,共享同一套核心引擎(`internal/wincore`)。支持串口、TCP/UDP 服务端与客户端、串口↔网络透传、HTTP 客户端、虚拟串口,以及全量 SQLite 收发存档。
+一个跨平台的串口与网络调试工具:命令行 + macOS / Windows 原生桌面版,共享同一套核心引擎(`core/`)。支持串口、TCP/UDP 服务端与客户端、串口↔网络透传、HTTP 客户端、虚拟串口,以及全量 SQLite 收发存档。
 
 > 📖 完整使用说明见 **[CommBox 使用手册](docs/CommBox使用手册.md)**。
 
 ## 目录
+- [目录结构](#目录结构)
 - [命令行](#命令行)
 - [桌面版功能总览](#桌面版功能总览)
 - [工作模式](#工作模式)
@@ -14,10 +15,24 @@
 - [快捷键(macOS)](#快捷键macos)
 - [构建](#构建)
 
+## 目录结构
+
+```
+resources/        资源：应用图标(.ico/.icns)、logo、macOS Info.plist
+core/             核心代码：三端共用引擎(连接、收发、存储、分析、HTTP、更新、工具箱)
+  aiattachment/   AI 附件解析(文本 / DOCX / PDF / 图片)
+apps/
+  macos/          macOS 桌面版(Cocoa + CGo)
+  windows/        Windows 桌面版(walk);virtualcom/ 为随包发布的 VirtualCOM(独立 Go 模块)
+  linux/          命令行版:Linux 发布;Windows 包里的 CommBox-CLI.exe 也由它构建
+scripts/          Windows 打包脚本
+docs/             使用手册、Windows GUI 设计速查、当前版本发布说明
+```
+
 ## 命令行
 
 ```bash
-go build -o commbox .
+go build -o commbox ./apps/linux
 
 ./commbox -list                                             # 列出串口
 ./commbox -version                                          # 显示版本号
@@ -150,22 +165,22 @@ powershell -ExecutionPolicy Bypass -File scripts/compress-windows.ps1 -SourceArc
 ```bash
 # 命令行(多平台,纯 Go);发布 Linux amd64
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
-  -ldflags='-s -w -X main.version=<版本>' -o commbox-linux-amd64 .
+  -ldflags='-s -w -X main.version=<版本>' -o commbox-linux-amd64 ./apps/linux
 
 # Windows 桌面版(可交叉编译)
 # 不要加 -s:剥符号的 GUI 程序在装了 360 的机器上会被当成加壳投放器隔离,
 # 只用 -w 去掉调试信息,体积约减 25%
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath \
-  -ldflags='-H windowsgui -w' -o build/windows/CommBox.exe ./windows
+  -ldflags='-H windowsgui -w' -o build/windows/CommBox.exe ./apps/windows
 
 # macOS 桌面版(需在 macOS 上用 CGo 构建;按芯片分别出包,-s -w 瘦身)
 # 对每个 ARCH ∈ {arm64(M 芯片), amd64(Intel)}：
 for ARCH in arm64 amd64; do
   APP="build/$ARCH/CommBox.app"
   mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-  cp desktop/Info.plist "$APP/Contents/Info.plist"
-  cp desktop/resources/CommBox.icns "$APP/Contents/Resources/CommBox.icns"
-  CGO_ENABLED=1 GOARCH=$ARCH go build -trimpath -ldflags='-s -w' -o "$APP/Contents/MacOS/CommBox" ./desktop
+  cp resources/Info.plist "$APP/Contents/Info.plist"
+  cp resources/CommBox.icns "$APP/Contents/Resources/CommBox.icns"
+  CGO_ENABLED=1 GOARCH=$ARCH go build -trimpath -ldflags='-s -w' -o "$APP/Contents/MacOS/CommBox" ./apps/macos
   codesign --force --deep --sign - "$APP"
   # 直接分发软件：打成 dmg(双击挂载即用,拖入 Applications),无需解压
   ln -sf /Applications "build/$ARCH/Applications"

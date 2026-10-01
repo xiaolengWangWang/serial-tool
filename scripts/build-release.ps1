@@ -40,8 +40,8 @@ function Export-GitText {
     [IO.File]::WriteAllText($Destination, $text, (New-Object Text.UTF8Encoding($true)))
 }
 
-$version = Get-GoConst 'internal\wincore\modes.go' 'Version'
-$vcomVersion = Get-GoConst 'virtualcom\internal\vcom\version.go' 'Version'
+$version = Get-GoConst 'core\modes.go' 'Version'
+$vcomVersion = Get-GoConst 'apps\windows\virtualcom\internal\vcom\version.go' 'Version'
 $outputDir = Join-Path $repoRoot ('build\windows-' + $version)
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 
@@ -60,11 +60,11 @@ try {
 
     # -w 去掉 DWARF 调试信息,体积约减 25%,panic 栈仍带函数名。
     # 不要加 -s:剥符号的 GUI 程序在装了 360 的机器上会被当成加壳投放器隔离。
-    go build -trimpath -ldflags '-H windowsgui -w' -o (Join-Path $outputDir 'CommBox.exe') ./windows
+    go build -trimpath -ldflags '-H windowsgui -w' -o (Join-Path $outputDir 'CommBox.exe') ./apps/windows
     if ($LASTEXITCODE -ne 0) { throw 'CommBox GUI build failed' }
-    go build -trimpath -ldflags '-w' -o (Join-Path $outputDir 'CommBox-CLI.exe') .
+    go build -trimpath -ldflags '-w' -o (Join-Path $outputDir 'CommBox-CLI.exe') ./apps/linux
     if ($LASTEXITCODE -ne 0) { throw 'CommBox CLI build failed' }
-    Push-Location 'virtualcom'
+    Push-Location 'apps\windows\virtualcom'
     try {
         go build -trimpath -ldflags '-H windowsgui -w' -o (Join-Path $outputDir 'VirtualCOM-GUI.exe') ./cmd/virtualcom-gui
         if ($LASTEXITCODE -ne 0) { throw 'VirtualCOM GUI build failed' }
@@ -73,7 +73,7 @@ try {
     } finally { Pop-Location }
 
     Export-GitText -Revision 'HEAD' -Path 'docs/virtualcom-commbox-compat.md' -Destination (Join-Path $outputDir 'VirtualCOM使用说明.md')
-    Export-GitText -Revision 'HEAD' -Path 'windows/README-Windows.txt' -Destination (Join-Path $outputDir 'README-Windows.txt')
+    Export-GitText -Revision 'HEAD' -Path 'apps/windows/README-Windows.txt' -Destination (Join-Path $outputDir 'README-Windows.txt')
 
     # subsystem: 2 = Windows GUI, 3 = 控制台
     $binaries = @{
@@ -103,7 +103,7 @@ try {
     $virtualVersion = & (Join-Path $outputDir 'VirtualCOM.exe') version
     if ($LASTEXITCODE -ne 0 -or !$virtualVersion.StartsWith('VirtualCOM ' + $vcomVersion + ' ')) { throw 'Wrong VirtualCOM version' }
 
-    # CLI 不检查更新,也没有 HTTPS 功能,不该带 TLS 握手代码。wincore 若有包级变量在
+    # CLI 不检查更新,也没有 HTTPS 功能,不该带 TLS 握手代码。core 包若有包级变量在
     # 初始化时碰 http.Transport,CLI 会平白大 1.7 MB。
     $cliSymbols = go tool nm (Join-Path $outputDir 'CommBox-CLI.exe')
     if ($LASTEXITCODE -ne 0) { throw 'go tool nm failed on CommBox-CLI.exe' }

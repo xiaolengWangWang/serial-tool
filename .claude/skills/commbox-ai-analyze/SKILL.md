@@ -47,7 +47,7 @@ ${HEX}" \
 
 Base URL 默认 `https://api.deepseek.com`，模型默认 `deepseek-chat`。
 
-> 提示词与桌面版 CommBox 内嵌的分析指南（`desktop/ai_analysis_guide.md`）同源，保证终端与 GUI 的分析框架一致。
+> 提示词与桌面版 CommBox 内嵌的分析指南（`apps/macos/ai_analysis_guide.md`）同源，保证终端与 GUI 的分析框架一致。
 
 ## 注意
 - 只发送 HEX 报文与传输类型，不发送 IP、设备名或主机名。
