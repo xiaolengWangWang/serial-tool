@@ -29,6 +29,7 @@ Windows 串口名可写 `COM3`。`./commbox -h` 查看全部参数。
 
 ## 桌面版功能总览
 
+- v0.9.18：macOS AI 深度分析改为流式对话；Windows 与 Linux 功能同 v0.9.17，版本号同步。本版同时提供 Windows、macOS 和 Linux 构建产物。
 - macOS 的 AI 深度分析使用独立流式对话窗口：确认发送当前报文、选中报文或数据库报告后，回答逐段显示；可停止并保留部分回答，在窗口内继续提问，对话自动存入本地 Markdown。
 - v0.9.17：Windows AI 对话支持随问题添加文本、DOCX、可选中文字的 PDF 和图片附件；本版同时提供 Windows、macOS 和 Linux 构建产物。
 - Windows AI 对话可添加文本日志、CSV、JSON、DOCX、可选中文字的 PDF 和 PNG/JPEG/GIF/WebP 图片；附件随提问发送，图片需使用支持视觉的模型（DeepSeek 可选 `deepseek-flash`）。每次最多 6 个附件，文本提取上限 64 KiB/个，PDF/DOCX 文件上限 5 MiB/个，PDF 单页解压内容上限 4 MiB，图片上限 2 MiB/个且不超过 3200 万像素；扫描版 PDF 暂不支持。PDF 在独立进程中解析，限时 20 秒；对话累计文字上限 512 KiB、图片编码上限 24 MiB。
