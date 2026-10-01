@@ -42,11 +42,14 @@ function Export-GitText {
 }
 
 $version = Get-GoConst 'core\modes.go' 'Version'
-$vcomModuleJSON = go list -m -json github.com/xiaolengWangWang/virtualcom
+$vcomModuleJSON = go -C $repoRoot list -m -json github.com/xiaolengWangWang/virtualcom
 if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve pinned VirtualCOM module' }
 $vcomModule = ($vcomModuleJSON -join "`n") | ConvertFrom-Json
 if ($vcomModule.Replace -or -not $vcomModule.Version) { throw 'VirtualCOM must use a pinned published module without a local replacement' }
-$vcomVersion = Get-GoConst (Join-Path $vcomModule.Dir 'internal\vcom\version.go') 'Version'
+$vcomDownloadJSON = go -C $repoRoot mod download -json ($vcomModule.Path + '@' + $vcomModule.Version)
+if ($LASTEXITCODE -ne 0) { throw 'Cannot download pinned VirtualCOM source' }
+$vcomDownload = ($vcomDownloadJSON -join "`n") | ConvertFrom-Json
+$vcomVersion = Get-GoConst (Join-Path $vcomDownload.Dir 'internal\vcom\version.go') 'Version'
 $outputDir = Join-Path $repoRoot ('build\windows-' + $version)
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 
