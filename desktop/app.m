@@ -70,7 +70,6 @@ int RunLayoutChecks(id delegate, NSString *directory);
     NSMutableArray *_aiMessages;         // 多轮对话消息（不含 system）
     NSMutableString *_aiDisplayMarkdown; // 展示与存档用的对话转写
     NSString *_aiMarkdownName;           // 本次会话存档文件名
-    NSWindow *_aiChatWindow;
     NSTextView *_aiTranscript;
     NSTextField *_aiQuestion, *_aiChatStatus;
     NSButton *_aiSendButton, *_aiClearButton;
@@ -849,8 +848,27 @@ static NSString *humanBytes(long long n) {
     _analysisResult.editable = NO; _analysisResult.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
     _analysisResult.autoresizingMask = NSViewWidthSizable; analysisScroll.documentView = _analysisResult;
     [analysisView addSubview:analysisScroll];
+    // AI 对话与本地报告共用结果区，显示最近使用的一个，另一个的内容保留。
+    NSScrollView *aiScroll = [[[NSScrollView alloc] initWithFrame:analysisScroll.frame] autorelease];
+    aiScroll.borderType = NSBezelBorder; aiScroll.hasVerticalScroller = YES; aiScroll.hidden = YES;
+    _aiTranscript = [[NSTextView alloc] initWithFrame:aiScroll.contentView.bounds];
+    _aiTranscript.editable = NO; _aiTranscript.font = [NSFont systemFontOfSize:12];
+    _aiTranscript.autoresizingMask = NSViewWidthSizable; aiScroll.documentView = _aiTranscript;
+    aiScroll.translatesAutoresizingMaskIntoConstraints = NO;
+    [analysisView addSubview:aiScroll];
+    _aiChatStatus = [_analysisAIStatus retain];
+    _aiQuestion = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    _aiQuestion.placeholderString = @"继续提问，回车发送";
+    _aiQuestion.target = self; _aiQuestion.action = @selector(aiSendMessage:);
+    _aiSendButton = [[NSButton buttonWithTitle:@"发送" target:self action:@selector(aiSendMessage:)] retain];
+    _aiClearButton = [[NSButton buttonWithTitle:@"新对话" target:self action:@selector(aiClearConversation:)] retain];
+    NSStackView *aiTools = Row(@[settingsButton, _aiClearButton]);
+    aiTools.distribution = NSStackViewDistributionFillEqually;
+    NSStackView *aiInput = Row(@[_aiQuestion, _aiSendButton]);
+    [_aiSendButton.widthAnchor constraintEqualToConstant:56].active = YES;
+    [analysisView addSubview:aiInput];
     NSButton *databaseButton = [NSButton buttonWithTitle:@"分析数据库…" target:self action:@selector(openDatabaseAnalysis:)];
-    NSStackView *analysisHeader = [NSStackView stackViewWithViews:@[localTitle, _analysisScope, _analysisStats, localButton, databaseButton, aiSep, aiTitle, _analysisAIStatus, aiButton, settingsButton]];
+    NSStackView *analysisHeader = [NSStackView stackViewWithViews:@[localTitle, _analysisScope, _analysisStats, localButton, databaseButton, aiSep, aiTitle, _analysisAIStatus, aiButton, aiTools]];
     analysisHeader.orientation = NSUserInterfaceLayoutOrientationVertical;
     analysisHeader.alignment = NSLayoutAttributeLeading;
     analysisHeader.spacing = 10;
@@ -871,8 +889,16 @@ static NSString *humanBytes(long long n) {
         [analysisScroll.topAnchor constraintEqualToAnchor:analysisHeader.bottomAnchor constant:12],
         [analysisScroll.leadingAnchor constraintEqualToAnchor:analysisHeader.leadingAnchor],
         [analysisScroll.trailingAnchor constraintEqualToAnchor:analysisHeader.trailingAnchor],
-        [analysisScroll.bottomAnchor constraintEqualToAnchor:analysisView.bottomAnchor constant:-12]
+        [analysisScroll.bottomAnchor constraintEqualToAnchor:aiInput.topAnchor constant:-8],
+        [aiScroll.topAnchor constraintEqualToAnchor:analysisScroll.topAnchor],
+        [aiScroll.leadingAnchor constraintEqualToAnchor:analysisScroll.leadingAnchor],
+        [aiScroll.trailingAnchor constraintEqualToAnchor:analysisScroll.trailingAnchor],
+        [aiScroll.bottomAnchor constraintEqualToAnchor:analysisScroll.bottomAnchor],
+        [aiInput.leadingAnchor constraintEqualToAnchor:analysisHeader.leadingAnchor],
+        [aiInput.trailingAnchor constraintEqualToAnchor:analysisHeader.trailingAnchor],
+        [aiInput.bottomAnchor constraintEqualToAnchor:analysisView.bottomAnchor constant:-12]
     ]];
+    [self resetAIConversation:@"AI 数据分析对话"];
     [self updateAnalysisScope:nil];
 
     _leftPane = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 310, view.bounds.size.height)] autorelease];
@@ -1348,7 +1374,8 @@ static NSString *humanBytes(long long n) {
     char *enabled = GoGetAISetting((char *)"deepseek.enabled");
     char *key = GoGetAISetting((char *)"deepseek.api_key");
     BOOL ready = strcmp(enabled ?: "", "true") == 0 && strlen(key ?: "") > 0;
-    _analysisAIStatus.stringValue = ready ? @"AI 状态：可用（点击后仍需确认发送范围）" : (strcmp(enabled ?: "", "true") == 0 ? @"AI 状态：Key 未配置" : @"AI 状态：未启用，本地分析可用");
+    // 这一行同时是 AI 对话状态，回答中不覆盖。
+    if (!_aiBusy) _analysisAIStatus.stringValue = ready ? @"AI 状态：可用（点击即发送所选范围）" : (strcmp(enabled ?: "", "true") == 0 ? @"AI 状态：Key 未配置" : @"AI 状态：未启用，本地分析可用");
     free(enabled); free(key);
 }
 
@@ -1435,13 +1462,13 @@ static NSString *humanBytes(long long n) {
         NSString *to = [formatter stringFromDate:end.dateValue];
         _databaseBusy = YES;
         [self openAnalysisCenter:nil];
-        _analysisResult.string = @"正在只读查询数据库并进行本地分析……\n通信与定时发送不受影响。";
+        [self showAnalysisText:@"正在只读查询数据库并进行本地分析……\n通信与定时发送不受影响。"];
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             char *report = GoAnalyzeDatabases((char *)filesJSON.UTF8String, (char *)from.UTF8String, (char *)to.UTF8String, (char *)direction.UTF8String, limit);
             NSString *text = [[NSString alloc] initWithUTF8String:report ?: "数据库分析失败"]; free(report);
             dispatch_async(dispatch_get_main_queue(), ^{
                 _databaseBusy = NO;
-                _analysisResult.string = text;
+                [self showAnalysisText:text];
                 // 记住这份数据库报告，供“AI 深度分析”直接对数据库数据分析。
                 [_lastDatabaseReport release];
                 _lastDatabaseReport = [text retain];
@@ -1454,7 +1481,7 @@ static NSString *humanBytes(long long n) {
 - (void)runLocalAnalysis:(id)sender {
     [self updateAnalysisScope:nil];
     NSArray *packets = [self analysisPackets];
-    if (!packets.count) { _analysisResult.string = @"没有可分析的数据。"; return; }
+    if (!packets.count) { [self showAnalysisText:@"没有可分析的数据。"]; return; }
     NSMutableString *report = [NSMutableString stringWithFormat:@"范围统计\n%@\n\n详细报文分析\n", _analysisStats.stringValue];
     NSUInteger limit = MIN((NSUInteger)20, packets.count);
     for (NSUInteger i = 0; i < limit; i++) {
@@ -1464,7 +1491,7 @@ static NSString *humanBytes(long long n) {
         free(raw);
     }
     if (packets.count > limit) [report appendFormat:@"\n其余 %ld 条未展开，范围统计仍包含全部数据。", (long)(packets.count - limit)];
-    _analysisResult.string = report;
+    [self showAnalysisText:report];
 }
 
 // connectionInfoLine 返回当前连接的诊断上下文（模式 + IP:端口 + 对端），未连接时返回空串。
@@ -1482,27 +1509,6 @@ static NSString *humanBytes(long long n) {
     return line;
 }
 
-// editableSendContent 弹出可编辑对话框，返回确认后（可能已修改）的发送内容；取消返回 nil。
-- (NSString *)editableSendContent:(NSString *)content title:(NSString *)title {
-    NSAlert *alert = [[[NSAlert alloc] init] autorelease];
-    alert.messageText = title;
-    alert.informativeText = @"以下内容将发送到 DeepSeek（含报文、传输类型与连接信息 IP:端口），可在发送前编辑或删减。";
-    NSScrollView *scroll = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 480, 260)] autorelease];
-    scroll.hasVerticalScroller = YES; scroll.borderType = NSBezelBorder;
-    NSTextView *tv = [[[NSTextView alloc] initWithFrame:scroll.contentView.bounds] autorelease];
-    tv.string = content ?: @"";
-    tv.editable = YES; tv.richText = NO;
-    tv.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
-    tv.autoresizingMask = NSViewWidthSizable;
-    tv.verticallyResizable = YES; tv.horizontallyResizable = NO;
-    tv.textContainer.widthTracksTextView = YES;
-    scroll.documentView = tv;
-    alert.accessoryView = scroll;
-    [alert addButtonWithTitle:@"确认并发送"]; [alert addButtonWithTitle:@"取消"];
-    if ([alert runModal] != NSAlertFirstButtonReturn) return nil;
-    return [[tv.string copy] autorelease];
-}
-
 - (NSString *)newAIMarkdownName {
     NSDateFormatter *fmt = [[[NSDateFormatter alloc] init] autorelease];
     fmt.dateFormat = @"yyyyMMdd-HHmmss-SSS";
@@ -1516,65 +1522,17 @@ static NSString *humanBytes(long long n) {
     if ([res hasPrefix:@"错误"]) [self appendText:[NSString stringWithFormat:@"[AI 存档失败：%@]\n", res]];
 }
 
-// AI 对话单独放在可调整大小的窗口中，分析中心继续显示本地报告。
-- (void)ensureAIChatWindow {
-    if (_aiChatWindow) return;
-    _aiChatWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 720, 580)
-        styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
-        backing:NSBackingStoreBuffered defer:NO];
-    _aiChatWindow.title = @"AI 数据分析对话";
-    _aiChatWindow.releasedWhenClosed = NO;
-    _aiChatWindow.minSize = NSMakeSize(500, 380);
-    NSView *root = _aiChatWindow.contentView;
-    _aiChatStatus = [[NSTextField alloc] initWithFrame:NSZeroRect];
-    _aiChatStatus.editable = NO; _aiChatStatus.bordered = NO; _aiChatStatus.drawsBackground = NO;
-    _aiChatStatus.textColor = NSColor.secondaryLabelColor;
-    _aiChatStatus.stringValue = @"选择数据并点击“AI 深度分析”，或输入问题开始对话。";
-    NSScrollView *scroll = [[[NSScrollView alloc] initWithFrame:NSZeroRect] autorelease];
-    scroll.borderType = NSBezelBorder; scroll.hasVerticalScroller = YES;
-    _aiTranscript = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 650, 400)];
-    _aiTranscript.editable = NO; _aiTranscript.selectable = YES;
-    _aiTranscript.font = [NSFont systemFontOfSize:13];
-    _aiTranscript.textContainer.widthTracksTextView = YES;
-    _aiTranscript.autoresizingMask = NSViewWidthSizable;
-    scroll.documentView = _aiTranscript;
-    _aiQuestion = [[NSTextField alloc] initWithFrame:NSZeroRect];
-    _aiQuestion.placeholderString = @"继续提问，按回车发送";
-    _aiQuestion.target = self; _aiQuestion.action = @selector(aiSendMessage:);
-    _aiSendButton = [[NSButton buttonWithTitle:@"发送" target:self action:@selector(aiSendMessage:)] retain];
-    _aiClearButton = [[NSButton buttonWithTitle:@"新对话" target:self action:@selector(aiClearConversation:)] retain];
-    for (NSView *item in @[_aiChatStatus, scroll, _aiQuestion, _aiSendButton, _aiClearButton]) {
-        item.translatesAutoresizingMaskIntoConstraints = NO;
-        [root addSubview:item];
-    }
-    [NSLayoutConstraint activateConstraints:@[
-        [_aiChatStatus.topAnchor constraintEqualToAnchor:root.topAnchor constant:14],
-        [_aiChatStatus.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:16],
-        [_aiChatStatus.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-16],
-        [_aiChatStatus.heightAnchor constraintEqualToConstant:22],
-        [scroll.topAnchor constraintEqualToAnchor:_aiChatStatus.bottomAnchor constant:10],
-        [scroll.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:16],
-        [scroll.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-16],
-        [scroll.bottomAnchor constraintEqualToAnchor:_aiQuestion.topAnchor constant:-12],
-        [_aiQuestion.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:16],
-        [_aiQuestion.bottomAnchor constraintEqualToAnchor:root.bottomAnchor constant:-16],
-        [_aiQuestion.heightAnchor constraintEqualToConstant:30],
-        [_aiQuestion.trailingAnchor constraintEqualToAnchor:_aiSendButton.leadingAnchor constant:-8],
-        [_aiSendButton.widthAnchor constraintEqualToConstant:72],
-        [_aiSendButton.bottomAnchor constraintEqualToAnchor:_aiQuestion.bottomAnchor],
-        [_aiClearButton.widthAnchor constraintEqualToConstant:72],
-        [_aiClearButton.bottomAnchor constraintEqualToAnchor:_aiQuestion.bottomAnchor],
-        [_aiClearButton.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-16],
-        [_aiSendButton.trailingAnchor constraintEqualToAnchor:_aiClearButton.leadingAnchor constant:-8]
-    ]];
-    [_aiChatWindow center];
-    [self resetAIConversation:@"AI 数据分析对话"];
+// 结果区在本地报告与 AI 对话之间切换，两边内容都保留。
+- (void)showAnalysisText:(NSString *)text {
+    _analysisResult.string = text;
+    _analysisResult.enclosingScrollView.hidden = NO;
+    _aiTranscript.enclosingScrollView.hidden = YES;
 }
 
-- (void)showAIChatWindow {
-    [self ensureAIChatWindow];
-    [_aiChatWindow makeKeyAndOrderFront:nil];
-    [NSApp activateIgnoringOtherApps:YES];
+- (void)showAIChat {
+    if (!_analysisVisible) [self openAnalysisCenter:nil];
+    _aiTranscript.enclosingScrollView.hidden = NO;
+    _analysisResult.enclosingScrollView.hidden = YES;
 }
 
 - (void)resetAIConversation:(NSString *)title {
@@ -1589,17 +1547,18 @@ static NSString *humanBytes(long long n) {
     if (_aiBusy) return;
     [self resetAIConversation:@"AI 数据分析对话"];
     _aiQuestion.stringValue = @"";
-    [_aiChatWindow makeFirstResponder:_aiQuestion];
+    [self showAIChat];
+    [_window makeFirstResponder:_aiQuestion];
 }
 
 - (void)aiFollowUp:(id)sender {
-    [self showAIChatWindow];
-    [_aiChatWindow makeFirstResponder:_aiQuestion];
+    [self showAIChat];
+    [_window makeFirstResponder:_aiQuestion];
 }
 
 - (void)startAIRequest:(NSString *)prompt visibleQuestion:(NSString *)question {
     if (_aiBusy || !prompt.length) return;
-    [self showAIChatWindow];
+    [self showAIChat];
     NSMutableArray *turns = [NSMutableArray arrayWithArray:_aiMessages];
     [turns addObject:@{@"role": @"user", @"content": prompt}];
     NSData *data = [NSJSONSerialization dataWithJSONObject:turns options:0 error:nil];
@@ -1643,7 +1602,9 @@ static NSString *humanBytes(long long n) {
     NSString *delta = state[@"delta"];
     if (delta.length) {
         [_aiDisplayMarkdown appendString:delta];
-        [_aiTranscript.textStorage appendAttributedString:[[[NSAttributedString alloc] initWithString:delta] autorelease]];
+        // 流式片段用正文样式，未设颜色的文字在深色模式下会是黑字。
+        NSDictionary *bodyStyle = @{NSFontAttributeName: [NSFont systemFontOfSize:12.5], NSForegroundColorAttributeName: NSColor.textColor};
+        [_aiTranscript.textStorage appendAttributedString:[[[NSAttributedString alloc] initWithString:delta attributes:bodyStyle] autorelease]];
         [_aiTranscript scrollRangeToVisible:NSMakeRange(_aiTranscript.string.length, 0)];
     }
     if (![state[@"done"] boolValue]) return;
@@ -1683,7 +1644,7 @@ static NSString *humanBytes(long long n) {
     char *key = GoGetAISetting((char *)"deepseek.api_key");
     BOOL ready = strcmp(enabled ?: "", "true") == 0 && strlen(key ?: "") > 0;
     free(enabled); free(key);
-    if (!ready) [self alert:@"AI 未启用或 Key 未配置，请先打开“操作 → AI 增强分析设置”"];
+    if (!ready) { [self showAIChat]; _aiChatStatus.stringValue = @"AI 未启用或 Key 未配置，请点“AI 设置”"; }
     return ready;
 }
 
@@ -1692,12 +1653,12 @@ static NSString *humanBytes(long long n) {
     NSData *data = [[NSString stringWithUTF8String:raw ?: "{}"] dataUsingEncoding:NSUTF8StringEncoding]; free(raw);
     NSDictionary *result = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
     NSString *error = result[@"error"];
-    if (error.length) { [self alert:error]; return nil; }
+    if (error.length) { [self showAIChat]; _aiChatStatus.stringValue = error; return nil; }
     return result[@"prompt"];
 }
 
 - (void)beginAIAnalysisWithPrompt:(NSString *)prompt title:(NSString *)title summary:(NSString *)summary {
-    [self showAIChatWindow];
+    [self showAIChat];
     if (_aiBusy) { _aiChatStatus.stringValue = @"请先停止当前回答，再开始新的分析"; return; }
     [self resetAIConversation:title];
     _aiQuestion.stringValue = @"";
@@ -1705,33 +1666,30 @@ static NSString *humanBytes(long long n) {
 }
 
 - (void)runAIPacketAnalysisWithInput:(NSString *)input title:(NSString *)title {
-    if (_aiBusy) { [self showAIChatWindow]; _aiChatStatus.stringValue = @"请先停止当前回答，再开始新的分析"; return; }
+    if (_aiBusy) { [self showAIChat]; _aiChatStatus.stringValue = @"请先停止当前回答，再开始新的分析"; return; }
     if (![self checkAIReady]) return;
-    NSString *edited = [self editableSendContent:input title:@"发送报文到 DeepSeek（可编辑）"];
-    if (!edited) return;
-    NSString *prompt = [self preparedAIPromptKind:@"packet" transport:_mode.titleOfSelectedItem content:edited];
+    NSString *prompt = [self preparedAIPromptKind:@"packet" transport:_mode.titleOfSelectedItem content:input];
     if (!prompt) return;
-    NSString *summary = [NSString stringWithFormat:@"已确认发送 %@ 报文（%lu 字节）", _mode.titleOfSelectedItem, (unsigned long)[edited lengthOfBytesUsingEncoding:NSUTF8StringEncoding]];
+    NSString *summary = [NSString stringWithFormat:@"已发送 %@ 报文（%lu 字节）", _mode.titleOfSelectedItem, (unsigned long)[input lengthOfBytesUsingEncoding:NSUTF8StringEncoding]];
     [self beginAIAnalysisWithPrompt:prompt title:title summary:summary];
 }
 
 - (void)runAIAnalysis:(NSButton *)sender {
-    if (_aiBusy) { [self showAIChatWindow]; _aiChatStatus.stringValue = @"请先停止当前回答，再开始新的分析"; return; }
+    if (_aiBusy) { [self showAIChat]; _aiChatStatus.stringValue = @"请先停止当前回答，再开始新的分析"; return; }
 
     // 当前展示的是数据库分析报告时，直接让 AI 深度分析这份数据库数据。
     if (_lastDatabaseReport.length > 0 && [_analysisResult.string isEqualToString:_lastDatabaseReport]) {
         if (![self checkAIReady]) return;
-        NSString *report = [self editableSendContent:_lastDatabaseReport title:@"发送数据库分析报告到 DeepSeek（可编辑）"];
-        if (!report) return;
+        NSString *report = _lastDatabaseReport;
         NSString *prompt = [self preparedAIPromptKind:@"report" transport:@"" content:report];
         if (!prompt) return;
-        NSString *summary = [NSString stringWithFormat:@"已确认发送数据库报告（%lu 字节）", (unsigned long)[report lengthOfBytesUsingEncoding:NSUTF8StringEncoding]];
+        NSString *summary = [NSString stringWithFormat:@"已发送数据库报告（%lu 字节）", (unsigned long)[report lengthOfBytesUsingEncoding:NSUTF8StringEncoding]];
         [self beginAIAnalysisWithPrompt:prompt title:@"数据库 AI 深度分析" summary:summary];
         return;
     }
 
     NSArray *packets = [self analysisPackets];
-    if (!packets.count) { _analysisResult.string = @"没有可分析的数据。先点“开始本地分析”或“分析数据库…”，再点 AI 深度分析。"; return; }
+    if (!packets.count) { [self showAnalysisText:@"没有可分析的数据。先点“开始本地分析”或“分析数据库…”，再点 AI 深度分析。"]; return; }
     NSMutableString *input = [NSMutableString string];
     NSString *conn = [self connectionInfoLine];
     if (conn.length) [input appendFormat:@"%@\n\n", conn];

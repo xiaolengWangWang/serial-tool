@@ -250,35 +250,28 @@ int RunLayoutChecks(id delegate, NSString *directory) {
             cases++;
         }
     }
-    [delegate performSelector:@selector(ensureAIChatWindow)];
-    NSWindow *chat = [delegate valueForKey:@"aiChatWindow"];
-    if (!chat) {
-        [errors addObject:@"AI chat window missing"];
-    } else {
-        for (NSString *appearance in @[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]) {
-            chat.appearance = [NSAppearance appearanceNamed:appearance];
-            for (NSArray *size in @[@[@500, @380], @[@720, @580]]) {
-                [chat setContentSize:NSMakeSize([size[0] doubleValue], [size[1] doubleValue])];
-                [chat.contentView layoutSubtreeIfNeeded];
-                CheckView(chat.contentView, errors);
-                NSTextField *question = [delegate valueForKey:@"aiQuestion"];
-                if (question.frame.size.width < 200) [errors addObject:@"AI question field too narrow"];
-                NSTextView *transcript = [delegate valueForKey:@"aiTranscript"];
-                NSScrollView *scroll = transcript.enclosingScrollView;
-                if (![scroll isKindOfClass:NSScrollView.class] || scroll.frame.size.height < 200)
-                    [errors addObject:@"AI transcript viewport too short"];
-                if ([size[0] integerValue] == 720) {
-                    [chat orderFront:nil]; [chat display];
-                    NSView *frameView = chat.contentView.superview ?: chat.contentView;
-                    NSBitmapImageRep *rep = [frameView bitmapImageRepForCachingDisplayInRect:frameView.bounds];
-                    [frameView cacheDisplayInRect:frameView.bounds toBitmapImageRep:rep];
-                    [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}]
-                        writeToFile:[directory stringByAppendingPathComponent:[NSString stringWithFormat:@"ai-chat-%@.png", appearance]] atomically:YES];
-                }
-                cases++;
-            }
-        }
-        [chat orderOut:nil];
+    // AI 对话在分析中心结果区里，按最矮的窗口检查输入框和对话区。
+    for (NSString *appearance in @[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]) {
+        window.appearance = [NSAppearance appearanceNamed:appearance];
+        window.contentView.frame = NSMakeRect(0, 0, 1280, 700);
+        [delegate setValue:@YES forKey:@"analysisVisible"];
+        [delegate performSelector:@selector(layoutMainPanes)];
+        [delegate performSelector:@selector(showAIChat)];
+        NSTextView *transcript = [delegate valueForKey:@"aiTranscript"];
+        [window.contentView layoutSubtreeIfNeeded];
+        CheckView(window.contentView, errors);
+        if ([[delegate valueForKey:@"aiQuestion"] frame].size.width < 100) [errors addObject:@"AI question field too narrow"];
+        if (transcript.enclosingScrollView.hidden || transcript.enclosingScrollView.frame.size.height < 120)
+            [errors addObject:@"AI transcript viewport too short"];
+        if (![[delegate valueForKey:@"analysisResult"] enclosingScrollView].hidden) [errors addObject:@"local report still shown over AI chat"];
+        [window display];
+        NSBitmapImageRep *rep = [window.contentView bitmapImageRepForCachingDisplayInRect:window.contentView.bounds];
+        [window.contentView cacheDisplayInRect:window.contentView.bounds toBitmapImageRep:rep];
+        [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}]
+            writeToFile:[directory stringByAppendingPathComponent:[NSString stringWithFormat:@"ai-chat-%@.png", appearance]] atomically:YES];
+        [delegate performSelector:@selector(showAnalysisText:) withObject:@"选择分析范围后，点击“开始本地分析”。"];
+        if (![transcript.enclosingScrollView isHidden]) [errors addObject:@"AI chat still shown over local report"];
+        cases++;
     }
     for (NSString *error in [NSOrderedSet orderedSetWithArray:errors]) fprintf(stderr, "%s\n", error.UTF8String);
     fprintf(stderr, "Layout check: %lu failures (%lu window/mode/tab cases, hidden and shown analysis)\n", (unsigned long)errors.count, (unsigned long)cases);
