@@ -45,7 +45,7 @@ CommBox 是一款串口 / 网络调试工具：简单、稳定、顺手。支持
 | HTTP 客户端 | 目标 URL | 方法/路径/头/体在发送区填写 |
 
 - 连接状态区显示：模式、端点、串口参数、运行时间、真实对端；累计 RX/TX 条数与字节、重连、错误计数。
-- HTTP 支持 GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS；方法省略默认 GET；请求体以 `{`/`[` 开头默认 JSON，否则表单；保持 Cookie 会话；不自动跟随重定向。
+- HTTP 支持 GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS；方法省略默认 GET；请求体以 `{`/`[` 开头默认 JSON，否则表单；保持 Cookie 会话；不自动跟随重定向。发送区也可直接粘贴 `curl` 命令（支持多行续行），按 cURL 参数执行，不经过 shell。
 
 ---
 

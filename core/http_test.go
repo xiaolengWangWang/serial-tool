@@ -1,6 +1,7 @@
 package core
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -145,5 +146,46 @@ func TestHTTPLoginCookie(t *testing.T) {
 	}
 	if r := wait("已登录访问"); !strings.Contains(r, "200 OK") || !strings.Contains(r, `"ok"`) || !strings.Contains(r, "true") {
 		t.Fatalf("已登录应返回数据,实际 %q", r)
+	}
+}
+
+// 发送框粘贴的多行 curl 命令按 cURL 语义执行:方法、请求头、请求体都要到服务端。
+func TestHTTPSendBoxRunsCURL(t *testing.T) {
+	type seen struct{ method, token, body string }
+	requests := make(chan seen, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		requests <- seen{r.Method, r.Header.Get("X-Token"), string(b)}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	received := make(chan string, 1)
+	engine, err := New(t.TempDir(), func(_ string, data []byte) { received <- string(data) }, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if err := engine.Connect(Config{Mode: ModeHTTPClient, Address: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	cmd := "curl -X PUT '" + server.URL + "/api/item' \\\n  -H 'X-Token: abc' \\\n  --data-raw '{\"v\":1}'"
+	if err := engine.Send(cmd, false, "无"); err != nil {
+		t.Fatalf("cURL 发送失败: %v", err)
+	}
+	if got := <-requests; got != (seen{"PUT", "abc", `{"v":1}`}) {
+		t.Fatalf("服务端收到 %+v", got)
+	}
+	select {
+	case resp := <-received:
+		if !strings.Contains(resp, "200 OK") || !strings.Contains(resp, `"ok": true`) {
+			t.Fatalf("响应显示不符: %q", resp)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("未收到 cURL 响应")
+	}
+	if err := engine.Send("curl 'unterminated", false, "无"); err == nil || !strings.Contains(err.Error(), "cURL 解析失败") {
+		t.Fatalf("坏命令应报解析失败,得到 %v", err)
 	}
 }

@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -293,7 +294,7 @@ func (e *Engine) connectHTTP(cfg Config) error {
 	}
 	atomic.StoreInt64(&e.startedAt, time.Now().UnixNano())
 	atomic.StoreInt32(&e.state, int32(StateConnected))
-	e.emitLog("HTTP 就绪: " + url + "(发送框:第一行\"[方法] 路径\",可跟请求头行,空行后为 body)")
+	e.emitLog("HTTP 就绪: " + url + "(发送框:第一行\"[方法] 路径\",可跟请求头行,空行后为 body;也可直接粘贴 curl 命令)")
 	return nil
 }
 
@@ -363,6 +364,9 @@ func (e *Engine) HTTPRequest(spec string) error {
 	e.Unlock()
 	if base == "" || client == nil {
 		return errors.New("尚未连接 HTTP")
+	}
+	if f := strings.Fields(spec); len(f) > 0 && f[0] == "curl" {
+		return e.httpCURL(spec)
 	}
 
 	method, target := "GET", base
@@ -442,6 +446,39 @@ func (e *Engine) HTTPRequest(spec string) error {
 	b.WriteString("\n")
 	b.Write(prettyJSON(resp.Header.Get("Content-Type"), data))
 	e.receive("HTTP "+target, []byte(b.String()))
+	return nil
+}
+
+// httpCURL 按 cURL 语义执行发送框里粘贴的 curl 命令:只解析参数,不经过 shell。
+// 复用已连接 HTTP 的 Cookie jar;显示的正文与发送框的普通请求一样限 4 MiB。
+func (e *Engine) httpCURL(command string) error {
+	spec, err := ParseCURL(command)
+	if err != nil {
+		return fmt.Errorf("cURL 解析失败: %w", err)
+	}
+	e.emitLog("HTTP cURL " + spec.URL)
+	e.storeSent([]byte(command))
+	res, err := e.DoHTTPRequest(context.Background(), spec)
+	if err != nil {
+		return err
+	}
+	body := res.PrettyBody
+	if len(body) == 0 {
+		body = res.RawBody
+	}
+	truncated := res.Truncated
+	if len(body) > 4<<20 {
+		body, truncated = body[:4<<20], true
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "HTTP %s  (耗时 %s, %d 字节)\n", res.Status, res.Duration.Round(time.Millisecond), res.ByteSize)
+	_ = res.Headers.Write(&b)
+	b.WriteString("\n")
+	b.Write(body)
+	if truncated {
+		b.WriteString("\n…(正文过大,只显示前面部分)")
+	}
+	e.receive("HTTP "+res.URL, []byte(b.String()))
 	return nil
 }
 

@@ -1,6 +1,6 @@
 # CommBox v0.10.2
 
-本版提供 Windows x64、macOS Apple Silicon / Intel 安装包和 Linux amd64 命令行程序。macOS 的 AI 深度分析改在分析中心内对话；Windows 和 Linux 的功能与 v0.10.1 一致，版本号同步到 0.10.2。
+本版提供 Windows x64、macOS Apple Silicon / Intel 安装包和 Linux amd64 命令行程序。macOS 的 AI 深度分析改在分析中心内对话；HTTP 客户端支持直接运行 cURL 命令。
 
 ## 本版变化
 
@@ -9,6 +9,8 @@
 - 结果区下方新增输入框，回车或点「发送」继续追问；回答中「发送」变为「停止」，已生成部分保留。「新对话」在「AI 设置」旁边。
 - AI 未启用、Key 未配置或数据超限时，提示显示在 AI 状态行，不再弹窗。
 - 流式输出的文字使用正文样式，深色模式下回答过程中也能看清。
+- HTTP 客户端模式的发送框可直接粘贴 `curl` 命令运行（macOS 与 Windows），按 cURL 参数执行方法、请求头、请求体、认证、Cookie、超时等，不经过 shell。
+- macOS HTTP 工作区新增「运行 cURL」：直接执行 cURL 框中的命令，form / 文件上传请求体也照常发送。
 
 ## 验证与边界
 

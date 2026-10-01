@@ -774,6 +774,7 @@ type httpUISpec struct {
 	ConnectSec float64 `json:"connectSec"`
 	Follow     bool    `json:"follow"`
 	Insecure   bool    `json:"insecure"`
+	Curl       string  `json:"curl"` // 非空时按这条 cURL 命令执行,忽略其余字段
 }
 
 func parseHeaderLines(s string) http.Header {
@@ -835,6 +836,13 @@ func GoHTTPSend(specJSON *C.char) *C.char {
 		return jsonCString(map[string]any{"ok": false, "error": "参数解析失败: " + err.Error()})
 	}
 	spec := uiSpecToRequest(u)
+	if strings.TrimSpace(u.Curl) != "" {
+		parsed, err := core.ParseCURL(u.Curl)
+		if err != nil {
+			return jsonCString(map[string]any{"ok": false, "error": "cURL 解析失败: " + err.Error()})
+		}
+		spec = parsed
+	}
 	timeout := spec.Timeout
 	if timeout <= 0 {
 		timeout = 60 * time.Second

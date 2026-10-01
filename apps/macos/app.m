@@ -2615,9 +2615,12 @@ static NSString *humanBytes(long long n) {
         _httpBody = [self addHTTPTextView:v frame:NSMakeRect(20, 448, 780, 86) editable:YES resizeH:NO];
         _httpBody.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
 
-        NSTextField *curlLabel = Label(@"cURL(仅解析,不执行 shell;导出可能含认证信息)", NSMakeRect(20, 422, 520, 20)); curlLabel.textColor = NSColor.secondaryLabelColor; curlLabel.autoresizingMask = NSViewMinYMargin; [v addSubview:curlLabel];
+        NSTextField *curlLabel = Label(@"cURL(按 cURL 参数执行,不经过 shell;导出可能含认证信息)", NSMakeRect(20, 422, 520, 20)); curlLabel.textColor = NSColor.secondaryLabelColor; curlLabel.autoresizingMask = NSViewMinYMargin; [v addSubview:curlLabel];
         _httpCurl = [self addHTTPTextView:v frame:NSMakeRect(20, 356, 650, 60) editable:YES resizeH:NO];
         _httpCurl.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+        // 运行 cURL 走发送请求同一流程,tag 区分请求来源:直接按 cURL 执行,form/文件上传也不丢。
+        NSButton *runCurl = [NSButton buttonWithTitle:@"运行 cURL" target:self action:@selector(httpSend:)];
+        runCurl.tag = 1; runCurl.frame = NSMakeRect(680, 418, 110, 28); runCurl.autoresizingMask = NSViewMinYMargin | NSViewMinXMargin; [v addSubview:runCurl];
         NSButton *importCurl = [NSButton buttonWithTitle:@"导入请求" target:self action:@selector(httpImportCurl:)];
         importCurl.frame = NSMakeRect(680, 386, 110, 28); importCurl.autoresizingMask = NSViewMinYMargin | NSViewMinXMargin; [v addSubview:importCurl];
         NSButton *genCurl = [NSButton buttonWithTitle:@"生成 cURL" target:self action:@selector(httpGenerateCurl:)];
@@ -2664,10 +2667,14 @@ static NSString *humanBytes(long long n) {
 
 - (void)httpSend:(id)sender {
     if (_httpSending) return;
+    BOOL runCurl = [sender isKindOfClass:[NSButton class]] && [sender tag] == 1;
+    if (runCurl && ![_httpCurl.string stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length) { [self alert:@"请先在 cURL 框粘贴命令"]; return; }
     _httpSending = YES;
     _httpStatus.textColor = NSColor.secondaryLabelColor;
     _httpStatus.stringValue = @"正在请求…";
-    NSString *specJSON = [self httpSpecJSON];
+    NSString *specJSON = runCurl
+        ? [[[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:@{@"curl": _httpCurl.string} options:0 error:NULL] encoding:NSUTF8StringEncoding] autorelease]
+        : [self httpSpecJSON];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         char *raw = GoHTTPSend((char *)specJSON.UTF8String);
         NSData *data = [[NSData alloc] initWithBytes:(raw ?: "{}") length:(raw ? strlen(raw) : 2)]; free(raw);
