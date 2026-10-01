@@ -131,7 +131,7 @@ go build -ldflags="-H windowsgui -s -w" -o build/CommBox.exe ./windows
 
 `windows/rsrc_windows_amd64.syso` 提供清单与图标（含 PerMonitorV2 DPI 感知），Go 构建自动链接，不能删。发布包为 `CommBox.exe` + `README-Windows.txt` 打成 `CommBox-<版本>-Windows-x64.zip`，另单独挂一份裸 exe。
 
-发布步骤：改 `internal/wincore/modes.go` 的 `Version` → 构建 → 打包并算 SHA256 → 写 `docs/release-v<版本>.md` → 提交并打 tag → push → 用 GitHub API 建 Release 并上传两个资产。
+发布步骤：改 `internal/wincore/modes.go` 的 `Version` → 构建 → 打包并算 SHA256 → 写 `docs/releases/release-v<版本>.md` → 提交并打 tag → push → 用 GitHub API 建 Release 并上传两个资产。
 
 **发布说明有一条硬约束**：正文必须保留 SHA256 代码块，格式为 `<64 位小写十六进制><两个空格><文件名>`。更新器就是从发布说明里解析这一行来校验下载的安装包（`sha256FromNotes`），删掉它下载就没有校验。说明本身保持精简：标题、本版变化、校验、注意四节即可——更新对话框直接显示这段文字，620×520 的窗口读不完长篇。
 
@@ -152,7 +152,7 @@ $env:COMMBOX_GUI_TEST = '1'
 go test ./... -count=1
 ```
 
-点击与截图记录见 [GUI 点击测试记录](CommBox_GUI点击测试记录.md)。实测覆盖默认、最小、最大化尺寸、模式切换、AI 展开、TCP/HTTP 收发、筛选、定时/循环及工具窗口。串口硬件、更新下载和远程 AI 服务不在本轮实测范围内。
+点击与截图记录见 [GUI 点击测试记录](archive/CommBox_GUI点击测试记录.md)。实测覆盖默认、最小、最大化尺寸、模式切换、AI 展开、TCP/HTTP 收发、筛选、定时/循环及工具窗口。串口硬件、更新下载和远程 AI 服务不在本轮实测范围内。
 
 ## 8. 已知限制与后续候选
 

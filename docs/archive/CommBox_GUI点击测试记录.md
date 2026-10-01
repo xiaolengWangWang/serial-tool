@@ -62,4 +62,4 @@ go build -ldflags='-H windowsgui -s -w' -o build/CommBox.exe ./windows
 
 2026-09-20 将上述修复纳入 v0.8.6。重新开启 `COMMBOX_GUI_TEST=1` 执行 `go test ./... -count=1`：101 项通过，2 项跳过，包含的六项真实 Win32 控件回归全部通过。跳过项为缺少 Windows 符号链接权限的子用例，以及默认不启用的联网更新下载测试。
 
-正式产物使用 `go build -trimpath -buildvcs=false -ldflags='-H windowsgui -s -w' -o build/windows-0.8.6/CommBox.exe ./windows` 构建。发布说明与 SHA256 见 [v0.8.6 发布说明](release-v0.8.6.md)。
+正式产物使用 `go build -trimpath -buildvcs=false -ldflags='-H windowsgui -s -w' -o build/windows-0.8.6/CommBox.exe ./windows` 构建。发布说明与 SHA256 见 [v0.8.6 发布说明](../releases/release-v0.8.6.md)。

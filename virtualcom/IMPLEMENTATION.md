@@ -1,10 +1,6 @@
 # VirtualCOM 实现记录
 
-计划：`docs/superpowers/plans/2026-09-20-virtualcom-v1.md`
-
-契约：`docs/superpowers/plans/2026-09-20-virtualcom-contract.md`
-
-规格：`docs/superpowers/specs/2026-09-20-virtualcom-v1-functional-spec.md`
+规格：[SPEC-v1.md](SPEC-v1.md)
 
 ## 当前状态（2026-09-21）
 

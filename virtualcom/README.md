@@ -143,7 +143,7 @@ GUI 和 `run` 在启动时会自动清掉这类自家残留，不需要手工干
 
 ## 四、对照功能规格的完成情况
 
-对照 `docs/superpowers/specs/2026-09-20-virtualcom-v1-functional-spec.md`。
+对照 [SPEC-v1.md](SPEC-v1.md)。
 
 ### 已完成并有测试覆盖
 
