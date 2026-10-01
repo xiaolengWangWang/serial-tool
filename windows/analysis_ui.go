@@ -17,7 +17,7 @@ import (
 )
 
 // All analysis state belongs to its dialog; workers receive immutable snapshots.
-// 右侧对话与 AI 面板共用 aiChat；AI 服务设置与是否启用也与面板共用，不再各存一份。
+// 右侧对话与 AI 面板共用 aiChat；AI 服务设置与是否启用也与面板共用，只存一份。
 type analysisWindow struct {
 	app    *application
 	dlg    *walk.Dialog

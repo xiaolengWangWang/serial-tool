@@ -60,7 +60,7 @@ func openAnalysisDatabase(dir, filename string) (*sql.DB, error) {
 		return nil, fmt.Errorf("数据库必须是普通文件，不接受符号链接或目录")
 	}
 	// 采集库处于 WAL 模式，数据可能仍在 -wal 文件中；mode=ro 只读连接看不到 WAL，
-	// 会把正在写入的库误判为空库或缺表。改为正常打开以读取已提交的 WAL 内容，
+	// 会把正在写入的库误判为空库或缺表。因此正常打开以读取已提交的 WAL 内容，
 	// 并用 query_only 保证本分析连接只读不写，busy_timeout 容忍并发写入方短暂持锁。
 	q := url.Values{}
 	q.Add("_pragma", "busy_timeout(5000)")

@@ -37,7 +37,7 @@ func TestRingWrapAround(t *testing.T) {
 	}
 }
 
-// 写满时必须阻塞等待,不能丢数据(规格 2.7)。
+// 写满时必须阻塞等待,不能丢数据。
 func TestRingBlocksWhenFull(t *testing.T) {
 	r := NewRing(4)
 	done := make(chan int, 1)
@@ -111,7 +111,7 @@ func TestRingPurgeCountsDropped(t *testing.T) {
 	}
 }
 
-// 大数据连续传输不能截断、乱序或重复(规格 F04 的缓冲层部分)。
+// 大数据连续传输不能截断、乱序或重复。
 func TestRingStreamIntegrity(t *testing.T) {
 	const total = 512 * 1024
 	src := make([]byte, total)

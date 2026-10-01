@@ -1,6 +1,6 @@
 ﻿# 从已校验的 Windows ZIP 生成完整 7z 包，以及只含主程序的 ZIP / 7z 包。
 # EXE 内容保持不变；需要 Windows 自带的 bsdtar（支持 7zip / LZMA2）。
-# 示例：powershell -File scripts/compress-windows.ps1 -SourceArchive build/CommBox-0.9.4-Windows-x64.zip
+# 示例：powershell -File scripts/compress-windows.ps1 -SourceArchive build/CommBox-<版本>-Windows-x64.zip
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$SourceArchive,

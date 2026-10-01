@@ -118,7 +118,7 @@ func (a *application) connectionPanel() Widget {
 				HSpacer{},
 			}},
 			// 两列栅格：标签列按最长标签自动定宽，每个字段只占一行，
-			// 左栏内容不再溢出到需要滚动才能看到“最近连接”。
+			// 左栏不用滚动就能看到“最近连接”。
 			GroupBox{AssignTo: &a.serialGroup, Title: "串口参数", Layout: Grid{Alignment: AlignHNearVCenter, Columns: 2, Spacing: 6, Margins: Margins{Left: 10, Top: 6, Right: 10, Bottom: 10}}, Children: []Widget{
 				// 输入框统一 112 宽，与最宽的标签「服务器 IP」合起来正好放进左栏。
 				formLabel("端口"), ComboBox{AssignTo: &a.ports, Editable: true, ToolTipText: "支持物理串口及 VirtualCOM 免驱动端口。VirtualCOM 的波特率、数据位、校验与停止位不生效。", MinSize: Size{Width: 112, Height: rowH}},
@@ -140,7 +140,7 @@ func (a *application) connectionPanel() Widget {
 					HSpacer{},
 				}},
 			}},
-			// HSpacer 让状态靠左，与上方表单左对齐；此前两个 Label 被 HBox 均分而显得居中。
+			// HSpacer 让状态靠左，与上方表单左对齐；否则两个 Label 被 HBox 均分而显得居中。
 			Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 				Label{AssignTo: &a.statusDot, Text: "●", TextColor: colorGray, MinSize: Size{Width: 16}, MaxSize: Size{Width: 16}, Alignment: AlignHNearVCenter},
 				Label{AssignTo: &a.status, Text: "未连接", EllipsisMode: EllipsisEnd, Alignment: AlignHNearVCenter, StretchFactor: 1},
@@ -212,7 +212,7 @@ func (a *application) packetViews() Widget {
 					}
 				}}, Action{Text: "添加到快捷发送", OnTriggered: func() { a.loadPacket() }}, Action{Text: "AI 分析选中数据", OnTriggered: a.analyzeSelected}, Separator{}, Action{AssignTo: &a.detailColumns, Text: "显示协议 / 来源 / 连接 ID 列", Checkable: true, OnTriggered: a.toggleDetailColumns}, Action{Text: "导出 CSV", OnTriggered: a.exportCSV},
 			}},
-			// 选中操作行：AI 面板有“当前选中数据”这个分析范围，此前主区却没有选择入口和计数。
+			// 选中操作行：给 AI 面板的“当前选中数据”范围提供选择入口和计数。
 			// 每个控件自带宽度上限，HBox 只能把富余宽度给 HSpacer，
 			// 窗口收窄时按钮也就不会互相挤到文字叠在一起。
 			Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
@@ -455,7 +455,7 @@ func (a *application) stylePacketCell(style *walk.CellStyle) {
 	}
 }
 
-// formLabel 是栅格里的表单标签：与右侧输入框垂直居中，文字不再贴在框顶。
+// formLabel 是栅格里的表单标签：与右侧输入框垂直居中，文字不贴框顶。
 func formLabel(text string) Label {
 	return Label{Text: text, Alignment: AlignHNearVCenter}
 }
@@ -683,7 +683,7 @@ func (a *application) updateNarrow(rc win.RECT) {
 // arrangePanes 按 AI 面板是否展开（ai）决定三栏的显隐。
 // 常规屏幕：中栏常驻；AI 展开且客户区不足 bothSidePanesWidth 时收起左栏。
 // 窄屏单栏：一次只显示一栏，默认中栏；左栏、AI 面板显示时取消宽度上限、占满窗口，
-// 中栏也不再需要为侧栏保留 70% 的下限。
+// 中栏不必为侧栏保留 70% 的下限。
 func (a *application) arrangePanes(ai bool) {
 	if a.mw == nil || a.connectionPane == nil || a.monitorPane == nil || a.assistant == nil || a.assistant.panel == nil || a.arrangingPanes {
 		return

@@ -10,7 +10,7 @@ var ErrClosed = errors.New("虚拟串口缓冲区已关闭")
 
 // Ring 是一个定容环形缓冲,对应真实串口的收发缓存。
 //
-// 写满时阻塞等待对端读走,而不是丢弃数据(规格 2.7「缓冲区满时等待」);
+// 写满时阻塞等待对端读走,而不是丢弃数据;
 // 关闭时唤醒所有等待者,并允许把已有数据读完再返回 ErrClosed,
 // 这样「正常完成 / 部分完成 / 未完成」才能被区分出来。
 type Ring struct {
@@ -109,7 +109,7 @@ func (r *Ring) readLocked(p []byte) int {
 	return n
 }
 
-// Purge 丢弃全部待传数据,返回被丢弃的字节数(规格 2.7「清空 Buffer」)。
+// Purge 丢弃全部待传数据,返回被丢弃的字节数。
 func (r *Ring) Purge() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()

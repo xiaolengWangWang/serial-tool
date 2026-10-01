@@ -109,7 +109,7 @@ func disconnectNamedPipe(h syscall.Handle) error {
 }
 
 // clientPID 返回打开该端口的进程 PID。拿不到时返回 0 和原因,
-// 不允许把「获取失败」当成「没人占用」(规格 2.2)。
+// 不允许把「获取失败」当成「没人占用」。
 func clientPID(h syscall.Handle) (uint32, error) {
 	var pid uint32
 	r, _, e := procGetNamedPipeClientPID.Call(uintptr(h), uintptr(unsafe.Pointer(&pid)))

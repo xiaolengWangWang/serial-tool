@@ -19,7 +19,7 @@ const comSearchStart = 3
 const comSearchEnd = 255
 
 // entry 是管理器里的一条记录。禁用时 pair 为 nil,但 COM 号等配置保留,
-// 重新启用时按原编号恢复(规格 2.1「禁用后保留配置」)。
+// 重新启用时按原编号恢复(禁用后保留配置)。
 type entry struct {
 	id       string
 	comA     string
@@ -115,7 +115,7 @@ func (m *Manager) pickTwoFree(used map[string]bool) (string, string, error) {
 }
 
 // busyReason 返回「某一端正在被程序使用」的说明,没有被占用时返回空串。
-// 修改、禁用、重启、删除都要先过这一关(规格第 4 节)。
+// 修改、禁用、重启、删除都要先过这一关。
 func busyReason(p *Pair) string {
 	if p == nil {
 		return ""
@@ -377,7 +377,7 @@ func (m *Manager) CloseAll() {
 	}
 }
 
-// Diagnose 生成一份可直接复制给维护人员的诊断报告(规格 2.9)。
+// Diagnose 生成一份可直接复制给维护人员的诊断报告。
 // 只检查和报告,不做任何修复动作。
 func (m *Manager) Diagnose() string {
 	snap := m.List()

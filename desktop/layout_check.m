@@ -226,7 +226,7 @@ int RunLayoutChecks(id delegate, NSString *directory) {
     }
     }
     }
-    // 独立窗口:工具箱(v0.9.13 加了转换行和多行结果区)与 HTTP 工作区。
+    // 独立窗口:工具箱与 HTTP 工作区。
     for (NSString *appearance in @[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]) {
         for (NSArray *item in @[@[@"openToolbox:", @"toolboxWindow", @"toolbox"], @[@"openHTTPWorkspace:", @"httpWindow", @"http-workspace"]]) {
             [delegate performSelector:NSSelectorFromString(item[0]) withObject:nil];

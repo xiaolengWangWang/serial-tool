@@ -72,7 +72,7 @@ func analysisPacketReport(packets []wincore.Packet) (string, error) {
 }
 
 // analysisReportForAI 取本地报告交给 AI，最多 32 KiB。报告按概要在前、逐条明细在后排列，
-// 超出时截掉尾部明细并注明，免得模型以为数据就这么多；以前直接拒绝，用户只能缩小范围重来。
+// 超出时截掉尾部明细并注明，免得模型以为数据就这么多。
 func analysisReportForAI(report string) string {
 	const limit = 32 << 10
 	if len(report) <= limit {

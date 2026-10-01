@@ -29,36 +29,18 @@ Windows 串口名可写 `COM3`。`./commbox -h` 查看全部参数。
 
 ## 桌面版功能总览
 
-- v0.10.2：macOS AI 深度分析不再弹确认框和独立窗口，对话直接显示在分析中心结果区，下方输入框继续追问；Windows 与 Linux 功能同 v0.10.1。
-- v0.10.1：版本号从 0.9.x 进入 0.10 系列，功能与 v0.9.18 相同；同时提供 Windows、macOS 和 Linux 构建产物。
-- v0.9.18：macOS AI 深度分析改为流式对话；Windows 与 Linux 功能同 v0.9.17，版本号同步。本版同时提供 Windows、macOS 和 Linux 构建产物。
-- macOS 的 AI 深度分析在分析中心内流式对话：点击即发送当前报文、选中报文或数据库报告，回答在结果区逐段显示，不再弹确认框或独立窗口；可停止并保留部分回答，在下方输入框继续提问，对话自动存入本地 Markdown。
-- v0.9.17：Windows AI 对话支持随问题添加文本、DOCX、可选中文字的 PDF 和图片附件；本版同时提供 Windows、macOS 和 Linux 构建产物。
-- Windows AI 对话可添加文本日志、CSV、JSON、DOCX、可选中文字的 PDF 和 PNG/JPEG/GIF/WebP 图片；附件随提问发送，图片需使用支持视觉的模型（DeepSeek 可选 `deepseek-flash`）。每次最多 6 个附件，文本提取上限 64 KiB/个，PDF/DOCX 文件上限 5 MiB/个，PDF 单页解压内容上限 4 MiB，图片上限 2 MiB/个且不超过 3200 万像素；扫描版 PDF 暂不支持。PDF 在独立进程中解析，限时 20 秒；对话累计文字上限 512 KiB、图片编码上限 24 MiB。
-- v0.9.16：Windows AI 分析改为流式对话，回答边生成边显示，支持停止并保留已生成内容、连续追问、复制与导出；主面板和历史数据库分析共用同一套对话与设置。疑似 Modbus 帧由程序附加功能码、字节数和 CRC 校验结论，避免模型误算；长报告自动截取前 32 KiB，服务错误会说明 Key、余额、限流或网络原因
-- v0.9.15：Windows 版随本版发布(上一个 Windows 版是 v0.9.4,v0.9.5~v0.9.14 中适用于 Windows 的修复一并带上),附 VirtualCOM 0.2.2。Windows 界面:任何缩放下数据栏占「数据 + 发送」合计高度 70% 以上、中栏占窗口宽度 70% 以上;去掉数据与发送之间的可拖动分隔条,矮窗口把历史/快捷与定时/循环收进「更多发送」;左侧连接栏收窄到 240~250;筛选压成一行、报文改用 12pt、HEX/ASCII 列宽自适应,长下拉选项不再撑宽窗口
-- v0.9.14：macOS 后台连接期间若已被动断开,连接完成后立即收尾,界面不再停在“已连接”;布局自检覆盖工具箱与 HTTP 工作区(浅色/深色);新增进制转换与 `$'...'` 模糊测试。VirtualCOM 0.2.2(待 Windows 发布):`ports` 编号排序修正,点控制台窗口关闭/注销/关机时也会拆除端口
-- v0.9.13：工具箱新增 HEX↔文本、HEX↔十进制(大/小端、有符号)、十进制→HEX,Unix 时间戳自动识别毫秒,结果可复制;cURL 导入支持 Chrome「复制为 cURL」的 `$'...'` 写法;macOS 定时发送改在后台执行;Windows:AI Key 改存凭据管理器(旧明文自动迁移)、开启时间过滤时报文表不再每秒重置(选中行与滚动位置保留)、工具箱结果可复制
-- v0.9.12：TCP 客户端首次连接与虚拟串口拨号加 10 秒超时(目标不通时此前要等系统默认约 75 秒);macOS 连接与“发送一次”改在后台执行,连不通或 HTTP 响应慢时窗口不再卡住,连接中按钮显示“连接中…”并防重复点击
-- v0.9.11：cURL 导入修复以 `-` 开头的选项值(如 `-d '-sort=asc'`、密码 `-L...`)被误当成组合短选项;导出以 `-` 开头的 URL 前补 `--`;Windows 停止/断开定时发送时不再偶发弹出"定时发送已停止"或误停新开的定时器;macOS 旧循环发送的收尾不再复位新循环的按钮;新增解析类模糊测试
-- v0.9.10：断开日志里的收发字节/帧数只统计本次连接(此前带上了本次运行之前各次连接的累计;状态栏仍按设计显示本次运行累计);报文分析的字节序候选固定按 ABCD/BADC/CDAB/DCBA 输出;macOS AI 分析截断长报告时不再切坏中文字符
-- v0.9.9：对端关闭/监听出错后不再多记一条“用户在本程序上断开”;虚拟串口数据跨数据库文件轮换(跨零点或满 100 MB)后仍归属自己的会话,不再丢失或串到别的连接;拨号中途移除虚拟串口不再遗留连接。VirtualCOM 0.2.1(待 Windows 发布):“清空 Buffer”连同已取出待送达的数据一并丢弃
-- v0.9.8：启动自动检查更新只在新版本带本平台安装包时弹窗(Windows/macOS 不再被对方平台的发布打扰);HTTP 工作区用完即关临时连接池,响应正文上限 64 MiB 超出截断并提示;cURL 导入修复 `-d'a=b'`/`-H'X: a=b'` 连写解析,支持 `-sSL` 组合选项、`--json`,忽略 `--compressed`/`-s`/`-S`/`-i`/`-v`
-- macOS v0.9.7：修复 HTTP 工作区每次请求泄漏响应正文;监听报文切换 HEX/ASCII、改过滤时按字符上限只渲染最新部分(大包不再卡顿);下载更新中不能重复触发,进度回报节流,主动取消不再弹"失败";Info.plist 版本号与程序同步
-- macOS v0.9.6：新增 **HTTP 工作区**(操作 → HTTP 工作区,⌘⇧U):方法/URL、总超时与连接超时、跟随重定向、跳过 TLS 证书校验,请求头与请求体编辑,cURL 导入与生成,响应正文/响应头分页与 JSON 格式化;**连接日志**缓冲限长、每行时间戳、错误/连接分级高亮,支持清空/复制/导出;**监听报文**批量刷新+限长(长跑不吃内存)、关键字过滤、HEX/ASCII 切换
-- macOS v0.9.5：接入**在线更新**(帮助 → 检查更新):按芯片自动匹配 DMG、下载校验 SHA256 后自动打开,启动时自动检查默认开启可关闭;更新包后缀按平台拆分
-- macOS v0.7.5：蓝白连接卡片、独立状态/累计收发/真实 TCP 对端信息，默认窗口 1280×820；连接失败不再停留在“正在连接”，UDP / HTTP 显示“就绪”而不是已连接
-- 数据库分析支持数据目录内多个 SQLite 文件，⌘ / Shift 多选或全选；最新条数最高 1,000,000（所选文件合计）。完整筛选统计、8 MiB 选中负载上限、20 条详细解析；省略范围明确显示，不上传 AI
-- macOS v0.7.3：修复“数据库分析”弹窗标题、说明与表单重叠，增加真实弹窗的跨容器布局回归检查
-- macOS v0.7.2：分析中心默认隐藏，连接参数采用紧凑表单，筛选和选择只针对可见报文；[布局与验证说明](docs/archive/CommBox_v0.7.2_布局修复.md)
-- macOS 顶部“数据库分析”：按文件、时间、RX/TX 查询本地 SQLite，离线只读分析完整原始负载，报告明确列出条数/数据量限制；不自动调用 AI
-- 收发区**每条数据带毫秒时间戳**,并区分 `发送` / `接收`
-- **HEX 发送默认开启**,可切换;HEX 显示可切换
-- 连接被远端断开时**按钮/状态自动同步**回未连接
-- 断开时在日志里写明**是哪一端断的**:本端主动断开、服务端断开、客户端断开还是链路中断,并附断开方式(收到 FIN / 连接被重置 / 读取超时)、对端地址、本次连接时长、收发字节与帧数和底层错误;同一条报文也写入 SQLite
-- **历史连接**下拉:从数据库读最近 5 个配置,选中自动回填
-- 连接状态显示模式、地址、串口参数、运行时间；收发/重连/错误为本次应用运行累计
-- 实时监控独立窗口、日志导出、定时发送(最小间隔 10 ms)
+- **收发**：每条数据带毫秒时间戳并区分发送 / 接收；HEX 发送默认开启，HEX / 文本显示可切换；定时发送（最小间隔 10 ms）与循环发送；**历史连接**下拉从数据库读最近 5 个配置，选中自动回填。
+- **连接状态**：显示模式、地址、串口参数、运行时间，收发 / 重连 / 错误为本次应用运行累计；被远端断开时按钮与状态自动同步。TCP 客户端首次连接与虚拟串口拨号 10 秒超时。
+- **断开日志**写明是哪一端断的：本端主动断开、服务端断开、客户端断开还是链路中断，附断开方式（收到 FIN / 连接被重置 / 读取超时）、对端地址、本次连接时长、本次连接的收发字节与帧数和底层错误；同一条记录写入 SQLite。
+- **实时监控**独立窗口：批量刷新并限长、关键字过滤、HEX / ASCII 切换；连接日志每行带时间戳并按错误 / 连接分级高亮，可清空、复制、导出。
+- **HTTP 工作区**（macOS ⌘⇧U）：方法 / URL、总超时与连接超时、跟随重定向、跳过 TLS 证书校验，请求头与请求体编辑，cURL 导入与生成（支持 Chrome「复制为 cURL」的 `$'...'` 写法），响应正文 / 响应头分页与 JSON 格式化，响应正文上限 64 MiB。
+- **工具箱**：CRC16 Modbus / CCITT-FALSE、CRC32、XOR、SUM、Base64、HEX↔文本、HEX↔十进制（大 / 小端、有符号）、十进制→HEX、Unix 时间戳（自动识别毫秒），结果可复制。
+- **本地分析**：Modbus RTU / TCP、IPv4 头、数值候选（UInt16 大小端，UInt32 / Float32 按 ABCD / BADC / CDAB / DCBA）。**数据库分析**可多选数据目录内的 SQLite 文件（⌘ / Shift 多选或全选），按时间、RX / TX 只读查询，最新条数最高 1,000,000（所选文件合计），8 MiB 负载上限、20 条详细解析，省略范围明确显示，不上传 AI。
+- **AI 深度分析**（默认关闭，需配置服务与 Key）：
+  - macOS：在分析中心内流式对话。点击即发送当前报文、选中报文或数据库报告，回答在结果区逐段显示；可停止并保留部分回答，在下方输入框继续提问，对话自动存入本地 Markdown。
+  - Windows：右侧 AI 面板与历史数据分析窗口共用流式对话，可停止、追问、复制与导出；疑似 Modbus 帧附带本地功能码、字节数与 CRC 结论；长报告截取前 32 KiB；服务错误说明 Key、余额、限流或网络原因。AI Key 存 Windows 凭据管理器。
+  - Windows 对话可添加文本日志、CSV、JSON、DOCX、可选中文字的 PDF 和 PNG / JPEG / GIF / WebP 图片；附件随提问发送，图片需使用支持视觉的模型（DeepSeek 可选 `deepseek-flash`）。每次最多 6 个附件，文本提取上限 64 KiB / 个，PDF / DOCX 文件上限 5 MiB / 个，PDF 单页解压内容上限 4 MiB，图片上限 2 MiB / 个且不超过 3200 万像素；扫描版 PDF 暂不支持。PDF 在独立进程中解析，限时 20 秒；对话累计文字上限 512 KiB、图片编码上限 24 MiB。
+- **在线更新**（帮助 → 检查更新）：启动时自动检查（可关闭），只在新版本带本平台安装包时提示；macOS 按芯片匹配 DMG，下载后校验 SHA256 再打开。
 
 ## 工作模式
 
@@ -106,7 +88,7 @@ GET /api/v1/health
 - 在"串口"模式点刷新,列表会包含这些虚拟串口设备,可直接打开
 - 用法:`screen /tmp/CommBox-vserial-<PID>-1 115200`,或用另一个串口工具/本工具第二实例打开
 
-macOS/Linux 使用 PTY，无需额外驱动。Windows 的 TCP→虚拟串口创建入口仍未开放；CommBox v0.9.0 已加入下面的 VirtualCOM 免驱动连接适配。
+macOS/Linux 使用 PTY，无需额外驱动。Windows 不提供 TCP→虚拟串口创建入口，可使用下面的 VirtualCOM 免驱动端口。
 
 ### Windows：连接 VirtualCOM 免驱动端口
 
@@ -114,7 +96,7 @@ macOS/Linux 使用 PTY，无需额外驱动。Windows 的 TCP→虚拟串口创�
 
 连接后界面显示「免驱动」和「串口参数不生效」。VirtualCOM 传输原始字节，不实现波特率、数据位、校验、停止位及控制信号。此适配只解决 CommBox 与 VirtualCOM 的通信，未适配的第三方串口软件仍无法直接使用它。关闭 VirtualCOM 会断开通信；重新创建串口对后需在 CommBox 重新连接。
 
-物理串口及驱动提供的 COM 口仍使用原串口库。实现、验证和试用步骤见 [VirtualCOM 适配记录](docs/virtualcom-commbox-compat.md)。
+物理串口及驱动提供的 COM 口仍使用原串口库。使用步骤与实现说明见 [VirtualCOM 适配说明](docs/virtualcom-commbox-compat.md)。
 
 ## 数据存储
 
@@ -155,12 +137,12 @@ Windows 发布包（两个 CommBox 程序、两个 VirtualCOM 程序、说明文
 powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1
 ```
 
-脚本要求工作区干净且 HEAD 落在 `v<版本>` 标签上，逐个校验 PE 头、构建来源 commit、版本资源和压缩包内容。改版本号时同时改各目录的 `versioninfo.json` 并重新生成 `.syso`（`goversioninfo -64 -o rsrc_windows_amd64.syso versioninfo.json`），漏改会有测试报错。
+脚本要求工作区干净且 HEAD 落在 `v<版本>` 标签上，逐个校验 PE 头、构建来源 commit、版本资源和压缩包内容。改版本号时同时改各目录的 `versioninfo.json` 并重新生成 `.syso`（`go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.5.0 -64 -o rsrc_windows_amd64.syso versioninfo.json`，新版 goversioninfo 生成的文件大一倍），漏改会有测试报错。
 
 需要减小 Windows 下载包时，可在生成完整 ZIP 后执行：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/compress-windows.ps1 -SourceArchive build/CommBox-0.9.4-Windows-x64.zip
+powershell -ExecutionPolicy Bypass -File scripts/compress-windows.ps1 -SourceArchive build/CommBox-<版本>-Windows-x64.zip
 ```
 
 脚本使用支持 7zip / LZMA2 的 `tar.exe`，在原 ZIP 旁生成完整 `.7z`，以及仅含 `CommBox.exe`、使用说明和校验清单的 `-GUI.zip` / `-GUI.7z`。只使用主界面时可选 GUI 包；需要命令行或创建 VirtualCOM 端口时选完整包。脚本核对源包清单，并逐文件验证新包解压后的 SHA256。此操作减小下载体积，解压后的 EXE 大小不变；沿用现有编译参数，不剥离符号或给 EXE 加壳。
@@ -168,7 +150,7 @@ powershell -ExecutionPolicy Bypass -File scripts/compress-windows.ps1 -SourceArc
 ```bash
 # 命令行(多平台,纯 Go);发布 Linux amd64
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
-  -ldflags='-s -w -X main.version=0.7.8' -o commbox-linux-amd64 .
+  -ldflags='-s -w -X main.version=<版本>' -o commbox-linux-amd64 .
 
 # Windows 桌面版(可交叉编译)
 # 不要加 -s:剥符号的 GUI 程序在装了 360 的机器上会被当成加壳投放器隔离,
@@ -188,7 +170,7 @@ for ARCH in arm64 amd64; do
   # 直接分发软件：打成 dmg(双击挂载即用,拖入 Applications),无需解压
   ln -sf /Applications "build/$ARCH/Applications"
   NAME=$([ "$ARCH" = arm64 ] && echo AppleSilicon || echo Intel)
-  hdiutil create -volname CommBox -srcfolder "build/$ARCH" -ov -format UDZO "CommBox-macOS-$NAME.dmg"
+  hdiutil create -volname CommBox -srcfolder "build/$ARCH" -ov -format UDZO "CommBox-<版本>-macOS-$NAME.dmg"
 done
 ```
 

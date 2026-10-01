@@ -10,7 +10,7 @@ type SecretStore interface {
 	Delete(name string) error
 }
 
-// secretSettings 是改存系统凭据、不再明文落 SQLite 的设置项。
+// secretSettings 是存系统凭据、不以明文落 SQLite 的设置项。
 var secretSettings = map[string]bool{"deepseek.api_key": true}
 
 var (

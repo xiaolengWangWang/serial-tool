@@ -194,7 +194,7 @@ func TestMultipleVirtualSerials(t *testing.T) {
 }
 
 // TestVirtualSerialDropCounted 验证:断线/重连期间写入虚拟串口的数据被丢弃时,
-// 必须计数并产生告警日志,禁止静默丢失(本版本不缓存、不补发)。
+// 必须计数并产生告警日志,禁止静默丢失(不缓存、不补发)。
 func TestVirtualSerialDropCounted(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

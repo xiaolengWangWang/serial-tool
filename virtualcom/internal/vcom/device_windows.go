@@ -83,7 +83,7 @@ func (d *device) read(p []byte) (int, error)  { return d.io.read(p) }
 func (d *device) write(p []byte) (int, error) { return d.io.write(p) }
 
 // dropClient 在串口软件关闭端口后复位管道,使端口可以被再次打开
-// (规格 F03 要求支持重复打开关闭)。
+// (要求支持重复打开关闭)。
 func (d *device) dropClient() {
 	disconnectNamedPipe(d.io.h)
 	d.mu.Lock()
@@ -130,7 +130,7 @@ func (d *device) destroy() {
 // 正在使用误报成空闲,导致端口刚被打开就允许删除。
 //
 // 查询本身失败时(既不是「已连接」也不是明确的「未连接」),退回到记账值并在
-// 备注里写明原因——宁可报不确定,也不能把使用中说成空闲(规格 2.2)。
+// 备注里写明原因——宁可报不确定,也不能把使用中说成空闲。
 func (d *device) occupancy() (connected bool, pid uint32, proc, procErr string) {
 	livePID, err := clientPID(d.io.h)
 

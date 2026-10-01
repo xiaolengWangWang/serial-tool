@@ -84,7 +84,7 @@ func (e *Engine) AddVirtualSerial(addr string) (VSerialInfo, error) {
 }
 
 // vPtmxReader 常驻:把虚拟串口写入的数据发往当前 TCP 连接。
-// 断线/重连期间无连接时数据会被丢弃:本版本不缓存、不补发,但必须计数并告警,禁止静默丢失。
+// 断线/重连期间无连接时数据会被丢弃:不缓存、不补发,但必须计数并告警,禁止静默丢失。
 func (e *Engine) vPtmxReader(b *vBridge) {
 	buf := make([]byte, 4096)
 	dropping := false

@@ -78,8 +78,8 @@ func cmdPorts() error {
 	for n := range used {
 		names = append(names, n)
 	}
-	// 先比长度再比字符串,COM9 排在 COM10 前。原来的 "长度小 || 字符串小" 不是
-	// 合法的排序关系(COM9 与 COM10 互相"小于"),输出顺序会乱。
+	// 先比长度再比字符串,COM9 排在 COM10 前。不能写成 "长度小 || 字符串小":
+	// 那不是合法的排序关系(COM9 与 COM10 互相"小于"),输出顺序会乱。
 	sort.Slice(names, func(i, j int) bool {
 		if len(names[i]) != len(names[j]) {
 			return len(names[i]) < len(names[j])
@@ -243,7 +243,7 @@ func cmdSelfTest() error {
 		fmt.Printf("  [通过] %s  用时 %v\n", s.name, time.Since(start).Round(time.Millisecond))
 	}
 
-	// 重复打开关闭:关掉 A 再重开,应当还能通(规格 F03)。
+	// 重复打开关闭:关掉 A 再重开,应当还能通。
 	a.Close()
 	reopened, err := reopen(comA)
 	if err != nil {

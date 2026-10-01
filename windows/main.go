@@ -952,7 +952,7 @@ const stretchFill = 100
 // 两者必须一致,否则筛选会把每一条报文都排除掉。
 const dirAll = "全部方向"
 
-// 状态色降饱和,蓝色只保留一种作主色,避免此前深蓝/灰蓝/亮蓝三种并存。
+// 状态色降饱和,蓝色只保留一种作主色。
 var (
 	colorCanvas = walk.RGB(241, 245, 249)
 	colorPanel  = walk.RGB(255, 255, 255)
@@ -1059,9 +1059,9 @@ func (a *application) updateStatus(st wincore.Stats) {
 	}
 }
 
-// expireTimeWindow 让「最近 N 分钟」过滤随时间滑动。此前每秒整表 refilter,
-// 表格每秒重置一次,选中的行和滚动位置都保不住,开着时间过滤几乎没法选行复制。
-// 现在只在确有报文滑出窗口时才更新,并按报文 ID 恢复选中。
+// expireTimeWindow 让「最近 N 分钟」过滤随时间滑动。不能每秒整表 refilter:
+// 表格会每秒重置,选中的行和滚动位置都保不住。只在确有报文滑出窗口时才更新,
+// 并按报文 ID 恢复选中。
 func (a *application) expireTimeWindow() {
 	m := a.packetModel
 	if m == nil || a.packetTable == nil {

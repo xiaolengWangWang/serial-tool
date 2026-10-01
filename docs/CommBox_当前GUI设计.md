@@ -1,28 +1,28 @@
-# CommBox 功能与 GUI 现状（v0.8.6）
+# CommBox Windows 版功能与 GUI 现状
 
 面向下一轮优化的速查表：每块功能落在哪个文件、界面骨架长什么样、布局为什么这么写、改动时必须守住的约束。仅覆盖 Windows 桌面版（`windows/` + `internal/wincore/`）。
 
 ## 1. 代码地图
 
-| 路径 | 职责 | 行数 |
-| --- | --- | --- |
-| `windows/workbench_ui.go` | 主窗口骨架：`menus` / `connectionPanel` / `monitorPanel` / `packetTab` / `sendArea`，以及 `formLabel`、`inlineLabel`、`fixedCombo`、`toolButton` 四个控件构造器 | 495 |
-| `windows/main.go` | 应用状态结构体、模式映射、连接与发送、定时与循环、日志、托盘、工具箱窗口、实时监控窗口、字体与配色常量 | 1309 |
-| `windows/assistant_panel.go` | 右侧 AI 面板（范围、主题、开始分析）与 AI 设置对话框 | 以源码为准 |
-| `windows/ai_chat.go` | AI 面板与历史数据分析窗口共用的对话：流式显示、Markdown 转可读文本、发送 / 停止、复制与导出 | 以源码为准 |
-| `windows/analysis_ui.go` `analysis_helpers.go` | 历史数据分析窗口与本地分析、流式 AI 请求与错误说明 | 以源码为准 |
-| `windows/connections_ui.go` | 发送目标解析、客户端列表刷新、连接管理对话框 | 220 |
-| `windows/http_ui.go` `http_workspace_helpers.go` | HTTP 工作台与 cURL 导入导出 | 284 |
-| `windows/update_ui.go` | 检查更新：菜单入口、启动自检、更新对话框 | 252 |
-| `windows/icons.go` | 主图标从 EXE 资源加载，其余图标从 `icons/*.ico` 缓存加载 | 以源码为准 |
-| `internal/wincore/engine.go` | 连接、收发、串口服务器桥接、定向发送、设置读写 | 1096 |
-| `internal/wincore/storage.go` `storage_packet.go` | SQLite 会话与报文落盘，按日期与 100 MiB 分文件 | 422 |
-| `internal/wincore/update.go` | 版本检查、安装包挑选、SHA256 解析与校验、下载 | 270 |
-| `internal/wincore/analysis.go` `database_analysis.go` | 本地协议分析与历史库分析 | 600+ |
-| `internal/wincore/toolbox.go` | CRC / Base64 / Unix 时间戳换算 | 141 |
-| `internal/wincore/http_request.go` `curl.go` `http_redact.go` | HTTP 请求执行、cURL 解析与脱敏 | 600+ |
-| `internal/wincore/vserial*.go` | 虚拟串口：`vserial_unix.go` 为 PTY 实现；`vserial_windows.go` 是返回"开发中"的桩 | 288 |
-| `internal/wincore/modes.go` | `Version` 常量与 7 个模式的参数需求（`SpecOf`） | 96 |
+| 路径 | 职责 |
+| --- | --- |
+| `windows/workbench_ui.go` | 主窗口骨架：`menus` / `connectionPanel` / `monitorPanel` / `packetTab` / `sendArea`，以及 `formLabel`、`inlineLabel`、`fixedCombo`、`toolButton` 四个控件构造器 |
+| `windows/main.go` | 应用状态结构体、模式映射、连接与发送、定时与循环、日志、托盘、工具箱窗口、实时监控窗口、字体与配色常量 |
+| `windows/assistant_panel.go` | 右侧 AI 面板（范围、主题、开始分析）与 AI 设置对话框 |
+| `windows/ai_chat.go` | AI 面板与历史数据分析窗口共用的对话：流式显示、Markdown 转可读文本、发送 / 停止、复制与导出 |
+| `windows/analysis_ui.go` `analysis_helpers.go` | 历史数据分析窗口与本地分析、流式 AI 请求与错误说明 |
+| `windows/connections_ui.go` | 发送目标解析、客户端列表刷新、连接管理对话框 |
+| `windows/http_ui.go` `http_workspace_helpers.go` | HTTP 工作台与 cURL 导入导出 |
+| `windows/update_ui.go` | 检查更新：菜单入口、启动自检、更新对话框 |
+| `windows/icons.go` | 主图标从 EXE 资源加载，其余图标从 `icons/*.ico` 缓存加载 |
+| `internal/wincore/engine.go` | 连接、收发、串口服务器桥接、定向发送、设置读写 |
+| `internal/wincore/storage.go` `storage_packet.go` | SQLite 会话与报文落盘，按日期与 100 MiB 分文件 |
+| `internal/wincore/update.go` | 版本检查、安装包挑选、SHA256 解析与校验、下载 |
+| `internal/wincore/analysis.go` `database_analysis.go` | 本地协议分析与历史库分析 |
+| `internal/wincore/toolbox.go` | CRC / Base64 / Unix 时间戳换算 |
+| `internal/wincore/http_request.go` `curl.go` `http_redact.go` | HTTP 请求执行、cURL 解析与脱敏 |
+| `internal/wincore/vserial*.go` | 虚拟串口：`vserial_unix.go` 为 PTY 实现；`vserial_windows.go` 是返回"开发中"的桩 |
+| `internal/wincore/modes.go` | `Version` 常量与 7 个模式的参数需求（`SpecOf`） |
 
 改界面基本只动 `workbench_ui.go`；改通信逻辑只动 `internal/wincore/`。两端（Windows / macOS）共用 `wincore`，改它要同时想清楚 macOS 侧。
 
@@ -115,23 +115,16 @@
 ## 5. 设置与数据
 
 | 键 | 含义 | 默认 |
-| --- | --- | --- |
-| `update.auto_check` | 启动时检查更新，`0` 为关 | 空=开 |
-| `deepseek.base_url` `deepseek.api_key` `deepseek.model` | AI 服务配置 | 空 / 空 / deepseek-chat |
-| `ai.max_packets` | 单次分析最多提交的报文条数 | 500 |
+| --- | --- |
+| `update.auto_check` | 启动时检查更新，`0` 为关 |
+| `deepseek.base_url` `deepseek.api_key` `deepseek.model` | AI 服务配置 |
+| `ai.max_packets` | 单次分析最多提交的报文条数 |
 
 数据目录：`%AppData%\CommBox\data`，SQLite 按日期与 100 MiB 分文件。收藏、发送历史、最近会话都存在库里。
 
 ## 6. 构建与发布
 
-```bash
-go test ./...                                                   # 全量测试
-go build -ldflags="-H windowsgui -s -w" -o build/CommBox.exe ./windows
-```
-
-`windows/rsrc_windows_amd64.syso` 提供清单与图标（含 PerMonitorV2 DPI 感知），Go 构建自动链接，不能删。发布包为 `CommBox.exe` + `README-Windows.txt` 打成 `CommBox-<版本>-Windows-x64.zip`，另单独挂一份裸 exe。
-
-发布步骤：改 `internal/wincore/modes.go` 的 `Version` → 构建 → 打包并算 SHA256 → 写 `docs/releases/release-v<版本>.md` → 提交并打 tag → push → 用 GitHub API 建 Release 并上传两个资产。
+构建、打包与发布步骤见 README「构建」。`windows/rsrc_windows_amd64.syso` 提供清单与图标（含 PerMonitorV2 DPI 感知），Go 构建自动链接，不能删。发布说明写在 `docs/releases/release-v<版本>.md`，同时作为 GitHub Release 正文。
 
 **发布说明有一条硬约束**：正文必须保留 SHA256 代码块，格式为 `<64 位小写十六进制><两个空格><文件名>`。更新器就是从发布说明里解析这一行来校验下载的安装包（`sha256FromNotes`），删掉它下载就没有校验。说明本身保持精简：标题、本版变化、校验、注意四节即可——更新对话框直接显示这段文字，620×520 的窗口读不完长篇。
 
@@ -145,17 +138,15 @@ go build -ldflags="-H windowsgui -s -w" -o build/CommBox.exe ./windows
 COMMBOX_LIVE_UPDATE=1 go test -count=1 -v -run TestLiveUpdateDownload ./internal/wincore/
 ```
 
-新增 `windows/workbench_ui_test.go`，六项真实 Win32 控件用例覆盖 HTTP URL、隐藏串口字段、发送格式恢复、统计刷新不关闭下拉框、图标缓存不可用时工具窗口仍可打开，以及托盘图标与最小化恢复。普通测试默认跳过这些需要桌面环境的用例；在交互式 Windows 会话中执行：
+`windows/workbench_ui_test.go` 的六项真实 Win32 控件用例覆盖 HTTP URL、隐藏串口字段、发送格式恢复、统计刷新不关闭下拉框、图标缓存不可用时工具窗口仍可打开，以及托盘图标与最小化恢复。普通测试默认跳过这些需要桌面环境的用例；在交互式 Windows 会话中执行：
 
 ```powershell
 $env:COMMBOX_GUI_TEST = '1'
 go test ./... -count=1
 ```
 
-点击与截图记录见 [GUI 点击测试记录](archive/CommBox_GUI点击测试记录.md)。实测覆盖默认、最小、最大化尺寸、模式切换、AI 展开、TCP/HTTP 收发、筛选、定时/循环及工具窗口。串口硬件、更新下载和远程 AI 服务不在本轮实测范围内。
-
 ## 8. 已知限制与后续候选
 
-限制：Windows 虚拟串口未开放（com0com 的驱动安装、串口命名、命令超时三项未在真机验证通过）；数据表表头中文在等宽字体下字距偏开（表头与单元格无法分别设字体，而 HEX 列需要等宽）；本轮布局在 100% 缩放下复测，其他 DPI 仍需核对；未做代码签名，SmartScreen 会提示未知发布者；macOS / Linux 近几版未构建验证。
+限制：Windows 虚拟串口未开放（com0com 的驱动安装、串口命名、命令超时三项未在真机验证通过）；数据表表头中文在等宽字体下字距偏开（表头与单元格无法分别设字体，而 HEX 列需要等宽）；布局主要在 100% 缩放下复测，其他 DPI 仍需核对；未做代码签名，SmartScreen 会提示未知发布者。
 
 值得做的下一步：更新对话框的下载按钮尚未做点击级实测（下载链路本身已用联网用例跑通）；配置导入导出（把连接参数与收藏搬到另一台机器）；数据表列宽记忆；深色模式；发送区快捷键（如 Ctrl+Enter 发送）；虚拟串口在真机上补完后重新开放。

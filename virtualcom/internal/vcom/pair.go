@@ -14,7 +14,7 @@ import (
 const relayChunk = 64 * 1024
 
 // retryDelay 是「有数据要送,但本端还没有程序打开」时的重试间隔。
-// 这种情况下数据留在缓存里等待,不丢弃(规格 2.7)。
+// 这种情况下数据留在缓存里等待,不丢弃。
 const retryDelay = 20 * time.Millisecond
 
 // side 是串口对的一端。
@@ -61,7 +61,7 @@ type Pair struct {
 
 // newPair 建立一对虚拟串口并启动双向中继。
 // 任一端建立失败都会把已建好的那端拆干净,不会留下「只创建了一端」的半成品
-// (规格第 4 节:不能把只创建了一端显示为成功)。
+// (不能把只创建了一端显示为成功)。
 func newPair(id, comA, comB string) (*Pair, error) {
 	devA, err := newDevice(comA)
 	if err != nil {
@@ -101,7 +101,7 @@ func (p *Pair) stopping() bool {
 }
 
 // readLoop 等待串口软件打开 from 端,把它写入的数据搬进对端的收件缓存。
-// 软件关闭端口后复位,继续等下一次打开(规格 F03:支持重复打开关闭)。
+// 软件关闭端口后复位,继续等下一次打开(支持重复打开关闭)。
 func (p *Pair) readLoop(from, peer *side) {
 	defer p.wg.Done()
 	buf := make([]byte, relayChunk)
@@ -227,7 +227,7 @@ func (p *Pair) Close() {
 	p.b.dev.destroy()
 }
 
-// PurgeBuffers 清空两个方向的待传数据,返回丢弃的总字节数(规格 2.7「清空 Buffer」)。
+// PurgeBuffers 清空两个方向的待传数据,返回丢弃的总字节数。
 // 已取出等待重试的 pending 由 writeLoop 随后丢弃,计入统计但不在返回值里。
 func (p *Pair) PurgeBuffers() int {
 	p.a.purgeGen.Add(1)
@@ -235,7 +235,7 @@ func (p *Pair) PurgeBuffers() int {
 	return p.a.inbox.Purge() + p.b.inbox.Purge()
 }
 
-// ResetStats 清空统计,但不影响缓存与通信(规格 2.8)。
+// ResetStats 清空统计,但不影响缓存与通信。
 func (p *Pair) ResetStats() {
 	for _, s := range []*side{p.a, p.b} {
 		s.tx.Store(0)

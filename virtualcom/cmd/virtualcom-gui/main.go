@@ -1,12 +1,10 @@
 //go:build windows
 
-// VirtualCOM 图形界面。布局依据功能规格第 3 节。
+// VirtualCOM 图形界面。
 //
-// 与规格的两处差异,都是因为本版没有驱动:
-//   - 顶部的「驱动状态」改成「实现方式:用户态(无驱动)」。本方案不装驱动,
-//     显示驱动状态是假信息;点击后展示实测的兼容性边界。
-//   - 「更多 ⋯」展开成一排文字按钮。规格要求删除用文字标识而非图标,
-//     直接摊开比藏进菜单更清楚。
+//   - 顶部显示「实现方式:用户态(无驱动)」而不是驱动状态:本方案不装驱动,
+//     点击后展示实测的兼容性边界。
+//   - 端口操作是一排文字按钮(删除用文字标识而非图标),不藏进「更多」菜单。
 package main
 
 import (
@@ -229,7 +227,7 @@ func (a *app) rebuildCards(snap vcom.Snapshot) {
 	}
 }
 
-// buildEmptyState 没有串口对时的空状态(规格第 3 节)。
+// buildEmptyState 没有串口对时的空状态。
 func (a *app) buildEmptyState() {
 	root, err := walk.NewComposite(a.host)
 	if err != nil {
@@ -268,7 +266,7 @@ type pairCard struct {
 }
 
 func (a *app) buildCard(p vcom.PairInfo) *pairCard {
-	// 用 GroupBox 而不是 Composite:它自带边框,正好是规格要的「一张卡片对应一对串口」。
+	// 用 GroupBox 而不是 Composite:它自带边框,正好是「一张卡片对应一对串口」。
 	root, err := walk.NewGroupBox(a.host)
 	if err != nil {
 		return nil
@@ -709,7 +707,7 @@ func (a *app) showCompatibility() {
 	a.textDialog("兼容性边界", text, true)
 }
 
-// textDialog 弹一个只读文本窗口,可一键复制(规格 2.9)。
+// textDialog 弹一个只读文本窗口,可一键复制。
 func (a *app) textDialog(title, text string, copyable bool) {
 	var dlg *walk.Dialog
 	var closePB, copyPB *walk.PushButton

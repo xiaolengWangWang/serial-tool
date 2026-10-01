@@ -1,4 +1,4 @@
-# CommBox 使用手册（v0.8.0）
+# CommBox 使用手册
 
 CommBox 是一款串口 / 网络调试工具：简单、稳定、顺手。支持串口、TCP、UDP、串口服务器、HTTP 客户端与虚拟串口，内置结构化报文表格、筛选、本地分析、数据库存档分析、AI 深度分析与工具箱。
 
@@ -11,8 +11,8 @@ CommBox 是一款串口 / 网络调试工具：简单、稳定、顺手。支持
 
 ### macOS
 1. 到 Releases 下载对应芯片的安装包：
-   - Apple Silicon（M 系列）：`CommBox-macOS-AppleSilicon-vX.Y.Z.dmg`
-   - Intel：`CommBox-macOS-Intel-vX.Y.Z.dmg`
+   - Apple Silicon（M 系列）：`CommBox-X.Y.Z-macOS-AppleSilicon.dmg`
+   - Intel：`CommBox-X.Y.Z-macOS-Intel.dmg`
 2. 双击 `.dmg` 挂载，把 `CommBox.app` 拖入 `Applications`。
 3. 安装包为 ad-hoc 签名，首次打开若被拦截：在 `CommBox.app` 上**右键 → 打开**，或到「系统设置 → 隐私与安全性」点「仍要打开」。
 
@@ -62,7 +62,7 @@ CommBox 是一款串口 / 网络调试工具：简单、稳定、顺手。支持
 ### 筛选行
 搜索 HEX/ASCII、按方向（全部/RX/TX）、类型（全部/ASCII/HEX）、长度（全部 / 1–8 B / 9–64 B / 65 B 以上）、时间（全部 / 近 1 / 5 / 30 分钟）过滤；「重置」清空全部条件。
 
-### 暂停显示（v0.8.0）
+### 暂停显示
 筛选行的**「暂停显示」**只**冻结表格画面**，接收与入库**继续运行**；暂停期间按钮显示「继续显示(N)」标明缓冲了多少条，点它恢复并一次性补齐。适合数据刷屏时看某段报文。
 
 ### 选择与操作
@@ -88,7 +88,7 @@ CommBox 是一款串口 / 网络调试工具：简单、稳定、顺手。支持
 
 ---
 
-## 6. 连接管理（v0.8.0，⌘⇧C）
+## 6. 连接管理（⌘⇧C）
 
 「操作 → 连接管理」打开，专门管理多客户端 / 多对端场景。窗口每秒自动刷新：
 
@@ -156,7 +156,7 @@ CRC16 Modbus、CRC16 CCITT-FALSE、CRC32、XOR、SUM、Base64 编/解码、Unix 
 | ⌘T | 定时发送开关 |
 | ⌘R | 刷新串口 |
 | ⌘⇧V | 虚拟串口映射 |
-| ⌘⇧C | 连接管理（v0.8.0） |
+| ⌘⇧C | 连接管理 |
 | ⌘⇧B | 工具箱 |
 | ⌘⇧I | AI 增强分析设置 |
 | ⌘⇧K | 继续追问 AI |
@@ -187,4 +187,4 @@ CRC16 Modbus、CRC16 CCITT-FALSE、CRC32、XOR、SUM、Base64 编/解码、Unix 
 
 ---
 
-> 本手册对应 CommBox v0.8.0，描述以当前源码实现为准；不同平台/驱动/真实设备组合未必全部实测。
+> 描述以当前源码实现为准；不同平台/驱动/真实设备组合未必全部实测。

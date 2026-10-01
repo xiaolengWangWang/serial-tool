@@ -104,7 +104,7 @@ try {
     if ($LASTEXITCODE -ne 0 -or !$virtualVersion.StartsWith('VirtualCOM ' + $vcomVersion + ' ')) { throw 'Wrong VirtualCOM version' }
 
     # CLI 不检查更新,也没有 HTTPS 功能,不该带 TLS 握手代码。wincore 若有包级变量在
-    # 初始化时碰 http.Transport,CLI 会平白大 1.7 MB(v0.9.3 发布前出现过一次)。
+    # 初始化时碰 http.Transport,CLI 会平白大 1.7 MB。
     $cliSymbols = go tool nm (Join-Path $outputDir 'CommBox-CLI.exe')
     if ($LASTEXITCODE -ne 0) { throw 'go tool nm failed on CommBox-CLI.exe' }
     if ($cliSymbols -match 'crypto/tls\.\(\*Conn\)\.handshakeContext') {

@@ -79,7 +79,7 @@ func TestPairFullDuplexNoDeadlock(t *testing.T) {
 	}
 }
 
-// 大数据连续传输:任意字节值,校验长度与内容(规格 F04)。
+// 大数据连续传输:任意字节值,校验长度与内容。
 func TestPairLargeTransferIntegrity(t *testing.T) {
 	_, a, b := openPair(t)
 	if err := exchange(a, b, 1<<20, 7); err != nil {
@@ -131,7 +131,7 @@ func TestPairReportsOccupancy(t *testing.T) {
 	}
 }
 
-// 正在使用的串口对不允许删除(规格第 4 节)。
+// 正在使用的串口对不允许删除。
 func TestPairRefusesDeleteWhileInUse(t *testing.T) {
 	m, _, _ := openPair(t)
 
@@ -166,7 +166,7 @@ func exchange(src, dst *PortClient, size int, seed int64) error {
 
 var errMismatch = errors.New("收到的数据与发送的不一致")
 
-// 多组串口同时传输不同内容,数据只能进各自的配对端口(规格 F05)。
+// 多组串口同时传输不同内容,数据只能进各自的配对端口。
 func TestMultiplePairsIsolated(t *testing.T) {
 	m := NewManager()
 	t.Cleanup(m.CloseAll)
