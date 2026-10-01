@@ -4,16 +4,47 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	virtualcom "github.com/xiaolengWangWang/virtualcom"
+	"golang.org/x/sys/windows"
 	"serial-tool/core"
 )
 
 func TestIntegratedVirtualCOMPersistsUntilApplicationExit(t *testing.T) {
 	a := newWorkbenchForTest(t)
+	// A DOS alias survives a crashed provider, but its pipe does not.
+	staleName := ""
+	buf := make([]uint16, 1024)
+	for n := 6000; n >= 5800; n-- {
+		name := fmt.Sprintf("COM%d", n)
+		_, err := windows.QueryDosDevice(windows.StringToUTF16Ptr(name), &buf[0], uint32(len(buf)))
+		if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+			staleName = name
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if staleName == "" {
+		t.Fatal("no free test port")
+	}
+	target := fmt.Sprintf(`\Device\NamedPipe\VirtualCOM-%d-%d`, os.Getpid(), time.Now().UnixNano())
+	if err := windows.DefineDosDevice(0x1|0x8, windows.StringToUTF16Ptr(staleName), windows.StringToUTF16Ptr(target)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		windows.DefineDosDevice(0x1|0x2|0x4|0x8, windows.StringToUTF16Ptr(staleName), windows.StringToUTF16Ptr(target))
+	})
 	a.openVirtualCOM()
+	if _, err := windows.QueryDosDevice(windows.StringToUTF16Ptr(staleName), &buf[0], uint32(len(buf))); !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+		t.Fatalf("stale alias survived startup: %v", err)
+	}
 	if a.virtualCOMManager == nil || a.virtualCOMWindow == nil {
 		t.Fatal("management window was not created")
 	}

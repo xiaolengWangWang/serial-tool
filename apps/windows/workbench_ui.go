@@ -93,7 +93,7 @@ func (a *application) menus() []MenuItem {
 				a.mode.SetCurrentIndex(3)
 				a.updateMode()
 			}
-		}}, Action{Text: "虚拟串口管理", OnTriggered: a.openVirtualCOM}, Action{Text: "VirtualCOM 连接说明", OnTriggered: a.showVirtualCOMHelp}, Action{Text: "历史数据分析", OnTriggered: a.openDatabaseAnalysis}}},
+		}}, Action{Text: "虚拟串口管理", Image: uiIcon("serial"), OnTriggered: a.openVirtualCOM}, Action{Text: "VirtualCOM 连接说明", OnTriggered: a.showVirtualCOMHelp}, Action{Text: "历史数据分析", OnTriggered: a.openDatabaseAnalysis}}},
 		Menu{Text: "设置", Items: []MenuItem{Action{Text: "AI 设置", OnTriggered: a.assistant.settings}, Action{Text: "连接数与桥接", OnTriggered: a.openConnections}, Separator{}, Action{AssignTo: &a.autoUpdateAction, Text: "启动时检查更新", Checkable: true, OnTriggered: a.toggleAutoUpdate}}},
 		Menu{Text: "帮助", Items: []MenuItem{Action{Text: "使用说明", OnTriggered: a.showHelp}, Action{Text: "检查更新", OnTriggered: a.checkUpdate}, Action{Text: "发送 (F5)", Image: uiIcon("send"), Shortcut: Shortcut{Key: walk.KeyF5}, OnTriggered: func() { a.sendOnce(false) }}}},
 	}

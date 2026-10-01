@@ -28,8 +28,8 @@ github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/stretchr/testify v1.8.4 h1:CcVxjf3Q8PM0mHUKJCdn+eZZtm5yQwehR5yeSVQQcUk=
 github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
-github.com/xiaolengWangWang/virtualcom v0.0.0-20261001132030-1c5e15a6545e h1:sA6Q48W62btL1MokHNb0e7+BRvCZgAFE+ggPc19W1PY=
-github.com/xiaolengWangWang/virtualcom v0.0.0-20261001132030-1c5e15a6545e/go.mod h1:/FXKrPT7UuJzo76vSXz4oAXqEqdvSSlJQNhSg3w/d8I=
+github.com/xiaolengWangWang/virtualcom v0.0.0-20261001173017-e98ba8cfd227 h1:Azl2pe2ErxlAa7O26mmfoca0jrX+3XdDBAdYEsUnwio=
+github.com/xiaolengWangWang/virtualcom v0.0.0-20261001173017-e98ba8cfd227/go.mod h1:qwoA2Int1ac8N2JfYGcwNY0Pt0dGQIOF5i3xYVklVPA=
 go.bug.st/serial v1.6.4 h1:7FmqNPgVp3pu2Jz5PoPtbZ9jJO5gnEnZIvnI1lzve8A=
 go.bug.st/serial v1.6.4/go.mod h1:nofMJxTeNVny/m6+KaafC6vJGj3miwQZ6vW4BZUGJPI=
 golang.org/x/image v0.45.0 h1:FMb1nTbH5H9vF55SriQHgFw5GnNL9Jg6L25BwXKzhB0=
