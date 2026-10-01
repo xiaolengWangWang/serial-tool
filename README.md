@@ -29,6 +29,7 @@ Windows 串口名可写 `COM3`。`./commbox -h` 查看全部参数。
 
 ## 桌面版功能总览
 
+- v0.10.1：版本号从 0.9.x 进入 0.10 系列，功能与 v0.9.18 相同；同时提供 Windows、macOS 和 Linux 构建产物。
 - v0.9.18：macOS AI 深度分析改为流式对话；Windows 与 Linux 功能同 v0.9.17，版本号同步。本版同时提供 Windows、macOS 和 Linux 构建产物。
 - macOS 的 AI 深度分析使用独立流式对话窗口：确认发送当前报文、选中报文或数据库报告后，回答逐段显示；可停止并保留部分回答，在窗口内继续提问，对话自动存入本地 Markdown。
 - v0.9.17：Windows AI 对话支持随问题添加文本、DOCX、可选中文字的 PDF 和图片附件；本版同时提供 Windows、macOS 和 Linux 构建产物。
