@@ -17,7 +17,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestReadPDFWorker(t *testing.T) {
-	fixture := filepath.Join("..", "internal", "aiattachment", "testdata", "sample.pdf")
+	fixture := filepath.Join("..", "..", "core", "aiattachment", "testdata", "sample.pdf")
 	a, err := readPDFAttachment(fixture)
 	if err != nil || !strings.Contains(a.Text, "Hello PDF") {
 		t.Fatalf("PDF worker: attachment=%+v err=%v", a, err)

@@ -1,0 +1,2 @@
+# PDF cross-reference offsets require byte-for-byte checkout on every platform.
+*.pdf binary

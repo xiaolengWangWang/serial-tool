@@ -23,7 +23,7 @@ core/             核心代码：三端共用引擎(连接、收发、存储、�
   aiattachment/   AI 附件解析(文本 / DOCX / PDF / 图片)
 apps/
   macos/          macOS 桌面版(Cocoa + CGo)
-  windows/        Windows 桌面版(walk);virtualcom/ 为随包发布的 VirtualCOM(独立 Go 模块)
+  windows/        Windows 桌面版(walk)，直接集成独立 VirtualCOM Go 模块
   linux/          命令行版:Linux 发布;Windows 包里的 CommBox-CLI.exe 也由它构建
 scripts/          Windows 打包脚本
 docs/             使用手册、Windows GUI 设计速查、当前版本发布说明
@@ -115,9 +115,11 @@ macOS/Linux 使用 PTY，无需额外驱动。Windows 不提供 TCP→虚拟串�
 
 ### Windows：连接 VirtualCOM 免驱动端口
 
-先运行独立的 `VirtualCOM-GUI.exe` 创建一对端口，例如 COM10 ⇄ COM11，并保持程序运行。在两个 CommBox 窗口中分别选择「串口 → 刷新串口」，打开 COM10 和 COM11，即可双向收发。命令行的 `-list` 和 `-port COM10` 同样支持这些端口。
+在 CommBox 的「工具 → 虚拟串口管理」中创建一对端口，例如 COM10 ⇄ COM11；两项留空可自动分配编号，无需启动其他程序。管理页支持查看状态、占用程序、双向传输量，以及启停和删除。在两个 CommBox 窗口中分别选择「串口 → 刷新串口」，打开两端即可双向收发。命令行的 `-list` 和 `-port COM10` 同样支持这些端口。
 
-连接后界面显示「免驱动」和「串口参数不生效」。VirtualCOM 传输原始字节，不实现波特率、数据位、校验、停止位及控制信号。此适配只解决 CommBox 与 VirtualCOM 的通信，未适配的第三方串口软件仍无法直接使用它。关闭 VirtualCOM 会断开通信；重新创建串口对后需在 CommBox 重新连接。
+连接后界面显示「免驱动」和「串口参数不生效」。VirtualCOM 传输原始字节，不实现波特率、数据位、校验、停止位及控制信号，未适配的第三方串口软件仍无法直接使用它。关闭管理窗口后端口继续工作，退出创建端口的 CommBox 实例时释放；重新创建串口对后需重新连接。也可使用发布包附带的独立 `VirtualCOM-GUI.exe`。
+
+核心代码和管理界面来自 [独立 VirtualCOM 仓库](https://github.com/xiaolengWangWang/virtualcom)，由 `go.mod` 固定版本；主仓库不再维护重复源码。
 
 物理串口及驱动提供的 COM 口仍使用原串口库。使用步骤与实现说明见 [VirtualCOM 适配说明](docs/virtualcom-commbox-compat.md)。
 

@@ -23,8 +23,8 @@ func TestVirtualCOMLivePairs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	fixture := filepath.Join(t.TempDir(), "virtualcom-fixture.exe")
-	build := exec.CommandContext(ctx, "go", "build", "-o", fixture, "./tests/commbox-fixture")
-	build.Dir = filepath.Join("..", "apps", "windows", "virtualcom")
+	build := exec.CommandContext(ctx, "go", "build", "-o", fixture, "github.com/xiaolengWangWang/virtualcom/tests/commbox-fixture")
+	build.Dir = ".."
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build provider: %v\n%s", err, out)
 	}

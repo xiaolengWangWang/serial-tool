@@ -1,14 +1,16 @@
 module serial-tool
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/creack/pty v1.1.24
 	github.com/ledongthuc/pdf v0.0.0-20260907135840-6c8c28e0e8a0
 	github.com/lxn/walk v0.0.0-20210112085537-c389da54e794
 	github.com/lxn/win v0.0.0-20210218163916-a377121e959e
+	github.com/xiaolengWangWang/virtualcom v0.0.0-20261001132030-1c5e15a6545e
 	go.bug.st/serial v1.6.4
 	golang.org/x/image v0.45.0
+	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.45.0
 	modernc.org/sqlite v1.57.0
 )
@@ -20,7 +22,6 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	gopkg.in/Knetic/govaluate.v3 v3.0.0 // indirect
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

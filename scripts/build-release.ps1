@@ -11,7 +11,8 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 
 function Get-GoConst {
     param([string]$Path, [string]$Name)
-    $text = [IO.File]::ReadAllText((Join-Path $repoRoot $Path))
+    $sourcePath = if ([IO.Path]::IsPathRooted($Path)) { $Path } else { Join-Path $repoRoot $Path }
+    $text = [IO.File]::ReadAllText($sourcePath)
     $m = [regex]::Match($text, ('(?m)^const\s+{0}\s*=\s*"([^"]+)"' -f $Name))
     if (-not $m.Success) { throw ('Cannot read ' + $Name + ' from ' + $Path) }
     return $m.Groups[1].Value
@@ -41,7 +42,11 @@ function Export-GitText {
 }
 
 $version = Get-GoConst 'core\modes.go' 'Version'
-$vcomVersion = Get-GoConst 'apps\windows\virtualcom\internal\vcom\version.go' 'Version'
+$vcomModuleJSON = go list -m -json github.com/xiaolengWangWang/virtualcom
+if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve pinned VirtualCOM module' }
+$vcomModule = ($vcomModuleJSON -join "`n") | ConvertFrom-Json
+if ($vcomModule.Replace -or -not $vcomModule.Version) { throw 'VirtualCOM must use a pinned published module without a local replacement' }
+$vcomVersion = Get-GoConst (Join-Path $vcomModule.Dir 'internal\vcom\version.go') 'Version'
 $outputDir = Join-Path $repoRoot ('build\windows-' + $version)
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 
@@ -64,13 +69,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'CommBox GUI build failed' }
     go build -trimpath -ldflags '-w' -o (Join-Path $outputDir 'CommBox-CLI.exe') ./apps/linux
     if ($LASTEXITCODE -ne 0) { throw 'CommBox CLI build failed' }
-    Push-Location 'apps\windows\virtualcom'
-    try {
-        go build -trimpath -ldflags '-H windowsgui -w' -o (Join-Path $outputDir 'VirtualCOM-GUI.exe') ./cmd/virtualcom-gui
-        if ($LASTEXITCODE -ne 0) { throw 'VirtualCOM GUI build failed' }
-        go build -trimpath -ldflags '-w' -o (Join-Path $outputDir 'VirtualCOM.exe') ./cmd/virtualcom
-        if ($LASTEXITCODE -ne 0) { throw 'VirtualCOM CLI build failed' }
-    } finally { Pop-Location }
+    go build -trimpath -ldflags '-H windowsgui -w' -o (Join-Path $outputDir 'VirtualCOM-GUI.exe') github.com/xiaolengWangWang/virtualcom/cmd/virtualcom-gui
+    if ($LASTEXITCODE -ne 0) { throw 'VirtualCOM GUI build failed' }
+    go build -trimpath -ldflags '-w' -o (Join-Path $outputDir 'VirtualCOM.exe') github.com/xiaolengWangWang/virtualcom/cmd/virtualcom
+    if ($LASTEXITCODE -ne 0) { throw 'VirtualCOM CLI build failed' }
 
     Export-GitText -Revision 'HEAD' -Path 'docs/virtualcom-commbox-compat.md' -Destination (Join-Path $outputDir 'VirtualCOM使用说明.md')
     Export-GitText -Revision 'HEAD' -Path 'apps/windows/README-Windows.txt' -Destination (Join-Path $outputDir 'README-Windows.txt')
@@ -90,7 +92,13 @@ try {
             throw ('Invalid Windows x64 executable: ' + $name)
         }
         $metadata = (go version -m $path) -join "`n"
-        if ($LASTEXITCODE -ne 0 -or !$metadata.Contains('vcs.revision=' + $commit) -or !$metadata.Contains('vcs.modified=false')) {
+        if ($LASTEXITCODE -ne 0) { throw ('Cannot read build metadata: ' + $name) }
+        if ($name.StartsWith('VirtualCOM')) {
+            $modulePattern = '(?m)^\s*mod\s+' + [regex]::Escape($vcomModule.Path) + '\s+' + [regex]::Escape($vcomModule.Version) + '(\s|$)'
+            if ($metadata -notmatch $modulePattern -or $metadata -match '(?m)^\s*=>') {
+                throw ('Binary does not match pinned VirtualCOM module: ' + $name)
+            }
+        } elseif (!$metadata.Contains('vcs.revision=' + $commit) -or !$metadata.Contains('vcs.modified=false')) {
             throw ('Binary does not match clean source: ' + $name)
         }
         $fileVersion = (Get-Item $path).VersionInfo.FileVersion

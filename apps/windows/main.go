@@ -17,12 +17,15 @@ import (
 	"github.com/lxn/walk"
 	. "github.com/lxn/walk/declarative"
 	"github.com/lxn/win"
+	virtualcom "github.com/xiaolengWangWang/virtualcom"
 	"serial-tool/core"
 )
 
 var modes = []string{"串口", "TCP", "UDP", "串口服务器", "HTTP 客户端"}
 
 type application struct {
+	virtualCOMManager                    *virtualcom.Manager
+	virtualCOMWindow                     *walk.MainWindow
 	loadingRecent                        bool
 	peerList                             *walk.ListBox
 	peerTitle, footer                    *walk.Label

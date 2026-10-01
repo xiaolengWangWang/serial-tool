@@ -77,6 +77,10 @@ func (a *application) createWindow() error {
 	a.workArea = func() (win.RECT, bool) { return workAreaFor(a.mw.Handle()) }
 	a.watchWorkArea()
 	a.fitToWorkArea()
+	a.mw.Disposing().Attach(func() {
+		a.closed.Store(true)
+		a.shutdownVirtualCOM()
+	})
 	return nil
 }
 
@@ -89,7 +93,7 @@ func (a *application) menus() []MenuItem {
 				a.mode.SetCurrentIndex(3)
 				a.updateMode()
 			}
-		}}, Action{Text: "VirtualCOM 连接说明", OnTriggered: a.showVirtualCOMHelp}, Action{Text: "历史数据分析", OnTriggered: a.openDatabaseAnalysis}}},
+		}}, Action{Text: "虚拟串口管理", OnTriggered: a.openVirtualCOM}, Action{Text: "VirtualCOM 连接说明", OnTriggered: a.showVirtualCOMHelp}, Action{Text: "历史数据分析", OnTriggered: a.openDatabaseAnalysis}}},
 		Menu{Text: "设置", Items: []MenuItem{Action{Text: "AI 设置", OnTriggered: a.assistant.settings}, Action{Text: "连接数与桥接", OnTriggered: a.openConnections}, Separator{}, Action{AssignTo: &a.autoUpdateAction, Text: "启动时检查更新", Checkable: true, OnTriggered: a.toggleAutoUpdate}}},
 		Menu{Text: "帮助", Items: []MenuItem{Action{Text: "使用说明", OnTriggered: a.showHelp}, Action{Text: "检查更新", OnTriggered: a.checkUpdate}, Action{Text: "发送 (F5)", Image: uiIcon("send"), Shortcut: Shortcut{Key: walk.KeyF5}, OnTriggered: func() { a.sendOnce(false) }}}},
 	}
@@ -531,9 +535,9 @@ func toolButton(text, icon string, width int, clicked walk.EventHandler) PushBut
 
 func (a *application) showVirtualCOMHelp() {
 	walk.MsgBox(a.mw, "VirtualCOM 免驱动连接",
-		"先在 VirtualCOM 中创建一对端口并保持程序运行。\r\n\r\n"+
+		"在「工具 → 虚拟串口管理」创建一对端口，无需另外启动 VirtualCOM。关闭管理窗口后端口继续工作，退出创建端口的 CommBox 实例时释放。\r\n\r\n"+
 			"在两个 CommBox 窗口中选择「串口」→「刷新串口」，分别打开这一对的两个 COM 号，即可双向收发。也可在命令行用 -list 查看、-port COM号 打开。\r\n\r\n"+
-			"VirtualCOM 传输原始字节，波特率、数据位、校验、停止位与控制信号不生效。退出 VirtualCOM 会断开通信；创建新端口后需重新连接。\r\n\r\n"+
+			"VirtualCOM 传输原始字节，波特率、数据位、校验、停止位与控制信号不生效。退出创建端口的程序会断开通信；创建新端口后需重新连接。\r\n\r\n"+
 			"此适配仅用于 CommBox，不会让未适配的第三方串口软件自动兼容。TCP/UDP 转发可使用「串口服务器」模式。",
 		walk.MsgBoxOK|walk.MsgBoxIconInformation)
 }
