@@ -10,6 +10,7 @@ import (
 	. "github.com/lxn/walk/declarative"
 	"serial-tool/core"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -36,7 +37,11 @@ func (a *application) openHTTPWorkspace() {
 		}
 		responseBody.SetText(httpWorkspaceBounded(string(b)))
 	}
-	report := func(err error) { status.SetText("错误：" + httpWorkspaceBounded(err.Error())) }
+	report := func(err error) {
+		message := httpWorkspaceBounded(chineseError(err))
+		status.SetText("错误：" + strings.SplitN(message, "\r\n", 2)[0])
+		status.SetToolTipText(message)
+	}
 	err := (Dialog{
 		AssignTo: &dlg, Title: "HTTP 工作台", MinSize: Size{Width: 760, Height: 600}, Size: Size{Width: 1040, Height: 800}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 12}, Spacing: 8},
 		Children: []Widget{
@@ -159,8 +164,8 @@ func (a *application) openHTTPWorkspace() {
 			Label{AssignTo: &status, Text: "就绪；尚未发送请求", EllipsisMode: EllipsisEnd, MinSize: Size{Height: 24}, Alignment: AlignHNearVCenter},
 			CheckBox{AssignTo: &pretty, Text: "格式化 JSON 响应", Checked: true, OnCheckedChanged: showBody},
 			TabWidget{MinSize: Size{Height: 220}, Pages: []TabPage{
-				{Title: "响应正文", Layout: VBox{Alignment: AlignHNearVNear}, Children: []Widget{TextEdit{AssignTo: &responseBody, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 300000}}},
-				{Title: "响应头", Layout: VBox{Alignment: AlignHNearVNear}, Children: []Widget{TextEdit{AssignTo: &responseHeaders, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 300000}}},
+				{Title: "响应正文", Layout: VBox{Alignment: AlignHNearVNear}, Children: []Widget{TextEdit{AssignTo: &responseBody, ReadOnly: true, Background: SolidColorBrush{Color: walk.RGB(255, 255, 255)}, VScroll: true, HScroll: true, MaxLength: 300000}}},
+				{Title: "响应头", Layout: VBox{Alignment: AlignHNearVNear}, Children: []Widget{TextEdit{AssignTo: &responseHeaders, ReadOnly: true, Background: SolidColorBrush{Color: walk.RGB(255, 255, 255)}, VScroll: true, HScroll: true, MaxLength: 300000}}},
 			}},
 		},
 	}).Create(a.mw)

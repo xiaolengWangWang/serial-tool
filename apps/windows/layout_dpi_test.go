@@ -290,7 +290,7 @@ func measureLayout(a *application, d layoutDisplay, work win.RECT, dpi int) layo
 
 // 矮屏上历史 / 快捷与定时 / 循环两行收进「更多发送」,按需展开;收起时按钮提示
 // 定时仍在进行;工作区放得下设计尺寸时两行常驻,按钮隐藏。
-func TestSendExtrasFollowAvailableHeight(t *testing.T) {
+func TestSendExtrasRemainCollapsedUntilRequested(t *testing.T) {
 	a := newWorkbenchForTestWith(t, nil)
 	var errs []string
 	driveWorkbench(a, func(onUI func(func())) {
@@ -336,7 +336,9 @@ func TestSendExtrasFollowAvailableHeight(t *testing.T) {
 		onUI(func() { a.stopTimer(false) })
 		expect("定时停止", false, true, "更多发送")
 		fitWorkbench(a, onUI, workFor(layoutDisplays[len(layoutDisplays)-1]))
-		expect("1920x1080 @100%(放得下设计尺寸)", true, false, "")
+		expect("宽屏仍默认简洁显示", false, true, "更多发送")
+		onUI(a.toggleSendExtras)
+		expect("宽屏也可主动展开", true, true, "收起发送")
 	})
 	for _, e := range errs {
 		t.Error(e)

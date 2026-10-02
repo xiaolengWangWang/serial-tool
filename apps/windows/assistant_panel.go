@@ -14,17 +14,19 @@ import (
 )
 
 type assistantPanel struct {
-	app        *application
-	panel      *walk.ScrollView
-	scope      *walk.ComboBox
-	topic      *walk.ComboBox
-	rangeRow   *walk.Composite
-	from, to   *walk.LineEdit
-	run        *walk.PushButton
-	chat       *aiChat
-	enabled    bool
-	config     analysisAIConfig
-	maxPackets int
+	app           *application
+	panel         *walk.ScrollView
+	attach        *walk.CheckBox
+	packetOptions *walk.Composite
+	scope         *walk.ComboBox
+	topic         *walk.ComboBox
+	rangeRow      *walk.Composite
+	from, to      *walk.LineEdit
+	run           *walk.PushButton
+	chat          *aiChat
+	enabled       bool
+	config        analysisAIConfig
+	maxPackets    int
 }
 
 // 分析范围：前四项取主界面报文，其后取本机历史数据库（最后一项打开数据库分析窗口）。
@@ -52,32 +54,54 @@ func (w *assistantPanel) widget() Widget {
 	if n, e := strconv.Atoi(w.app.engine.GetSetting("ai.max_packets")); e == nil && n > 0 && n <= 500 {
 		w.maxPackets = n
 	}
-	w.chat = &aiChat{app: w.app, owner: func() walk.Form { return w.app.mw }, config: w.aiConfig, settings: w.settings, onBusy: func(busy bool) { w.run.SetEnabled(!busy) }}
+	w.chat = &aiChat{app: w.app, owner: func() walk.Form { return w.app.mw }, config: w.aiConfig, settings: w.settings, prepare: w.packetContext, onBusy: func(busy bool) { w.run.SetEnabled(!busy) }}
 	// 对话为主：上方一行范围、一行主题与「开始分析」，其余高度都给对话。
 	// 宽度上下限与中栏占比的关系见 workbench_ui.go 的 minMonitorWidth。
 	// 滚动条宽度由 walk 自己预留，右边距与左边距相同即可。
 	children := []Widget{
-		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
-			Label{Text: "AI 通信助手", Font: fontSection, TextColor: colorBlue, Alignment: AlignHNearVCenter},
-			HSpacer{},
-			PushButton{Text: "×", ToolTipText: "收起 AI 助手，对话仍会保留", MinSize: Size{Width: 32, Height: btnH}, MaxSize: Size{Width: 32}, OnClicked: w.app.toggleAssistant},
-		}},
-		Label{AssignTo: &w.chat.status, Text: "AI 未启用 · 可使用本地分析", TextColor: colorMuted, EllipsisMode: EllipsisEnd},
 		Composite{Layout: HBox{MarginsZero: true, Spacing: 6}, Children: []Widget{
-			Label{Text: "范围", TextColor: colorMuted},
-			ComboBox{AssignTo: &w.scope, Model: analysisScopes, CurrentIndex: 2, StretchFactor: stretchFill, ToolTipText: "分析范围：主界面报文或本机历史数据库", MinSize: Size{Width: 80, Height: rowH}, OnCurrentIndexChanged: func() { w.rangeRow.SetVisible(w.scope.CurrentIndex() == customRangeScope) }},
+			Label{Text: "AI 聊天助手", Font: fontSection, TextColor: colorBlue}, HSpacer{},
+			PushButton{Text: "×", ToolTipText: "收起助手，正在进行的回答会继续", MinSize: Size{Width: 32, Height: btnH}, MaxSize: Size{Width: 32}, OnClicked: w.app.toggleAssistant},
 		}},
-		Composite{AssignTo: &w.rangeRow, Visible: false, Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
-			LineEdit{AssignTo: &w.from, Text: "1", CueBanner: "起始行", MinSize: Size{Height: rowH}},
-			inlineLabel("至", 22),
-			LineEdit{AssignTo: &w.to, Text: "100", CueBanner: "结束行", MinSize: Size{Height: rowH}},
+		Label{AssignTo: &w.chat.status, Text: "输入问题开始聊天；报文和附件按需添加", TextColor: colorMuted, EllipsisMode: EllipsisEnd},
+		CheckBox{AssignTo: &w.attach, Text: "附带报文", MinSize: Size{Height: rowH}, ToolTipText: "勾选后，每次发送附带当前所选范围；不勾选时只发送问题和附件。", OnCheckedChanged: func() {
+			if w.packetOptions != nil {
+				w.packetOptions.SetVisible(w.attach.Checked())
+			}
 		}},
-		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
-			ComboBox{AssignTo: &w.topic, Model: analysisTopics, CurrentIndex: 0, ToolTipText: "分析主题", StretchFactor: stretchFill, MinSize: Size{Width: 80, Height: rowH}},
-			PushButton{AssignTo: &w.run, Text: "开始分析", Image: uiIcon("ai"), MinSize: Size{Width: 104, Height: btnH}, MaxSize: Size{Width: 104}, OnClicked: func() { w.analyze(w.topic.Text()) }},
+		Composite{AssignTo: &w.packetOptions, Visible: false, Background: SolidColorBrush{Color: colorCanvas}, Layout: VBox{Margins: Margins{Left: 8, Top: 6, Right: 8, Bottom: 6}, Spacing: 6}, Children: []Widget{
+			ComboBox{AssignTo: &w.scope, Model: analysisScopes[:4], CurrentIndex: 2, MinSize: Size{Width: 80, Height: rowH}, ToolTipText: "当前全部数据包含被筛选隐藏的报文；仅上传某些报文时请选择当前选中数据。", OnCurrentIndexChanged: func() {
+				if w.rangeRow != nil {
+					w.rangeRow.SetVisible(w.scope.CurrentIndex() == customRangeScope)
+				}
+			}},
+			Composite{AssignTo: &w.rangeRow, Visible: false, Layout: HBox{MarginsZero: true, Spacing: 6}, Children: []Widget{
+				LineEdit{AssignTo: &w.from, Text: "1", CueBanner: "起始行", MinSize: Size{Height: rowH}}, Label{Text: "至"}, LineEdit{AssignTo: &w.to, Text: "100", CueBanner: "结束行", MinSize: Size{Height: rowH}},
+			}},
+			Composite{Layout: HBox{MarginsZero: true, Spacing: 6}, Children: []Widget{
+				ComboBox{AssignTo: &w.topic, Model: analysisTopics, CurrentIndex: 0, StretchFactor: stretchFill, MinSize: Size{Width: 60, Height: rowH}},
+				PushButton{AssignTo: &w.run, Text: "本地检查", MinSize: Size{Width: 84, Height: btnH}, MaxSize: Size{Width: 84}, ToolTipText: "使用内置解析检查报文，不发送给 AI。", OnClicked: func() { w.analyze(w.topic.Text()) }},
+			}},
+			Label{Text: "报文仅在点击发送时交给 AI。", TextColor: colorMuted},
 		}},
 	}
+
 	return ScrollView{AssignTo: &w.panel, HorizontalFixed: true, Visible: false, MinSize: Size{Width: assistantMinWidth}, MaxSize: Size{Width: assistantMaxWidth}, Background: SolidColorBrush{Color: colorPanel}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 8}, Children: append(children, w.chat.widgets()...)}
+}
+
+// packetContext is evaluated only after the user clicks Send.
+func (w *assistantPanel) packetContext() (string, error) {
+	if w.attach == nil || !w.attach.Checked() {
+		return "", nil
+	}
+	a := w.app
+	from, _ := strconv.Atoi(w.from.Text())
+	to, _ := strconv.Atoi(w.to.Text())
+	packets, err := selectAnalysisPackets(a.packetModel.all, a.packetModel.visible, a.packetTable.SelectedIndexes(), w.scope.CurrentIndex(), from, to, w.maxPackets)
+	if err != nil {
+		return "", err
+	}
+	return analysisContext(packets, string(a.uiMode()), a.status.Text())
 }
 
 func (w *assistantPanel) aiConfig() (analysisAIConfig, bool) {
@@ -163,14 +187,10 @@ func (w *assistantPanel) analyze(topic string) {
 	to, _ := strconv.Atoi(w.to.Text())
 	packets, err := selectAnalysisPackets(a.packetModel.all, a.packetModel.visible, a.packetTable.SelectedIndexes(), scope, from, to, w.maxPackets)
 	if err != nil {
-		w.chat.status.SetText(err.Error())
+		w.chat.status.SetText(chineseError(err))
 		return
 	}
-	ctxText, ctxErr := analysisContext(packets, string(a.uiMode()), a.status.Text())
-	if _, enabled := w.aiConfig(); ctxErr != nil && enabled {
-		w.chat.status.SetText(ctxErr.Error())
-		return
-	}
+	ctxText, _ := analysisContext(packets, string(a.uiMode()), a.status.Text())
 	display := fmt.Sprintf("%s · %s（%d 条报文）", topic, w.scope.Text(), len(packets))
 	w.chat.analyze(display, func(context.Context) (string, error) { return analysisPacketReport(packets) }, func(string) (string, string) {
 		return "请执行" + topic + "。明确区分事实和推测，数据不足时明确说明，不得捏造响应率或连接状态。\n" + ctxText, ctxText
@@ -219,9 +239,9 @@ func (w *assistantPanel) settingsFor(owner walk.Form) {
 	var base, key, model *walk.LineEdit
 	var timeout, limit *walk.NumberEdit
 	if err := (Dialog{AssignTo: &dlg, Title: "AI 设置", Size: Size{Width: 580, Height: 400}, MinSize: Size{Width: 500, Height: 360}, Font: Font{Family: fontUI, PointSize: sizeBody}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 12, Top: 10, Right: 12, Bottom: 12}, Spacing: 8}, Children: []Widget{
-		CheckBox{AssignTo: &enabled, Text: "启用 AI（主动分析 / 提问时提交所选数据）", Checked: w.enabled},
+		CheckBox{AssignTo: &enabled, Text: "启用 AI（点击发送时提交问题及所选内容）", Checked: w.enabled},
 		Composite{Layout: Grid{Alignment: AlignHNearVCenter, Columns: 2}, Children: []Widget{Label{Text: "服务地址"}, LineEdit{AssignTo: &base, Text: w.config.Base}, Label{Text: "API Key"}, LineEdit{AssignTo: &key, Text: w.config.Key, PasswordMode: true}, Label{Text: "模型"}, LineEdit{AssignTo: &model, Text: w.config.Model}, Label{Text: "无响应超时 (s)"}, NumberEdit{AssignTo: &timeout, Value: w.config.Timeout.Seconds(), MinValue: 15, MaxValue: 300, Decimals: 0}, Label{Text: "最大上下文条数"}, NumberEdit{AssignTo: &limit, Value: float64(w.maxPackets), MinValue: 1, MaxValue: 500, Decimals: 0}}},
-		Label{Text: "支持 DeepSeek 及兼容 Chat Completions 的服务，回答边生成边显示。\r\n图片需支持视觉的模型（DeepSeek 可填 deepseek-flash）。\r\n超时按「多久没有收到新内容」计算，长回答不会被截断。\r\nKey 保存在 Windows 凭据管理器；每次启动默认关闭 AI。"},
+		Label{Text: "支持 DeepSeek 及兼容 Chat Completions 的服务，回答边生成边显示。\r\n图片需服务和模型支持视觉输入。\r\n超时按「多久没有收到新内容」计算，超过此时间未收到内容会停止等待。\r\nKey 保存在 Windows 凭据管理器；每次启动默认关闭 AI。"},
 		PushButton{Text: "保存", OnClicked: func() {
 			w.stop()
 			w.enabled = enabled.Checked()
@@ -229,12 +249,12 @@ func (w *assistantPanel) settingsFor(owner walk.Form) {
 			w.maxPackets = int(limit.Value())
 			for k, v := range map[string]string{"deepseek.base_url": w.config.Base, "deepseek.api_key": w.config.Key, "deepseek.model": w.config.Model, "ai.max_packets": strconv.Itoa(w.maxPackets)} {
 				if err := w.app.engine.SetSetting(k, v); err != nil {
-					walk.MsgBox(dlg, "设置", err.Error(), walk.MsgBoxOK)
+					walk.MsgBox(dlg, "设置", chineseError(err), walk.MsgBoxOK)
 					return
 				}
 			}
 			if w.enabled {
-				w.chat.status.SetText("AI 已启用 · 分析或提问时才上传数据")
+				w.chat.status.SetText("AI 已启用 · 点击发送时才上传数据")
 			} else {
 				w.chat.status.SetText("AI 未启用 · 可使用本地分析")
 			}

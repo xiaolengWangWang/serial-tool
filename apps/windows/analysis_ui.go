@@ -133,7 +133,7 @@ func (a *application) openDatabaseAnalysis() {
 }
 
 func (w *analysisWindow) fail(err error) {
-	walk.MsgBox(w.dlg, "分析", err.Error(), walk.MsgBoxIconError)
+	walk.MsgBox(w.dlg, "分析", chineseError(err), walk.MsgBoxIconError)
 }
 func (w *analysisWindow) open(title string, controls []Widget) { w.openWithInit(title, controls, nil) }
 
@@ -153,7 +153,7 @@ func (w *analysisWindow) openWithInit(title string, controls []Widget, init func
 		Composite{StretchFactor: 1, Layout: HBox{Alignment: AlignHNearVNear, MarginsZero: true, Spacing: 12}, Children: []Widget{
 			Composite{StretchFactor: 1, Layout: VBox{Alignment: AlignHNearVNear, MarginsZero: true, Spacing: 6}, Children: []Widget{
 				Label{Text: "本地报告", Font: Font{Family: fontUI, PointSize: sizeBody, Bold: true}},
-				TextEdit{AssignTo: &w.report, ReadOnly: true, VScroll: true, HScroll: true, StretchFactor: 1, MinSize: Size{Height: 170}},
+				TextEdit{AssignTo: &w.report, ReadOnly: true, Background: SolidColorBrush{Color: walk.RGB(255, 255, 255)}, VScroll: true, HScroll: true, StretchFactor: 1, MinSize: Size{Height: 170}},
 			}},
 			Composite{StretchFactor: 1, Layout: VBox{Alignment: AlignHNearVNear, MarginsZero: true, Spacing: 6}, Children: chatColumn},
 		}},

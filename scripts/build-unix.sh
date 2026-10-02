@@ -14,7 +14,8 @@ case "$os" in
     CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$output" ./apps/linux
     test "$("$output" -version)" = "$version"
     chmod 755 "$output"
-    tar -czf "build/release/CommBox-$version-Linux-$arch.tar.gz" -C build/release "commbox-linux-$arch"
+    git show 'HEAD:docs/CommBox使用手册.md' > build/release/CommBox使用手册.md
+    tar -czf "build/release/CommBox-$version-Linux-$arch.tar.gz" -C build/release "commbox-linux-$arch" 'CommBox使用手册.md'
     ;;
   darwin)
     case "$arch" in arm64) chip=AppleSilicon;; amd64) chip=Intel;; *) exit 1;; esac
@@ -25,6 +26,7 @@ case "$os" in
     cp resources/Info.plist "$app/Contents/Info.plist"
     test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$version"
     cp resources/CommBox.icns "$app/Contents/Resources/CommBox.icns"
+    git show 'HEAD:docs/CommBox使用手册.md' > "$app/Contents/Resources/CommBox使用手册.md"
     CGO_ENABLED=1 go build -trimpath -ldflags='-s -w' -o "$app/Contents/MacOS/CommBox" ./apps/macos
     codesign --force --deep --sign - "$app"
     codesign --verify --deep --strict "$app"

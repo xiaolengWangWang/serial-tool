@@ -20,7 +20,7 @@ import (
 )
 
 // aiChat 是 AI 面板与数据库分析窗口共用的对话：分析结果与追问按时间依次排在同一段
-// 对话里，回答边生成边显示；输入框单行，Enter 发送，回答期间「发送」变成「停止」。
+// 对话里，回答边生成边显示；输入框支持多行，Ctrl+Enter 发送，回答期间「发送」变成「停止」。
 // 发给服务的是 turns（含报文或报告原文），界面上显示的是 entries（Markdown 转成的
 // 可读文本）；复制与导出用 entries 的原文。
 type aiChat struct {
@@ -28,12 +28,13 @@ type aiChat struct {
 	owner    func() walk.Form
 	config   func() (analysisAIConfig, bool) // 当前服务配置与是否已启用 AI
 	settings func()
-	onBusy   func(busy bool) // 让所属界面同步禁用「开始分析」之类的按钮
+	prepare  func() (string, error) // Explicit per-message context, empty when not selected.
+	onBusy   func(busy bool)        // 让所属界面同步禁用「开始分析」之类的按钮
 	status   *walk.Label
 	hint     string // 输入框为空、本轮还没提问时使用的默认问题
 
 	view                *walk.TextEdit
-	input               *walk.LineEdit
+	input               *walk.TextEdit
 	button              *walk.PushButton
 	fileList            *walk.ListBox
 	fileCount           *walk.Label
@@ -69,7 +70,7 @@ type chatDraft struct {
 
 func (c *aiChat) widgets() []Widget {
 	return []Widget{
-		TextEdit{AssignTo: &c.view, ReadOnly: true, VScroll: true, StretchFactor: 1, MinSize: Size{Height: 120}, MaxLength: 4 << 20},
+		TextEdit{AssignTo: &c.view, Text: "输入问题，或添加文件后点击发送。\r\n需要分析报文时，再勾选“附带报文”。", Background: SolidColorBrush{Color: colorPanel}, Font: Font{Family: fontUI, PointSize: sizeBody}, ReadOnly: true, VScroll: true, StretchFactor: 1, MinSize: Size{Height: 120}, MaxLength: 4 << 20},
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 			PushButton{AssignTo: &c.fileAdd, Text: "添加附件", Image: uiIcon("attach"), MinSize: Size{Width: 96, Height: btnH}, MaxSize: Size{Width: 96}, ToolTipText: "可多选或分批添加，最多 6 个；发送时才上传", OnClicked: c.addFiles},
 			Label{AssignTo: &c.fileCount, Text: "0 / 6", TextColor: colorMuted}, HSpacer{},
@@ -82,12 +83,13 @@ func (c *aiChat) widgets() []Widget {
 				c.fileList.SetToolTipText(c.files[i].Name)
 			}
 		}},
-		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
-			LineEdit{AssignTo: &c.input, CueBanner: "继续询问，Enter 发送", StretchFactor: stretchFill, MinSize: Size{Width: 80, Height: rowH}, OnKeyDown: func(key walk.Key) {
-				if key == walk.KeyReturn {
-					c.submit()
-				}
-			}},
+		TextEdit{AssignTo: &c.input, Background: SolidColorBrush{Color: colorPanel}, VScroll: true, MinSize: Size{Height: 64}, MaxSize: Size{Height: 96}, ToolTipText: "输入问题；Enter 换行，Ctrl+Enter 发送。", OnKeyDown: func(key walk.Key) {
+			if key == walk.KeyReturn && win.GetKeyState(win.VK_CONTROL) < 0 {
+				c.submit()
+			}
+		}},
+		Composite{Layout: HBox{MarginsZero: true, Spacing: 6}, Children: []Widget{
+			Label{Text: "Ctrl+Enter 发送", TextColor: colorMuted}, HSpacer{},
 			PushButton{AssignTo: &c.button, Text: "发送", Image: uiIcon("send"), MinSize: Size{Width: 76, Height: btnH}, MaxSize: Size{Width: 76}, OnClicked: func() {
 				if c.busy {
 					c.stop()
@@ -97,10 +99,10 @@ func (c *aiChat) widgets() []Widget {
 			}},
 		}},
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
-			toolButton("清空", "", 56, c.clear),
-			toolButton("复制", "", 56, c.copyLast),
-			toolButton("导出", "", 56, c.export),
-			toolButton("设置", "", 56, func() { c.settings() }),
+			toolButton("新对话", "", 66, c.clear),
+			toolButton("复制", "", 48, c.copyLast),
+			toolButton("导出", "", 48, c.export),
+			toolButton("设置", "", 48, func() { c.settings() }),
 			HSpacer{},
 		}},
 	}
@@ -113,7 +115,7 @@ func (c *aiChat) addFiles() {
 	dlg := walk.FileDialog{Title: "添加到 AI 对话（发送时才上传）", Filter: "支持的文件 (*.txt;*.log;*.csv;*.json;*.md;*.xml;*.yaml;*.yml;*.pdf;*.docx;*.png;*.jpg;*.jpeg;*.gif;*.webp)|*.txt;*.log;*.csv;*.json;*.md;*.xml;*.yaml;*.yml;*.pdf;*.docx;*.png;*.jpg;*.jpeg;*.gif;*.webp|所有文件 (*.*)|*.*"}
 	ok, err := dlg.ShowOpenMultiple(c.owner())
 	if err != nil {
-		c.status.SetText("选择附件失败：" + err.Error())
+		c.status.SetText("选择附件失败：" + chineseError(err))
 		return
 	}
 	if !ok {
@@ -150,7 +152,7 @@ func (c *aiChat) loadFiles(paths []string) {
 		for _, path := range paths {
 			absolute, err := filepath.Abs(path)
 			if err != nil {
-				failures = append(failures, filepath.Base(path)+": "+err.Error())
+				failures = append(failures, filepath.Base(path)+": "+chineseError(err))
 				continue
 			}
 			key := strings.ToLower(filepath.Clean(absolute))
@@ -169,7 +171,7 @@ func (c *aiChat) loadFiles(paths []string) {
 				file, err = aiattachment.Read(path)
 			}
 			if err != nil {
-				failures = append(failures, filepath.Base(path)+": "+err.Error())
+				failures = append(failures, filepath.Base(path)+": "+chineseError(err))
 				continue
 			}
 			seen[key] = true
@@ -248,13 +250,11 @@ func (c *aiChat) setContext(data, note string) {
 	}
 }
 
-// analyze 做一轮分析：先在后台跑本地分析 job；未启用 AI 时把本地结果放进对话，
-// 启用时再把 prompt 返回的提示词发给服务。prompt 同时给出之后追问要附带的数据。
+// analyze 只在本地运行检查；点击发送时才会请求 AI。
 func (c *aiChat) analyze(display string, job func(context.Context) (string, error), prompt func(report string) (question, data string)) {
 	if c.busy {
 		return
 	}
-	cfg, enabled := c.config()
 	c.setContext("", "")
 	if len(c.entries) > 0 {
 		c.add(chatEntry{role: "divider", text: "新的分析", at: time.Now()})
@@ -281,16 +281,12 @@ func (c *aiChat) analyze(display string, job func(context.Context) (string, erro
 				cancel()
 				c.setBusy(false)
 				c.fail(err)
-			case !enabled:
+			default:
 				cancel()
 				c.setBusy(false)
 				_, c.context = prompt(report)
 				c.add(chatEntry{role: "local", text: report, at: time.Now()})
 				c.status.SetText("本地分析完成 · 未上传数据")
-			default:
-				var question string
-				question, c.context = prompt(report)
-				c.request(ctx, cancel, cfg, []analysisTurn{{Role: "user", Content: question}}, nil)
 			}
 		})
 	}()
@@ -321,17 +317,27 @@ func (c *aiChat) submit() {
 	case !enabled:
 		c.status.SetText("AI 未启用：点「设置」勾选启用后再提问")
 		return
-	case len(c.turns) == 0 && c.context == "" && len(c.files) == 0:
-		c.status.SetText("请先分析数据或添加附件，再提问")
-		return
+	}
+	data := ""
+	if len(c.turns) == 0 {
+		data = c.context
+	}
+	if c.prepare != nil {
+		var err error
+		data, err = c.prepare()
+		if err != nil {
+			c.status.SetText(chineseError(err))
+			c.status.SetToolTipText(chineseError(err))
+			return
+		}
 	}
 	content := question
-	if len(c.turns) == 0 && c.context != "" {
-		content = c.context + "\n\n问题：" + question
+	if data != "" {
+		content = data + "\n\n问题：" + question
 	}
 	turns := append(append([]analysisTurn(nil), c.turns...), analysisTurn{Role: "user", Content: content, Files: append([]aiattachment.Attachment(nil), c.files...)})
 	if err := aiattachment.ValidateTurns(turns); err != nil {
-		c.status.SetText(err.Error())
+		c.status.SetText(chineseError(err))
 		return
 	}
 	draft := &chatDraft{question: question, files: c.files, paths: c.filePaths}
@@ -450,8 +456,9 @@ func (c *aiChat) restoreDraft(draft *chatDraft) {
 }
 
 func (c *aiChat) fail(err error) {
-	c.add(chatEntry{role: "error", text: err.Error(), at: time.Now()})
-	c.status.SetText("AI 请求失败：" + err.Error())
+	c.add(chatEntry{role: "error", text: chineseError(err), at: time.Now()})
+	c.status.SetText("AI 请求失败，请查看对话中的详细说明")
+	c.status.SetToolTipText(chineseError(err))
 }
 
 func (c *aiChat) stop() {
@@ -486,6 +493,8 @@ func (c *aiChat) clear() {
 		return
 	}
 	c.entries, c.turns = nil, nil
+	c.context = ""
+	c.input.SetText("")
 	c.loadID++
 	c.loading = false
 	c.fileAdd.SetEnabled(true)
@@ -493,7 +502,7 @@ func (c *aiChat) clear() {
 	c.filePaths = nil
 	c.refreshFiles()
 	c.refresh()
-	c.status.SetText("对话已清空；再提问会重新附带当前数据")
+	c.status.SetText("已开始新对话；输入问题后点击发送")
 }
 
 func (c *aiChat) copyLast() {

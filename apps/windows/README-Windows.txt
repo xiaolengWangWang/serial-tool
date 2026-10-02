@@ -6,6 +6,11 @@ CommBox（Windows 64 位）
 4. SQLite 数据保存在：%AppData%\CommBox\data
 5. 当前构建未使用商业代码签名证书，Windows SmartScreen 可能显示未知发布者。
 
+使用帮助：
+- 按 F1 或「帮助 → 完整使用手册」打开离线手册，可按章节搜索。
+- 包内附带 CommBox使用手册.md，覆盖全部功能及故障排查。
+- 「查看 → 视图设置」选择页面内容；AI 输入问题后点击发送，报文可选附带，附件可多选追加。
+
 支持：
 - 串口文本/HEX 收发及常用串口参数
 - TCP/UDP 客户端与服务端
@@ -15,7 +20,7 @@ CommBox（Windows 64 位）
 - 每条原始接收数据保存为 SQLite BLOB 和 UTF-8 字符串
 - SQLite 按日期和 100 MiB 自动分文件
 
-VirtualCOM（内置管理及独立工具，v0.2.2）：
+VirtualCOM（内置管理及独立工具，v0.2.3）：
 1. 在 CommBox 的「工具 → 虚拟串口管理」创建一对端口（例如 COM10 ⇄ COM11），留空自动选择空闲编号。
 2. 打开两个 CommBox 窗口，在「串口」模式点刷新，分别连接这一对的一端，即可双向收发。
 3. 命令行：VirtualCOM.exe run 创建串口对，CommBox-CLI.exe -list 查看端口，-port COM10 打开。

@@ -65,7 +65,7 @@ func (a *application) validateSend() {
 	}
 	data, err := core.ParseData(a.sendEdit.Text(), a.hexSend.Checked(), a.eol.Text())
 	if err != nil {
-		a.setSendFeedback(err.Error(), true)
+		a.setSendFeedback(chineseError(err), true)
 		return
 	}
 	if len(data) == 0 {
@@ -79,7 +79,7 @@ func (a *application) setSendFeedback(text string, failed bool) {
 	if a.sendPreview == nil {
 		return
 	}
-	a.sendPreview.SetText(text)
+	a.sendPreview.SetText(strings.SplitN(text, "\r\n", 2)[0])
 	a.sendPreview.SetToolTipText(text)
 	color := colorMuted
 	if failed {

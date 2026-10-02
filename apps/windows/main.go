@@ -24,6 +24,8 @@ import (
 var modes = []string{"串口", "TCP", "UDP", "串口服务器", "HTTP 客户端"}
 
 type application struct {
+	views                                viewSettings
+	manualWindow                         *walk.MainWindow
 	virtualCOMManager                    *virtualcom.Manager
 	virtualCOMWindow                     *walk.MainWindow
 	loadingRecent                        bool
@@ -236,13 +238,13 @@ func main() {
 	app := new(application)
 	configDir, err := os.UserConfigDir()
 	if err != nil {
-		walk.MsgBox(nil, "CommBox", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		walk.MsgBox(nil, "CommBox", chineseError(err), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
 	dataDir := filepath.Join(configDir, "CommBox", "data")
 	app.engine, err = core.New(dataDir, nil, app.onLog)
 	if err != nil {
-		walk.MsgBox(nil, "SQLite 初始化失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		walk.MsgBox(nil, "SQLite 初始化失败", chineseError(err), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
 	app.engine.SetOnClosed(app.onClosed)
@@ -250,7 +252,7 @@ func main() {
 	defer app.engine.Close()
 	app.packetModel = new(packetTableModel)
 	if err = app.createWindow(); err != nil {
-		walk.MsgBox(nil, "界面初始化失败", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+		walk.MsgBox(nil, "界面初始化失败", chineseError(err), walk.MsgBoxOK|walk.MsgBoxIconError)
 		return
 	}
 	if icon := uiIcon("app"); icon != nil {
@@ -557,7 +559,7 @@ func (a *application) sendOnce(fromTimer bool) {
 				if fromTimer {
 					a.stopTimer(true)
 				}
-				a.setSendFeedback("发送失败："+err.Error(), true)
+				a.setSendFeedback("发送失败："+chineseError(err), true)
 				return
 			}
 			a.setSendFeedback("发送完成 · "+time.Now().Format("15:04:05"), false)
@@ -906,7 +908,7 @@ func (a *application) openMonitor() {
 					PushButton{Text: "清空", OnClicked: func() { _ = a.monitorEdit.SetText("") }},
 					PushButton{Text: "导出", OnClicked: func() { a.exportText(a.monitorEdit.Text(), "monitor-data", a.monitorWindow) }},
 				}},
-				TextEdit{AssignTo: &a.monitorEdit, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: fontMono, PointSize: sizeData}},
+				TextEdit{AssignTo: &a.monitorEdit, ReadOnly: true, Background: SolidColorBrush{Color: walk.RGB(255, 255, 255)}, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: fontMono, PointSize: sizeData}},
 			},
 		}).Create()
 		if err != nil {
@@ -1406,7 +1408,7 @@ func (a *application) openToolbox() {
 					HSpacer{},
 				}},
 				// 结果用只读文本框而不是 Label:Label 选不中,结果没法复制。
-				TextEdit{AssignTo: &a.toolboxOutput, ReadOnly: true, VScroll: true, MinSize: Size{Height: 72}, StretchFactor: 1},
+				TextEdit{AssignTo: &a.toolboxOutput, ReadOnly: true, Background: SolidColorBrush{Color: walk.RGB(255, 255, 255)}, VScroll: true, MinSize: Size{Height: 72}, StretchFactor: 1},
 				Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true}, Children: []Widget{
 					PushButton{Text: "复制结果", MinSize: Size{Height: btnH}, OnClicked: func() {
 						if err := walk.Clipboard().SetText(a.toolboxOutput.Text()); err != nil {
@@ -1462,5 +1464,5 @@ func (a *application) showError(err error) {
 	if a.mw != nil {
 		owner = a.mw
 	}
-	walk.MsgBox(owner, "CommBox", err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+	walk.MsgBox(owner, "CommBox", chineseError(err), walk.MsgBoxOK|walk.MsgBoxIconError)
 }

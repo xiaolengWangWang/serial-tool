@@ -1102,6 +1102,7 @@ static NSString *humanBytes(long long n) {
     Submenu(mainMenu, @"视图", viewMenu);
 
     NSMenu *helpMenu = [[[NSMenu alloc] initWithTitle:@"帮助"] autorelease];
+    Item(helpMenu, @"完整使用手册", @selector(openUserManual:), @"", 0);
     Item(helpMenu, @"检查更新", @selector(checkUpdate:), @"", 0);
     _autoUpdateItem = [helpMenu addItemWithTitle:@"启动时自动检查更新" action:@selector(toggleAutoUpdate:) keyEquivalent:@""];
     _autoUpdateItem.state = GoAutoUpdateEnabled() ? NSControlStateValueOn : NSControlStateValueOff;
@@ -1122,6 +1123,13 @@ static NSString *humanBytes(long long n) {
     char *page = GoReleasesPage();
     NSString *url = [NSString stringWithUTF8String:page ?: ""]; free(page);
     if (url.length) [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:url]];
+}
+
+- (void)openUserManual:(id)sender {
+    NSString *path = [[NSBundle mainBundle] pathForResource:@"CommBox使用手册" ofType:@"md"];
+    if (!path || ![[NSWorkspace sharedWorkspace] openFile:path withApplication:@"TextEdit"]) {
+        [self alert:@"无法打开离线手册，请使用完整的 CommBox 安装包。"];
+    }
 }
 
 // checkUpdate: 手动检查:无论结果如何都给反馈。后台查、主线程弹窗。

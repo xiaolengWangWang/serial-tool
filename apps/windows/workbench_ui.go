@@ -22,6 +22,7 @@ import (
 // 右栏 AI 面板（默认隐藏）。底部为一行状态栏。
 func (a *application) createWindow() error {
 	a.peerBaseline = map[string]core.ConnectionInfo{}
+	a.views = loadViewSettings(a.engine)
 	a.assistant = &assistantPanel{app: a}
 	if err := (MainWindow{
 		AssignTo: &a.mw,
@@ -74,6 +75,7 @@ func (a *application) createWindow() error {
 	a.updateSelectionLabel()
 	a.updateFooterIcon()
 	a.initViewSwitch()
+	a.applyViews()
 	a.workArea = func() (win.RECT, bool) { return workAreaFor(a.mw.Handle()) }
 	a.watchWorkArea()
 	a.fitToWorkArea()
@@ -87,7 +89,7 @@ func (a *application) createWindow() error {
 func (a *application) menus() []MenuItem {
 	return []MenuItem{
 		Menu{Text: "文件", Items: []MenuItem{Action{Text: "新建实例", Image: uiIcon("new"), OnTriggered: a.newInstance}, Action{Text: "保存 TXT", Image: uiIcon("save"), OnTriggered: func() { a.exportText(a.packetModel.exportText(), "commbox", a.mw) }}, Action{Text: "导出 CSV", Image: uiIcon("save"), OnTriggered: a.exportCSV}, Action{Text: "退出", OnTriggered: func() { a.mw.Close() }}}},
-		Menu{Text: "查看", Items: []MenuItem{Action{Text: "AI 助手", Image: uiIcon("ai"), OnTriggered: a.toggleAssistant}, Action{Text: "实时监控窗口", Image: uiIcon("client"), OnTriggered: a.openMonitor}}},
+		Menu{Text: "查看", Items: []MenuItem{Action{Text: "视图设置…", Image: uiIcon("settings"), OnTriggered: a.showViewSettings}, Separator{}, Action{Text: "AI 助手", Image: uiIcon("ai"), OnTriggered: a.toggleAssistant}, Action{Text: "实时监控窗口", Image: uiIcon("client"), OnTriggered: a.openMonitor}}},
 		Menu{Text: "工具", Items: []MenuItem{Action{Text: "HTTP 工作台", Image: uiIcon("http"), OnTriggered: a.openHTTPWorkspace}, Action{Text: "校验与转换", Image: uiIcon("tool"), OnTriggered: a.openToolbox}, Action{Text: "连接管理", Image: uiIcon("settings"), OnTriggered: a.openConnections}, Action{Text: "串口服务器", OnTriggered: func() {
 			if !a.connected && !a.connecting {
 				a.mode.SetCurrentIndex(3)
@@ -95,7 +97,7 @@ func (a *application) menus() []MenuItem {
 			}
 		}}, Action{Text: "虚拟串口管理", Image: uiIcon("virtualcom"), OnTriggered: a.openVirtualCOM}, Action{Text: "VirtualCOM 连接说明", OnTriggered: a.showVirtualCOMHelp}, Action{Text: "历史数据分析", Image: uiIcon("history"), OnTriggered: a.openDatabaseAnalysis}}},
 		Menu{Text: "设置", Items: []MenuItem{Action{Text: "AI 设置", OnTriggered: a.assistant.settings}, Action{Text: "连接数与桥接", OnTriggered: a.openConnections}, Separator{}, Action{AssignTo: &a.autoUpdateAction, Text: "启动时检查更新", Checkable: true, OnTriggered: a.toggleAutoUpdate}}},
-		Menu{Text: "帮助", Items: []MenuItem{Action{Text: "使用说明", OnTriggered: a.showHelp}, Action{Text: "检查更新", OnTriggered: a.checkUpdate}, Action{Text: "发送 (F5)", Image: uiIcon("send"), Shortcut: Shortcut{Key: walk.KeyF5}, OnTriggered: func() { a.sendOnce(false) }}}},
+		Menu{Text: "帮助", Items: []MenuItem{Action{Text: "完整使用手册", Image: uiIcon("help"), Shortcut: Shortcut{Key: walk.KeyF1}, OnTriggered: a.showHelp}, Action{Text: "检查更新", OnTriggered: a.checkUpdate}, Action{Text: "发送 (F5)", Image: uiIcon("send"), Shortcut: Shortcut{Key: walk.KeyF5}, OnTriggered: func() { a.sendOnce(false) }}}},
 	}
 }
 
@@ -111,7 +113,7 @@ func (a *application) connectionPanel() Widget {
 				Label{Text: "连接配置", Font: fontSection, TextColor: colorBlue},
 				HSpacer{},
 				// 只在窄屏单栏时显示：连接栏占满窗口，由这里回到数据监控。
-				PushButton{AssignTo: &a.dataPageButton, Text: "返回数据", Visible: false, MinSize: Size{Width: 88, Height: btnH}, MaxSize: Size{Width: 88}, OnClicked: a.showDataPage},
+				PushButton{AssignTo: &a.dataPageButton, Text: "返回视图", Visible: false, MinSize: Size{Width: 88, Height: btnH}, MaxSize: Size{Width: 88}, OnClicked: a.showDataPage},
 			}},
 			ComboBox{AssignTo: &a.mode, ToolTipText: "串口 / TCP / UDP / 串口服务器 / HTTP 客户端", Model: modes, CurrentIndex: 1, MinSize: Size{Height: rowH}, OnCurrentIndexChanged: a.updateMode},
 			Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
@@ -178,7 +180,7 @@ func (a *application) monitorPanel() Widget {
 			PushButton{AssignTo: &a.connectionPageButton, Text: "连接配置", Visible: false, MinSize: Size{Width: 88, Height: btnH}, MaxSize: Size{Width: 88}, OnClicked: a.showConnectionPage},
 			toolButton("清空", "clear", 80, func() { a.packetModel.clear(); a.updatePacketStats(); a.updateSelectionLabel() }),
 			toolButton("保存", "save", 80, func() { a.exportText(a.packetModel.exportText(), "commbox", a.mw) }),
-			toolButton("AI 分析", "ai", 104, func() { a.showAssistant(); a.assistant.analyze("全面诊断") }),
+			toolButton("AI 分析", "ai", 104, func() { a.showAssistant() }),
 		}},
 		// 常用筛选只占一行，进阶条件按需展开，把高度留给报文。
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
@@ -230,7 +232,7 @@ func (a *application) packetViews() Widget {
 				CheckBox{AssignTo: &a.showTime, Text: "时间", Checked: true, MinSize: Size{Width: 72}, MaxSize: Size{Width: 72}, OnCheckedChanged: a.updateDisplay},
 			}},
 		}},
-		TextEdit{AssignTo: &a.logEdit, Visible: false, ReadOnly: true, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: fontMono, PointSize: sizeData}},
+		TextEdit{AssignTo: &a.logEdit, Visible: false, ReadOnly: true, Background: SolidColorBrush{Color: colorPanel}, VScroll: true, HScroll: true, MaxLength: 5000000, Font: Font{Family: fontMono, PointSize: sizeData}},
 	}}
 }
 
@@ -250,10 +252,16 @@ func (a *application) showLogView(log bool) {
 	if a.dataView == nil || a.logEdit == nil {
 		return
 	}
+	if !a.views.Data && a.views.Log {
+		log = true
+	}
+	if !a.views.Log {
+		log = false
+	}
 	a.viewData.SetChecked(!log)
 	a.viewLog.SetChecked(log)
-	a.dataView.SetVisible(!log)
-	a.logEdit.SetVisible(log)
+	a.dataView.SetVisible(!log && a.views.Data)
+	a.logEdit.SetVisible(log && a.views.Log)
 	a.balanceSendArea() // 两个视图的最小高度不同。
 }
 
@@ -296,7 +304,7 @@ func (a *application) sendArea() Widget {
 	return Composite{AssignTo: &a.sendPane, StretchFactor: 3, Background: SolidColorBrush{Color: colorCanvas}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 6, Top: 2, Right: 6}, Spacing: 4}, Children: []Widget{
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 			Label{Text: "发送", Font: Font{Family: fontUI, PointSize: sizeBody, Bold: true}, TextColor: colorBlue, Alignment: AlignHNearVCenter, MinSize: Size{Width: 36}, MaxSize: Size{Width: 36}},
-			CheckBox{AssignTo: &a.hexSend, Text: "HEX", Checked: true, MinSize: Size{Width: 56}, MaxSize: Size{Width: 56}},
+			CheckBox{AssignTo: &a.hexSend, Text: "HEX", ToolTipText: "勾选：按十六进制字节发送，如 01 03；取消：按文本发送。", Checked: true, MinSize: Size{Width: 56}, MaxSize: Size{Width: 56}},
 			inlineLabel("行尾", 38),
 			ComboBox{AssignTo: &a.eol, Model: []string{"无", "LF", "CR", "CRLF"}, CurrentIndex: 0, MinSize: Size{Width: 80, Height: rowH}, MaxSize: Size{Width: 80}},
 			inlineLabel("目标", 38),
@@ -308,7 +316,7 @@ func (a *application) sendArea() Widget {
 			HSpacer{StretchFactor: stretchFill},
 			// 按钮与 HEX 复选框的理想高度相同（行内控件按理想高度排，上限管不住），
 			// 显示与否都不改变这一行的高度。
-			PushButton{AssignTo: &a.sendExtrasToggle, Text: "更多发送", Visible: false, ToolTipText: "窗口较矮时，历史、快捷与定时 / 循环收在这里；展开会占用数据表的高度", MinSize: Size{Width: 84}, MaxSize: Size{Width: 84}, OnClicked: a.toggleSendExtras},
+			PushButton{AssignTo: &a.sendExtrasToggle, Text: "更多发送", Visible: false, ToolTipText: "展开历史、快捷发送、定时和循环设置；收起后正在运行的发送任务仍会继续", MinSize: Size{Width: 84}, MaxSize: Size{Width: 84}, OnClicked: a.toggleSendExtras},
 		}},
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 8}, StretchFactor: 1, Children: []Widget{
 			TextEdit{AssignTo: &a.sendEdit, StretchFactor: 1, VScroll: true, MinSize: Size{Height: minSendEditHeight}, ToolTipText: "输入 HEX 字节或取消勾选 HEX 后输入文本；F5 发送，验证按钮检查内容", Font: Font{Family: fontMono, PointSize: sizeData}},
@@ -326,11 +334,11 @@ func (a *application) sendArea() Widget {
 				ComboBox{AssignTo: &a.favorites, Editable: true, StretchFactor: 1, MinSize: Size{Width: 96, Height: rowH}, OnCurrentIndexChanged: a.onFavoriteSelected},
 				toolButton("保存", "save", 92, a.saveFavorite),
 				toolButton("删除", "", 70, a.deleteFavorite),
-				CheckBox{AssignTo: &a.clearAfterSend, Text: "发送后清空", MinSize: Size{Width: 112}, MaxSize: Size{Width: 112}},
+				CheckBox{AssignTo: &a.clearAfterSend, Text: "发送后清空", ToolTipText: "成功发送后清空输入框，不影响运行中的定时或循环任务。", MinSize: Size{Width: 112}, MaxSize: Size{Width: 112}},
 			}},
 			Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 				inlineLabel("间隔 ms", 66),
-				LineEdit{AssignTo: &a.interval, Text: "1000", MinSize: Size{Width: 72, Height: rowH}, MaxSize: Size{Width: 72}},
+				LineEdit{AssignTo: &a.interval, Text: "1000", ToolTipText: "最小 10 ms；按启动时的报文和目标重复发送，修改内容需停止后重启。", MinSize: Size{Width: 72, Height: rowH}, MaxSize: Size{Width: 72}},
 				PushButton{AssignTo: &a.timerButton, Text: "开始定时", MinSize: Size{Width: 96, Height: btnH}, MaxSize: Size{Width: 96}, OnClicked: a.toggleTimer},
 				inlineLabel("次数", 38),
 				LineEdit{AssignTo: &a.loopCount, Text: "0", MinSize: Size{Width: 62, Height: rowH}, MaxSize: Size{Width: 62}, ToolTipText: "循环次数，0 表示持续发送"},
@@ -353,6 +361,12 @@ func (a *application) balanceSendArea() {
 	if a.dataSendPane == nil || a.dataPane == nil || a.sendPane == nil || a.sendExtras == nil || a.balancingSend {
 		return
 	}
+	if !a.views.Send || (!a.views.Data && !a.views.Log) {
+		a.sendExtras.SetVisible(a.sendExtrasOpen)
+		a.sendExtrasToggle.SetVisible(true)
+		a.updateSendExtrasToggle()
+		return
+	}
 	a.balancingSend = true
 	defer func() { a.balancingSend = false }()
 	dpi := a.dataSendPane.DPI()
@@ -368,13 +382,13 @@ func (a *application) balanceSendArea() {
 	if a.sendExtras.Visible() {
 		compact -= extras
 	}
-	short := compact+extras > target
-	open := !short || a.sendExtrasOpen
+
+	open := a.sendExtrasOpen
 	if a.sendExtras.Visible() != open {
 		a.sendExtras.SetVisible(open)
 	}
-	if a.sendExtrasToggle.Visible() != short {
-		a.sendExtrasToggle.SetVisible(short)
+	if !a.sendExtrasToggle.Visible() {
+		a.sendExtrasToggle.SetVisible(true)
 	}
 	a.updateSendExtrasToggle()
 
@@ -694,21 +708,33 @@ func (a *application) arrangePanes(ai bool) {
 	}
 	a.arrangingPanes = true
 	defer func() { a.arrangingPanes = false }()
-	conn, monitor := !ai || a.mw.ClientBounds().Width >= bothSidePanesWidth, true
+	hasMonitor := a.views.Data || a.views.Log || a.views.Send
+	conn, monitor := (a.views.Connection || a.connectionPage) && (!ai || a.mw.ClientBounds().Width >= bothSidePanesWidth || !hasMonitor), hasMonitor
 	connMax, aiMax, monitorMin := connectionPaneMaxWidth, assistantMaxWidth, minMonitorWidth
 	if a.narrow {
-		conn, monitor = a.connectionPage && !ai, !ai && !a.connectionPage
+		conn, monitor = (a.connectionPage || (!hasMonitor && a.views.Connection)) && !ai, hasMonitor && !ai && !a.connectionPage
 		connMax, aiMax, monitorMin = 0, 0, 0
+	}
+	if !hasMonitor {
+		if !ai {
+			conn = true // Closing the only AI pane must leave a usable workspace.
+		}
+		if ai && !conn {
+			aiMax = 0
+		}
+		if conn && !ai {
+			connMax = 0
+		}
 	}
 	setWidthLimits(a.connectionPane, connectionPaneMinWidth, connMax)
 	setWidthLimits(a.assistant.panel, assistantMinWidth, aiMax)
 	setWidthLimits(a.monitorPane, monitorMin, 0)
 	// walk 的 ScrollView 关掉横向滚动后不能横向拉伸，去掉宽度上限也照样停在最小宽度。
 	// 窄屏单栏时打开横向滚动让侧栏占满窗口；侧栏比内容宽，不会真的出现横向滚动条。
-	setHorizontalScroll(a.connectionPane, a.narrow)
-	setHorizontalScroll(a.assistant.panel, a.narrow)
-	setVisible(a.connectionPageButton, a.narrow)
-	setVisible(a.dataPageButton, a.narrow)
+	setHorizontalScroll(a.connectionPane, a.narrow || !hasMonitor)
+	setHorizontalScroll(a.assistant.panel, a.narrow || !hasMonitor)
+	setVisible(a.connectionPageButton, a.narrow || !a.views.Connection)
+	setVisible(a.dataPageButton, a.narrow || !a.views.Connection)
 	// 先收起再展开：反过来 walk 会先按多出的一栏把窗口撑宽。
 	if !conn {
 		setVisible(a.connectionPane, false)
@@ -752,11 +778,16 @@ func setHorizontalScroll(sv *walk.ScrollView, on bool) {
 
 func (a *application) showConnectionPage() {
 	a.connectionPage = true
+	a.assistant.panel.SetVisible(false)
 	a.arrangePanes(false)
 }
 
 func (a *application) showDataPage() {
 	a.connectionPage = false
+	if !a.views.Data && !a.views.Log && !a.views.Send && a.views.AI {
+		a.showAssistant()
+		return
+	}
 	a.arrangePanes(a.assistant.panel.Visible())
 }
 
@@ -894,12 +925,14 @@ func (a *application) analyzeSelected() {
 	}
 	a.showAssistant()
 	a.assistant.scope.SetCurrentIndex(0)
-	a.assistant.analyze("全面诊断")
+	a.assistant.attach.SetChecked(true)
+	a.assistant.packetOptions.SetVisible(true)
+	a.assistant.chat.input.SetText("请分析选中的报文。")
+	a.assistant.chat.input.SetFocus()
 }
 
 func (a *application) toggleAssistant() {
 	if a.assistant.panel.Visible() {
-		a.assistant.stop()
 		a.assistant.panel.SetVisible(false)
 		a.arrangePanes(false)
 	} else {
@@ -978,7 +1011,4 @@ func (a *application) exportCSV() {
 	if err = os.WriteFile(fd.FilePath, []byte(out.String()), 0600); err != nil {
 		a.showError(err)
 	}
-}
-func (a *application) showHelp() {
-	walk.MsgBox(a.mw, "CommBox 使用说明", "选择左侧工作模式 → 填写参数 → 连接 → 输入报文 → F5 发送。\r\n\r\n客户端列表右键可定向发送、过滤和断开。同 IP 的不同端口按独立会话管理。\r\n未勾选 HEX 时按文本发送。定时 / 循环固定使用启动时的数据和目标。\r\n数据保留最新 10000 条，完整历史自动保存于本地。窗口较矮时，历史、快捷与定时 / 循环收在发送区的「更多发送」里。\r\n\r\nAI 默认关闭。设置服务后，主动分析或追问才提交所选数据。AI 失败不影响通信。\r\nVirtualCOM 免驱动端口可直接在串口模式打开，详见「工具 → VirtualCOM 连接说明」。", walk.MsgBoxOK)
 }

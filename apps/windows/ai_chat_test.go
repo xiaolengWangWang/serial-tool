@@ -185,6 +185,47 @@ func waitChatAttachments(t *testing.T, a *application, onUI func(func())) {
 	t.Error("attachment extraction did not finish")
 }
 
+func TestAssistantCanChatWithoutImplicitPackets(t *testing.T) {
+	bodies := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []analysisTurn `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		bodies <- req.Messages[len(req.Messages)-1].Content
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"可以"}}]}`)
+	}))
+	defer srv.Close()
+	a := newWorkbenchForTest(t)
+	driveWorkbench(a, func(onUI func(func())) {
+		onUI(func() {
+			a.showAssistant()
+			a.assistant.enabled = true
+			a.assistant.config.Base, a.assistant.config.Key = srv.URL, "test"
+			a.assistant.chat.context = "不应自动上传的旧报文"
+			a.assistant.chat.input.SetText("如何排查超时？")
+			a.assistant.chat.submit()
+		})
+		select {
+		case got := <-bodies:
+			if got != "如何排查超时？" {
+				t.Errorf("unexpected implicit data: %q", got)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("plain question was not sent")
+		}
+		for i := 0; i < 100; i++ {
+			var busy bool
+			onUI(func() { busy = a.assistant.chat.busy })
+			if !busy {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+}
+
 func TestAssistantRestoresAttachmentAfterRequestFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "service unavailable", http.StatusBadRequest)
@@ -358,7 +399,9 @@ func TestAssistantConversationFlow(t *testing.T) {
 			w.enabled = true
 			w.config.Base, w.config.Key, w.config.Model = srv.URL, "test", "fake"
 			w.scope.SetCurrentIndex(1)
-			w.analyze("全面诊断")
+			w.attach.SetChecked(true)
+			w.chat.input.SetText("请全面诊断报文")
+			w.chat.submit()
 		})
 		wait := func() {
 			for i := 0; i < 100; i++ {
@@ -387,6 +430,7 @@ func TestAssistantConversationFlow(t *testing.T) {
 			if !strings.Contains(c.status.Text(), "AI 回答完成") {
 				errs = append(errs, "状态: "+c.status.Text())
 			}
+			a.assistant.attach.SetChecked(false)
 			c.input.SetText("第 2 条怎么修？")
 			c.submit()
 			if c.input.Text() != "" {

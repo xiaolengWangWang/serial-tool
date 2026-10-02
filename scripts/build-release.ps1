@@ -78,6 +78,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'VirtualCOM CLI build failed' }
 
     Export-GitText -Revision 'HEAD' -Path 'docs/virtualcom-commbox-compat.md' -Destination (Join-Path $outputDir 'VirtualCOM使用说明.md')
+    Export-GitText -Revision 'HEAD' -Path 'docs/CommBox使用手册.md' -Destination (Join-Path $outputDir 'CommBox使用手册.md')
     Export-GitText -Revision 'HEAD' -Path 'apps/windows/README-Windows.txt' -Destination (Join-Path $outputDir 'README-Windows.txt')
 
     # subsystem: 2 = Windows GUI, 3 = 控制台
@@ -122,7 +123,7 @@ try {
         throw 'CommBox-CLI.exe links the TLS client; look for package-level init touching net/http'
     }
 
-    $files = @('CommBox.exe', 'CommBox-CLI.exe', 'VirtualCOM-GUI.exe', 'VirtualCOM.exe', 'README-Windows.txt', 'VirtualCOM使用说明.md')
+    $files = @('CommBox.exe', 'CommBox-CLI.exe', 'VirtualCOM-GUI.exe', 'VirtualCOM.exe', 'README-Windows.txt', 'VirtualCOM使用说明.md', 'CommBox使用手册.md')
     $sums = foreach ($name in $files) { '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $outputDir $name)).Hash.ToLowerInvariant(), $name }
     [IO.File]::WriteAllText((Join-Path $outputDir 'SHA256SUMS.txt'), ($sums -join "`n") + "`n", (New-Object Text.UTF8Encoding($false)))
     $files += 'SHA256SUMS.txt'
