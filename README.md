@@ -54,7 +54,7 @@ Windows 串口名可写 `COM3`。`./commbox -h` 查看全部参数。
 - **AI 深度分析**（默认关闭，需配置服务与 Key）：
   - macOS：在分析中心内流式对话。点击即发送当前报文、选中报文或数据库报告，回答在结果区逐段显示；可停止并保留部分回答，在下方输入框继续提问，对话自动存入本地 Markdown。
   - Windows：右侧 AI 面板与历史数据分析窗口共用流式对话，可停止、追问、复制与导出；疑似 Modbus 帧附带本地功能码、字节数与 CRC 结论；长报告截取前 32 KiB；服务错误说明 Key、余额、限流或网络原因。AI Key 存 Windows 凭据管理器。
-  - Windows 对话可添加文本日志、CSV、JSON、DOCX、可选中文字的 PDF 和 PNG / JPEG / GIF / WebP 图片；附件随提问发送，图片需使用支持视觉的模型（DeepSeek 可选 `deepseek-flash`）。每次最多 6 个附件，文本提取上限 64 KiB / 个，PDF / DOCX 文件上限 5 MiB / 个，PDF 单页解压内容上限 4 MiB，图片上限 2 MiB / 个且不超过 3200 万像素；扫描版 PDF 暂不支持。PDF 在独立进程中解析，限时 20 秒；对话累计文字上限 512 KiB、图片编码上限 24 MiB。
+  - Windows 对话可添加文本日志、CSV、JSON、DOCX、可选中文字的 PDF 和 PNG / JPEG / GIF / WebP 图片；附件随提问发送，图片需使用支持视觉的模型（DeepSeek 可选 `deepseek-flash`）。支持多选或分批添加，列表显示附件数量并可逐项移除；重复路径自动跳过，单个文件失败不会取消其他有效附件。每次最多 6 个附件，文本提取上限 64 KiB / 个，PDF / DOCX 文件上限 5 MiB / 个，PDF 单页解压内容上限 4 MiB，图片上限 2 MiB / 个且不超过 3200 万像素；扫描版 PDF 暂不支持。PDF 在独立进程中解析，限时 20 秒；对话累计文字上限 512 KiB、图片编码上限 24 MiB。
 - **在线更新**（帮助 → 检查更新）：启动时自动检查（可关闭），只在新版本带本平台安装包时提示；macOS 按芯片匹配 DMG，下载后校验 SHA256 再打开。
 
 ## 工作模式
@@ -155,6 +155,8 @@ macOS/Linux 使用 PTY，无需额外驱动。Windows 不提供 TCP→虚拟串�
 ## 构建
 
 本仓库分别提供 Windows、macOS 和 Linux 构建产物，按各平台的构建与验证流程发布。
+
+GitHub Actions 的 `Build and release CommBox` 工作流可手动运行，在 Windows x64、macOS Apple Silicon / Intel、Linux amd64 / arm64 原生环境执行测试并构建。勾选 `publish` 后，所有平台成功才创建正式版本并上传产物与 SHA256 校验值。macOS / Linux 本机打包入口为 `bash scripts/build-unix.sh`。
 
 Windows 发布包（两个 CommBox 程序、两个 VirtualCOM 程序、说明文档与 SHA256SUMS）由 `scripts/build-release.ps1` 生成，版本号从源码常量读取：
 

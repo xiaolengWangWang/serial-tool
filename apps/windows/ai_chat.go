@@ -35,9 +35,11 @@ type aiChat struct {
 	view                *walk.TextEdit
 	input               *walk.LineEdit
 	button              *walk.PushButton
-	fileList            *walk.ComboBox
+	fileList            *walk.ListBox
+	fileCount           *walk.Label
 	fileAdd, fileRemove *walk.PushButton
 	files               []aiattachment.Attachment
+	filePaths           []string
 	loading             bool
 	loadID              uint64
 
@@ -62,11 +64,24 @@ type chatEntry struct {
 type chatDraft struct {
 	question string
 	files    []aiattachment.Attachment
+	paths    []string
 }
 
 func (c *aiChat) widgets() []Widget {
 	return []Widget{
 		TextEdit{AssignTo: &c.view, ReadOnly: true, VScroll: true, StretchFactor: 1, MinSize: Size{Height: 120}, MaxLength: 4 << 20},
+		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
+			PushButton{AssignTo: &c.fileAdd, Text: "添加附件", Image: uiIcon("attach"), MinSize: Size{Width: 96, Height: btnH}, MaxSize: Size{Width: 96}, ToolTipText: "可多选或分批添加，最多 6 个；发送时才上传", OnClicked: c.addFiles},
+			Label{AssignTo: &c.fileCount, Text: "0 / 6", TextColor: colorMuted}, HSpacer{},
+			PushButton{AssignTo: &c.fileRemove, Text: "移除", MinSize: Size{Width: 52, Height: btnH}, MaxSize: Size{Width: 52}, Enabled: false, OnClicked: c.removeFile},
+		}},
+		ListBox{AssignTo: &c.fileList, Model: []string{}, Visible: false, MinSize: Size{Width: 70, Height: 54}, MaxSize: Size{Height: 70}, ToolTipText: "已添加的附件；选中后点击移除", OnCurrentIndexChanged: func() {
+			i := c.fileList.CurrentIndex()
+			c.fileRemove.SetEnabled(i >= 0 && i < len(c.files) && !c.busy && !c.loading)
+			if i >= 0 && i < len(c.files) {
+				c.fileList.SetToolTipText(c.files[i].Name)
+			}
+		}},
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 			LineEdit{AssignTo: &c.input, CueBanner: "继续询问，Enter 发送", StretchFactor: stretchFill, MinSize: Size{Width: 80, Height: rowH}, OnKeyDown: func(key walk.Key) {
 				if key == walk.KeyReturn {
@@ -80,11 +95,6 @@ func (c *aiChat) widgets() []Widget {
 					c.submit()
 				}
 			}},
-		}},
-		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
-			PushButton{AssignTo: &c.fileAdd, Text: "添加附件", MinSize: Size{Width: 76, Height: btnH}, MaxSize: Size{Width: 76}, OnClicked: c.addFiles},
-			ComboBox{AssignTo: &c.fileList, Model: []string{"未添加附件"}, StretchFactor: stretchFill, MinSize: Size{Width: 70, Height: rowH}, MaxSize: Size{Width: 110}, ToolTipText: "选择要移除的附件"},
-			PushButton{AssignTo: &c.fileRemove, Text: "移除", MinSize: Size{Width: 52, Height: btnH}, MaxSize: Size{Width: 52}, Enabled: false, OnClicked: c.removeFile},
 		}},
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 			toolButton("清空", "", 56, c.clear),
@@ -119,10 +129,14 @@ func (c *aiChat) loadFiles(paths []string) {
 	if len(paths) == 0 {
 		return
 	}
-	if len(c.files)+len(paths) > 6 {
-		c.status.SetText("一次最多添加 6 个附件")
-		return
+	for len(c.filePaths) < len(c.files) {
+		c.filePaths = append(c.filePaths, "")
 	}
+	seen := make(map[string]bool, len(c.filePaths))
+	for _, path := range c.filePaths {
+		seen[path] = true
+	}
+	remaining := 6 - len(c.files)
 	c.loading = true
 	c.loadID++
 	id := c.loadID
@@ -131,8 +145,23 @@ func (c *aiChat) loadFiles(paths []string) {
 	c.status.SetText("正在读取附件…")
 	go func() {
 		var added []aiattachment.Attachment
-		var err error
+		var addedPaths, failures []string
+		duplicates := 0
 		for _, path := range paths {
+			absolute, err := filepath.Abs(path)
+			if err != nil {
+				failures = append(failures, filepath.Base(path)+": "+err.Error())
+				continue
+			}
+			key := strings.ToLower(filepath.Clean(absolute))
+			if seen[key] {
+				duplicates++
+				continue
+			}
+			if len(added) >= remaining {
+				failures = append(failures, filepath.Base(path)+": 超过 6 个附件上限")
+				continue
+			}
 			var file aiattachment.Attachment
 			if strings.EqualFold(filepath.Ext(path), ".pdf") {
 				file, err = readPDFAttachment(path)
@@ -140,9 +169,12 @@ func (c *aiChat) loadFiles(paths []string) {
 				file, err = aiattachment.Read(path)
 			}
 			if err != nil {
-				break
+				failures = append(failures, filepath.Base(path)+": "+err.Error())
+				continue
 			}
+			seen[key] = true
 			added = append(added, file)
+			addedPaths = append(addedPaths, key)
 		}
 		if c.app.closed.Load() {
 			return
@@ -153,20 +185,24 @@ func (c *aiChat) loadFiles(paths []string) {
 			}
 			c.loading = false
 			c.fileAdd.SetEnabled(!c.busy)
-			if err != nil {
-				c.status.SetText(err.Error())
-				c.refreshFiles()
-				return
-			}
 			c.files = append(c.files, added...)
+			c.filePaths = append(c.filePaths, addedPaths...)
 			c.refreshFiles()
+			message := fmt.Sprintf("已添加 %d 个附件 · 发送时才上传", len(c.files))
+			if duplicates > 0 {
+				message += fmt.Sprintf(" · 跳过 %d 个重复文件", duplicates)
+			}
 			for _, file := range added {
 				if file.DataURL != "" {
-					c.status.SetText("图片需支持视觉的模型，例如 deepseek-flash")
-					return
+					message += " · 图片需视觉模型"
+					break
 				}
 			}
-			c.status.SetText(fmt.Sprintf("已添加 %d 个附件 · 发送时才上传", len(c.files)))
+			if len(failures) > 0 {
+				message += "；未添加：" + strings.Join(failures, "；")
+			}
+			c.status.SetText(message)
+			c.status.SetToolTipText(message)
 		})
 	}()
 }
@@ -180,6 +216,9 @@ func (c *aiChat) removeFile() {
 		return
 	}
 	c.files = append(c.files[:i], c.files[i+1:]...)
+	if i < len(c.filePaths) {
+		c.filePaths = append(c.filePaths[:i], c.filePaths[i+1:]...)
+	}
 	c.refreshFiles()
 	c.status.SetText(fmt.Sprintf("剩余 %d 个附件", len(c.files)))
 }
@@ -192,11 +231,12 @@ func (c *aiChat) refreshFiles() {
 	for i, file := range c.files {
 		names[i] = file.Name
 	}
-	if len(names) == 0 {
-		names = []string{"未添加附件"}
-	}
 	c.fileList.SetModel(names)
-	c.fileList.SetCurrentIndex(0)
+	c.fileList.SetVisible(len(names) > 0)
+	if len(names) > 0 {
+		c.fileList.SetCurrentIndex(0)
+	}
+	c.fileCount.SetText(fmt.Sprintf("%d / 6", len(names)))
 	c.fileRemove.SetEnabled(len(c.files) > 0 && !c.busy && !c.loading)
 }
 
@@ -294,10 +334,11 @@ func (c *aiChat) submit() {
 		c.status.SetText(err.Error())
 		return
 	}
-	draft := &chatDraft{question: question, files: c.files}
+	draft := &chatDraft{question: question, files: c.files, paths: c.filePaths}
 	c.input.SetText("")
 	c.add(chatEntry{role: "user", text: aiattachment.Display(question, c.files), at: time.Now()})
 	c.files = nil
+	c.filePaths = nil
 	c.refreshFiles()
 	c.requestID++
 	ctx, cancel := context.WithCancel(context.Background())
@@ -403,6 +444,7 @@ func (c *aiChat) restoreDraft(draft *chatDraft) {
 	}
 	if len(c.files) == 0 {
 		c.files = draft.files
+		c.filePaths = draft.paths
 		c.refreshFiles()
 	}
 }
@@ -432,7 +474,7 @@ func (c *aiChat) setBusy(busy bool) {
 		c.button.SetText("发送")
 		c.button.SetImage(uiIcon("send"))
 		c.fileAdd.SetEnabled(!c.loading)
-		c.fileRemove.SetEnabled(len(c.files) > 0)
+		c.fileRemove.SetEnabled(len(c.files) > 0 && !c.loading)
 	}
 	if c.onBusy != nil {
 		c.onBusy(busy)
@@ -448,6 +490,7 @@ func (c *aiChat) clear() {
 	c.loading = false
 	c.fileAdd.SetEnabled(true)
 	c.files = nil
+	c.filePaths = nil
 	c.refreshFiles()
 	c.refresh()
 	c.status.SetText("对话已清空；再提问会重新附带当前数据")

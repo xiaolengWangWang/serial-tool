@@ -50,7 +50,7 @@ func sizedIcon(name string, px int) *walk.Icon {
 	if err != nil {
 		return nil
 	}
-	dir := filepath.Join(cache, "CommBox", "icons-v082")
+	dir := filepath.Join(cache, "CommBox", "icons-v0110")
 	if os.MkdirAll(dir, 0700) != nil {
 		return nil
 	}

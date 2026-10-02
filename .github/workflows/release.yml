@@ -1,0 +1,90 @@
+name: Build and release CommBox
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a release after all platform builds and tests pass
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: commbox-release
+  cancel-in-progress: false
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            platform: windows-amd64
+          - runner: macos-15
+            platform: darwin-arm64
+          - runner: macos-15-intel
+            platform: darwin-amd64
+          - runner: ubuntu-24.04
+            platform: linux-amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: go test -count=1 -timeout=5m ./...
+      - name: Build Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = [regex]::Match((Get-Content core/modes.go -Raw), 'const Version = "([^"]+)"').Groups[1].Value
+          $tag = 'v' + $version
+          git rev-parse --verify --quiet ($tag + '^{}') > $null
+          if ($LASTEXITCODE -ne 0) { git tag $tag }
+          ./scripts/build-release.ps1
+          New-Item -ItemType Directory -Force build/release | Out-Null
+          Copy-Item "build/CommBox-$version-Windows-x64.zip" build/release/
+      - name: Build macOS or Linux
+        if: runner.os != 'Windows'
+        run: bash scripts/build-unix.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: build/release/*
+          if-no-files-found: error
+  release:
+    if: inputs.publish
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: build/release
+          merge-multiple: true
+      - name: Publish verified artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^const Version = "\([^"]*\)"/\1/p' core/modes.go)
+          tag="v$version"
+          test -n "$version"
+          for asset in "CommBox-$version-Windows-x64.zip" "CommBox-$version-macOS-AppleSilicon.dmg" "CommBox-$version-macOS-Intel.dmg" commbox-linux-amd64 commbox-linux-arm64 "CommBox-$version-Linux-amd64.tar.gz" "CommBox-$version-Linux-arm64.tar.gz"; do
+            test -s "build/release/$asset"
+          done
+          (cd build/release && sha256sum * > SHA256SUMS.txt)
+          cp "docs/releases/release-$tag.md" build/release-notes.md
+          printf '\n## SHA256\n\n```text\n' >> build/release-notes.md
+          cat build/release/SHA256SUMS.txt >> build/release-notes.md
+          printf '```\n' >> build/release-notes.md
+          gh release create "$tag" --target "$GITHUB_SHA" --draft --title "CommBox $tag · Windows GUI 与交互优化" --notes-file build/release-notes.md build/release/*
+          gh release edit "$tag" --draft=false --latest

@@ -85,6 +85,106 @@ func TestAssistantLoadsAttachmentWithoutBlockingUI(t *testing.T) {
 	})
 }
 
+func TestAssistantAttachmentBatchKeepsValidFilesAndNamesFailures(t *testing.T) {
+	dir := t.TempDir()
+	first, last := filepath.Join(dir, "first.log"), filepath.Join(dir, "last.log")
+	for _, path := range []string{first, last} {
+		if err := os.WriteFile(path, []byte(filepath.Base(path)), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := newWorkbenchForTest(t)
+	driveWorkbench(a, func(onUI func(func())) {
+		onUI(func() {
+			a.showAssistant()
+			a.assistant.chat.loadFiles([]string{first, filepath.Join(dir, "missing.txt"), last})
+		})
+		waitChatAttachments(t, a, onUI)
+		onUI(func() {
+			c := a.assistant.chat
+			if len(c.files) != 2 || c.files[0].Name != "first.log" || c.files[1].Name != "last.log" {
+				t.Errorf("valid files lost after partial failure: %+v", c.files)
+			}
+			if !strings.Contains(c.status.Text(), "missing.txt") {
+				t.Errorf("failed file was not named: %q", c.status.Text())
+			}
+		})
+	})
+}
+
+func TestAssistantAttachmentDedupAndRemoval(t *testing.T) {
+	first, second := filepath.Join(t.TempDir(), "same.log"), filepath.Join(t.TempDir(), "same.log")
+	for i, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte(fmt.Sprintf("content %d", i)), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := newWorkbenchForTest(t)
+	driveWorkbench(a, func(onUI func(func())) {
+		onUI(func() { a.showAssistant(); a.assistant.chat.loadFiles([]string{first, first, second}) })
+		waitChatAttachments(t, a, onUI)
+		onUI(func() {
+			c := a.assistant.chat
+			if len(c.files) != 2 || c.files[0].Text != "content 0" || c.files[1].Text != "content 1" {
+				t.Errorf("dedup must preserve distinct same-name files: %+v", c.files)
+			}
+			c.loadFiles([]string{first})
+		})
+		waitChatAttachments(t, a, onUI)
+		onUI(func() {
+			c := a.assistant.chat
+			if len(c.files) != 2 {
+				t.Errorf("reselecting attached file duplicated it: %+v", c.files)
+			}
+			c.fileList.SetCurrentIndex(0)
+			c.removeFile()
+			c.loadFiles([]string{first})
+		})
+		waitChatAttachments(t, a, onUI)
+		onUI(func() {
+			c := a.assistant.chat
+			if len(c.files) != 2 || c.files[0].Text != "content 1" || c.files[1].Text != "content 0" {
+				t.Errorf("remove/re-add changed the wrong file: %+v", c.files)
+			}
+		})
+	})
+}
+
+func TestAssistantAttachmentOverflowKeepsFirstSix(t *testing.T) {
+	var paths []string
+	for i := 0; i < 7; i++ {
+		path := filepath.Join(t.TempDir(), fmt.Sprintf("file%d.log", i))
+		if err := os.WriteFile(path, []byte("data"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, path)
+	}
+	a := newWorkbenchForTest(t)
+	driveWorkbench(a, func(onUI func(func())) {
+		onUI(func() { a.showAssistant(); a.assistant.chat.loadFiles(paths) })
+		waitChatAttachments(t, a, onUI)
+		onUI(func() {
+			c := a.assistant.chat
+			if len(c.files) != 6 || !strings.Contains(c.status.Text(), "file6.log") {
+				t.Errorf("overflow must keep first six and name excess file: files=%d status=%q", len(c.files), c.status.Text())
+			}
+		})
+	})
+}
+
+func waitChatAttachments(t *testing.T, a *application, onUI func(func())) {
+	t.Helper()
+	for i := 0; i < 200; i++ {
+		var done bool
+		onUI(func() { done = !a.assistant.chat.loading })
+		if done {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Error("attachment extraction did not finish")
+}
+
 func TestAssistantRestoresAttachmentAfterRequestFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "service unavailable", http.StatusBadRequest)

@@ -60,10 +60,13 @@ func (w *assistantPanel) widget() Widget {
 		Composite{Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 			Label{Text: "AI 通信助手", Font: fontSection, TextColor: colorBlue, Alignment: AlignHNearVCenter},
 			HSpacer{},
-			PushButton{Text: "×", MinSize: Size{Width: 32, Height: btnH}, MaxSize: Size{Width: 32}, OnClicked: w.app.toggleAssistant},
+			PushButton{Text: "×", ToolTipText: "收起 AI 助手，对话仍会保留", MinSize: Size{Width: 32, Height: btnH}, MaxSize: Size{Width: 32}, OnClicked: w.app.toggleAssistant},
 		}},
 		Label{AssignTo: &w.chat.status, Text: "AI 未启用 · 可使用本地分析", TextColor: colorMuted, EllipsisMode: EllipsisEnd},
-		ComboBox{AssignTo: &w.scope, Model: analysisScopes, CurrentIndex: 2, ToolTipText: "分析范围：主界面报文或本机历史数据库", MinSize: Size{Height: rowH}, OnCurrentIndexChanged: func() { w.rangeRow.SetVisible(w.scope.CurrentIndex() == customRangeScope) }},
+		Composite{Layout: HBox{MarginsZero: true, Spacing: 6}, Children: []Widget{
+			Label{Text: "范围", TextColor: colorMuted},
+			ComboBox{AssignTo: &w.scope, Model: analysisScopes, CurrentIndex: 2, StretchFactor: stretchFill, ToolTipText: "分析范围：主界面报文或本机历史数据库", MinSize: Size{Width: 80, Height: rowH}, OnCurrentIndexChanged: func() { w.rangeRow.SetVisible(w.scope.CurrentIndex() == customRangeScope) }},
+		}},
 		Composite{AssignTo: &w.rangeRow, Visible: false, Layout: HBox{Alignment: AlignHNearVCenter, MarginsZero: true, Spacing: 6}, Children: []Widget{
 			LineEdit{AssignTo: &w.from, Text: "1", CueBanner: "起始行", MinSize: Size{Height: rowH}},
 			inlineLabel("至", 22),

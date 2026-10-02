@@ -957,14 +957,14 @@ const dirAll = "全部方向"
 
 // 状态色降饱和,蓝色只保留一种作主色。
 var (
-	colorCanvas = walk.RGB(241, 245, 249)
+	colorCanvas = walk.RGB(238, 243, 248)
 	colorPanel  = walk.RGB(255, 255, 255)
 	colorGray   = walk.RGB(140, 140, 140)
 	colorGreen  = walk.RGB(34, 140, 58)
 	colorYellow = walk.RGB(186, 132, 8)
 	colorRed    = walk.RGB(190, 48, 48)
-	colorBlue   = walk.RGB(28, 78, 140)
-	colorMuted  = walk.RGB(96, 108, 120)
+	colorBlue   = walk.RGB(23, 60, 101)
+	colorMuted  = walk.RGB(91, 108, 126)
 )
 
 // setConnStatus 同时更新灯颜色与文字。

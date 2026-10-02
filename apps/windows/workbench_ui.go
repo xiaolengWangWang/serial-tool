@@ -86,14 +86,14 @@ func (a *application) createWindow() error {
 
 func (a *application) menus() []MenuItem {
 	return []MenuItem{
-		Menu{Text: "文件", Items: []MenuItem{Action{Text: "新建实例", OnTriggered: a.newInstance}, Action{Text: "保存 TXT", OnTriggered: func() { a.exportText(a.packetModel.exportText(), "commbox", a.mw) }}, Action{Text: "导出 CSV", OnTriggered: a.exportCSV}, Action{Text: "退出", OnTriggered: func() { a.mw.Close() }}}},
-		Menu{Text: "查看", Items: []MenuItem{Action{Text: "AI 助手", OnTriggered: a.toggleAssistant}, Action{Text: "实时监控窗口", OnTriggered: a.openMonitor}}},
-		Menu{Text: "工具", Items: []MenuItem{Action{Text: "HTTP 工作台", OnTriggered: a.openHTTPWorkspace}, Action{Text: "校验与转换", OnTriggered: a.openToolbox}, Action{Text: "连接管理", OnTriggered: a.openConnections}, Action{Text: "串口服务器", OnTriggered: func() {
+		Menu{Text: "文件", Items: []MenuItem{Action{Text: "新建实例", Image: uiIcon("new"), OnTriggered: a.newInstance}, Action{Text: "保存 TXT", Image: uiIcon("save"), OnTriggered: func() { a.exportText(a.packetModel.exportText(), "commbox", a.mw) }}, Action{Text: "导出 CSV", Image: uiIcon("save"), OnTriggered: a.exportCSV}, Action{Text: "退出", OnTriggered: func() { a.mw.Close() }}}},
+		Menu{Text: "查看", Items: []MenuItem{Action{Text: "AI 助手", Image: uiIcon("ai"), OnTriggered: a.toggleAssistant}, Action{Text: "实时监控窗口", Image: uiIcon("client"), OnTriggered: a.openMonitor}}},
+		Menu{Text: "工具", Items: []MenuItem{Action{Text: "HTTP 工作台", Image: uiIcon("http"), OnTriggered: a.openHTTPWorkspace}, Action{Text: "校验与转换", Image: uiIcon("tool"), OnTriggered: a.openToolbox}, Action{Text: "连接管理", Image: uiIcon("settings"), OnTriggered: a.openConnections}, Action{Text: "串口服务器", OnTriggered: func() {
 			if !a.connected && !a.connecting {
 				a.mode.SetCurrentIndex(3)
 				a.updateMode()
 			}
-		}}, Action{Text: "虚拟串口管理", Image: uiIcon("serial"), OnTriggered: a.openVirtualCOM}, Action{Text: "VirtualCOM 连接说明", OnTriggered: a.showVirtualCOMHelp}, Action{Text: "历史数据分析", OnTriggered: a.openDatabaseAnalysis}}},
+		}}, Action{Text: "虚拟串口管理", Image: uiIcon("virtualcom"), OnTriggered: a.openVirtualCOM}, Action{Text: "VirtualCOM 连接说明", OnTriggered: a.showVirtualCOMHelp}, Action{Text: "历史数据分析", Image: uiIcon("history"), OnTriggered: a.openDatabaseAnalysis}}},
 		Menu{Text: "设置", Items: []MenuItem{Action{Text: "AI 设置", OnTriggered: a.assistant.settings}, Action{Text: "连接数与桥接", OnTriggered: a.openConnections}, Separator{}, Action{AssignTo: &a.autoUpdateAction, Text: "启动时检查更新", Checkable: true, OnTriggered: a.toggleAutoUpdate}}},
 		Menu{Text: "帮助", Items: []MenuItem{Action{Text: "使用说明", OnTriggered: a.showHelp}, Action{Text: "检查更新", OnTriggered: a.checkUpdate}, Action{Text: "发送 (F5)", Image: uiIcon("send"), Shortcut: Shortcut{Key: walk.KeyF5}, OnTriggered: func() { a.sendOnce(false) }}}},
 	}
@@ -214,7 +214,7 @@ func (a *application) packetViews() Widget {
 					if a.loadPacket() {
 						a.sendOnce(false)
 					}
-				}}, Action{Text: "添加到快捷发送", OnTriggered: func() { a.loadPacket() }}, Action{Text: "AI 分析选中数据", OnTriggered: a.analyzeSelected}, Separator{}, Action{AssignTo: &a.detailColumns, Text: "显示协议 / 来源 / 连接 ID 列", Checkable: true, OnTriggered: a.toggleDetailColumns}, Action{Text: "导出 CSV", OnTriggered: a.exportCSV},
+				}}, Action{Text: "添加到快捷发送", OnTriggered: func() { a.loadPacket() }}, Action{Text: "AI 分析选中数据", OnTriggered: a.analyzeSelected}, Separator{}, Action{AssignTo: &a.detailColumns, Text: "显示协议 / 来源 / 连接 ID 列", Checkable: true, OnTriggered: a.toggleDetailColumns}, Action{Text: "导出 CSV", Image: uiIcon("save"), OnTriggered: a.exportCSV},
 			}},
 			// 选中操作行：给 AI 面板的“当前选中数据”范围提供选择入口和计数。
 			// 每个控件自带宽度上限，HBox 只能把富余宽度给 HSpacer，
