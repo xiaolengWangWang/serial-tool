@@ -14,8 +14,8 @@ case "$os" in
     CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$output" ./apps/linux
     test "$("$output" -version)" = "$version"
     chmod 755 "$output"
-    git show 'HEAD:docs/CommBox使用手册.md' > build/release/CommBox使用手册.md
-    tar -czf "build/release/CommBox-$version-Linux-$arch.tar.gz" -C build/release "commbox-linux-$arch" 'CommBox使用手册.md'
+    git show 'HEAD:docs/CommBox使用手册.md' > build/release/CommBox-Manual.md
+    tar -czf "build/release/CommBox-$version-Linux-$arch.tar.gz" -C build/release "commbox-linux-$arch" 'CommBox-Manual.md'
     ;;
   darwin)
     case "$arch" in arm64) chip=AppleSilicon;; amd64) chip=Intel;; *) exit 1;; esac
