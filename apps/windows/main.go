@@ -24,7 +24,13 @@ import (
 var modes = []string{"串口", "TCP", "UDP", "串口服务器", "HTTP 客户端"}
 
 type application struct {
+	appHeader                            *walk.Composite
+	reconnectToggle                      *walk.PushButton
+	reconnectExpanded                    bool
 	views                                viewSettings
+	reconnectPane                        *walk.Composite
+	sendButton                           *walk.PushButton
+	connectionHint                       *walk.Label
 	manualWindow                         *walk.MainWindow
 	virtualCOMManager                    *virtualcom.Manager
 	virtualCOMWindow                     *walk.MainWindow
@@ -315,6 +321,7 @@ func (a *application) updateMode() {
 	if a.mode == nil || a.serialGroup == nil || a.role == nil || a.connectButton == nil || a.networkGroup == nil {
 		return
 	}
+	a.updateConnectionHints()
 	spec := core.SpecOf(a.uiMode())
 	// 按模式只显示需要的参数组(隐藏不相关的)
 	a.serialGroup.SetVisible(spec.NeedsSerial)
@@ -325,11 +332,11 @@ func (a *application) updateMode() {
 	isHTTP := a.mode.Text() == "HTTP 客户端"
 	if a.addressLabel != nil {
 		if isHTTP {
-			a.addressLabel.SetText("URL")
+			a.addressLabel.SetText("基础 URL")
 		} else if a.isServer() {
-			a.addressLabel.SetText("监听 IP")
+			a.addressLabel.SetText("监听地址")
 		} else {
-			a.addressLabel.SetText("服务器 IP")
+			a.addressLabel.SetText("目标地址")
 		}
 	}
 	if a.portLabel != nil {

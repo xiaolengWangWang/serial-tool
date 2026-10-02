@@ -55,15 +55,19 @@ func (w *assistantPanel) widget() Widget {
 		w.maxPackets = n
 	}
 	w.chat = &aiChat{app: w.app, owner: func() walk.Form { return w.app.mw }, config: w.aiConfig, settings: w.settings, prepare: w.packetContext, onBusy: func(busy bool) { w.run.SetEnabled(!busy) }}
-	// 对话为主：上方一行范围、一行主题与「开始分析」，其余高度都给对话。
-	// 宽度上下限与中栏占比的关系见 workbench_ui.go 的 minMonitorWidth。
-	// 滚动条宽度由 walk 自己预留，右边距与左边距相同即可。
+	// 对话记录在上方，报文选项靠近输入框；设置移到标题行。
+	chatWidgets := w.chat.widgets()
+	tools := chatWidgets[len(chatWidgets)-1].(Composite)
+	tools.Children = append(tools.Children[:3], HSpacer{})
+	chatWidgets[len(chatWidgets)-1] = tools
 	children := []Widget{
 		Composite{Layout: HBox{MarginsZero: true, Spacing: 6}, Children: []Widget{
-			Label{Text: "AI 聊天助手", Font: fontSection, TextColor: colorBlue}, HSpacer{},
+			Label{Text: "AI 助手", Font: fontSection, TextColor: colorBlue}, HSpacer{},
+			PushButton{Text: "设置", MinSize: Size{Width: 52, Height: btnH}, MaxSize: Size{Width: 52}, OnClicked: w.settings},
 			PushButton{Text: "×", ToolTipText: "收起助手，正在进行的回答会继续", MinSize: Size{Width: 32, Height: btnH}, MaxSize: Size{Width: 32}, OnClicked: w.app.toggleAssistant},
 		}},
 		Label{AssignTo: &w.chat.status, Text: "输入问题开始聊天；报文和附件按需添加", TextColor: colorMuted, EllipsisMode: EllipsisEnd},
+		chatWidgets[0],
 		CheckBox{AssignTo: &w.attach, Text: "附带报文", MinSize: Size{Height: rowH}, ToolTipText: "勾选后，每次发送附带当前所选范围；不勾选时只发送问题和附件。", OnCheckedChanged: func() {
 			if w.packetOptions != nil {
 				w.packetOptions.SetVisible(w.attach.Checked())
@@ -86,7 +90,7 @@ func (w *assistantPanel) widget() Widget {
 		}},
 	}
 
-	return ScrollView{AssignTo: &w.panel, HorizontalFixed: true, Visible: false, MinSize: Size{Width: assistantMinWidth}, MaxSize: Size{Width: assistantMaxWidth}, Background: SolidColorBrush{Color: colorPanel}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 8}, Children: append(children, w.chat.widgets()...)}
+	return ScrollView{AssignTo: &w.panel, HorizontalFixed: true, Visible: false, MinSize: Size{Width: assistantMinWidth}, MaxSize: Size{Width: assistantMaxWidth}, Background: SolidColorBrush{Color: colorPanel}, Layout: VBox{Alignment: AlignHNearVNear, Margins: Margins{Left: 10, Top: 8, Right: 10, Bottom: 8}, Spacing: 8}, Children: append(children, chatWidgets[1:]...)}
 }
 
 // packetContext is evaluated only after the user clicks Send.

@@ -278,11 +278,11 @@ func measureLayout(a *application, d layoutDisplay, work win.RECT, dpi int) layo
 	middle, client := int(mr.Right-mr.Left), int(cr.Right-cr.Left)
 	r.dataShare, r.middleShare = data*100/max(1, data+send), middle*100/max(1, client)
 	// 用户展开更多筛选或更多发送时以展开内容为准,不要求比例。
-	if !a.advancedFilters.Visible() && !a.sendExtrasOpen && data*100 < (data+send)*dataSharePercent {
+	if !a.advancedFilters.Visible() && !a.sendExtrasOpen && a.sendPane.MinSizeHint().Height*100 <= (data+send)*(100-dataSharePercent) && data*100 < (data+send)*dataSharePercent {
 		r.problems = append(r.problems, fmt.Sprintf("数据栏只占数据与发送合计高度的 %.1f%%", float64(data*100)/float64(data+send)))
 	}
-	if middle*100 < client*dataSharePercent {
-		r.problems = append(r.problems, fmt.Sprintf("中栏只占客户区宽度的 %.1f%%", float64(middle*100)/float64(client)))
+	if middle < int(px(minMonitorWidth, dpi)) {
+		r.problems = append(r.problems, "数据区窄于布局要求，无法容纳常用操作")
 	}
 	r.problems = append(r.problems, layoutProblems(a, dpi)...)
 	return r
