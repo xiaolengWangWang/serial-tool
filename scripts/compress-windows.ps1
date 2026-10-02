@@ -19,8 +19,8 @@ $baseName = [IO.Path]::GetFileNameWithoutExtension($source)
 $full7z = Join-Path $output ($baseName + '.7z')
 $guiZip = Join-Path $output ($baseName + '-GUI.zip')
 $gui7z = Join-Path $output ($baseName + '-GUI.7z')
-$guiNames = @('CommBox.exe', 'README-Windows.txt')
-$expectedNames = @('CommBox.exe', 'CommBox-CLI.exe', 'VirtualCOM-GUI.exe', 'VirtualCOM.exe', 'README-Windows.txt', 'VirtualCOM使用说明.md', 'SHA256SUMS.txt')
+$guiNames = @('CommBox.exe', 'README-Windows.txt', 'VirtualCOM使用说明.md', 'CommBox使用手册.md')
+$expectedNames = @('CommBox.exe', 'CommBox-CLI.exe', 'VirtualCOM-GUI.exe', 'VirtualCOM.exe', 'README-Windows.txt', 'VirtualCOM使用说明.md', 'CommBox使用手册.md', 'SHA256SUMS.txt')
 
 function Get-StreamHash {
     param([IO.Stream]$Stream)
@@ -111,7 +111,14 @@ try {
             try { $inputStream.CopyTo($outputStream) } finally { $inputStream.Dispose(); $outputStream.Dispose() }
             $guiHashes[$name] = $fullHashes[$name]
         }
-        $sums = (($guiNames | ForEach-Object { $guiHashes[$_] + '  ' + $_ }) -join "`n") + "`n"
+        $packageNote = "CommBox 主程序包`r`n`r`n运行 CommBox.exe；虚拟串口管理和离线使用手册均已内置。`r`n本包不包含 CommBox-CLI.exe、VirtualCOM.exe 或 VirtualCOM-GUI.exe。`r`n需要命令行或独立 VirtualCOM 工具时，请下载完整 Windows 包。`r`n7z 与 ZIP 仅压缩方式不同，程序文件与原发布包一致。`r`n"
+        $bytes = [Text.Encoding]::UTF8.GetBytes($packageNote)
+        $entry = $target.CreateEntry('PACKAGE-GUI.txt', [IO.Compression.CompressionLevel]::Optimal)
+        $stream = $entry.Open()
+        try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+        $memory = New-Object IO.MemoryStream(, $bytes)
+        try { $guiHashes['PACKAGE-GUI.txt'] = Get-StreamHash $memory } finally { $memory.Dispose() }
+        $sums = ((@($guiNames) + 'PACKAGE-GUI.txt' | ForEach-Object { $guiHashes[$_] + '  ' + $_ }) -join "`n") + "`n"
         $bytes = [Text.Encoding]::UTF8.GetBytes($sums)
         $entry = $target.CreateEntry('SHA256SUMS.txt', [IO.Compression.CompressionLevel]::Optimal)
         $stream = $entry.Open()

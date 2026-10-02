@@ -2,6 +2,13 @@
 
 Windows 主页面默认简洁显示，高级操作按需展开；本版同时提供 macOS Apple Silicon / Intel 与 Linux amd64 / arm64 构建。
 
+## Windows 下载选择
+
+- 日常桌面使用：GUI.zip 约 7.18 MiB，或 GUI.7z 约 5.50 MiB，包含 CommBox 主程序、内置虚拟串口管理及完整离线手册。
+- 需要命令行或独立 VirtualCOM：下载完整 ZIP（约 14.49 MiB）或完整 7z（约 7.00 MiB）。
+- 压缩包内的程序与原发布文件逐字节一致。主程序 7z 下载体积减少约 62%；EXE 本身体积不变。
+- 7z 包需要支持该格式的解压工具；优先兼容性时选 ZIP。
+
 ## Windows 操作体验
 
 - AI 改为聊天式：输入问题、添加多个附件、点击发送；Enter 换行，Ctrl+Enter 发送。
