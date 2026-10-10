@@ -123,6 +123,11 @@ type application struct {
 	lastDetails, lastStatusText      string
 	connecting, sending              bool
 	closed                           atomic.Bool
+
+	// 应答提示：手动发送后 replyWait 内没收到数据，就在发送状态行提示排查方向。
+	replySeq       int
+	lastRX         time.Time
+	replyHintShown bool
 	// workArea 返回窗口当前该待的工作区（物理像素），默认取所在显示器；
 	// 布局测试换成模拟的屏幕，运行中的收窗检查就按模拟屏幕判断。
 	workArea func() (win.RECT, bool)
@@ -136,6 +141,7 @@ type Packet struct {
 	Hex       string
 	ASCII     string
 	Length    int
+	Note      string // 如 Modbus 异常应答的含义，显示在 HEX 列字节之后（HEX 列最宽，不被截断）
 }
 
 type packetTableModel struct {
@@ -159,6 +165,9 @@ func (m *packetTableModel) Value(row, col int) interface{} {
 	case 1:
 		return p.Direction
 	case 2:
+		if p.Note != "" {
+			return p.Hex + " → " + p.Note
+		}
 		return p.Hex
 	case 3:
 		return p.ASCII
@@ -209,7 +218,7 @@ func (m *packetTableModel) matches(p Packet, kw, dir string, since time.Time) bo
 	if kw != "" {
 		kl := strings.ToLower(kw)
 		if !strings.Contains(strings.ToLower(p.Hex), kl) &&
-			!strings.Contains(strings.ToLower(p.ASCII+" "+p.Raw.ConnectionID+" "+p.Raw.Endpoint+" "+p.Raw.Source+" "+p.Raw.Transport), kl) {
+			!strings.Contains(strings.ToLower(p.ASCII+" "+p.Note+" "+p.Raw.ConnectionID+" "+p.Raw.Endpoint+" "+p.Raw.Source+" "+p.Raw.Transport), kl) {
 			return false
 		}
 	}
@@ -308,24 +317,50 @@ func (a *application) refreshPorts() {
 	if a.ports == nil {
 		return
 	}
-	ports, err := core.ListPorts()
+	ports, err := core.ListPortDetails()
 	if err != nil {
 		a.showError(err)
 		return
 	}
-	current := a.ports.Text()
-	setDropDownItems(a.ports, ports) // 端口名再长也不撑宽左栏。
+	current := portName(a.ports.Text())
+	labels := make([]string, len(ports))
 	for i, port := range ports {
-		if strings.EqualFold(current, port) {
-			_ = a.ports.SetCurrentIndex(i)
-			return
+		labels[i] = portLabel(port)
+	}
+	setDropDownItems(a.ports, labels) // 设备说明再长也不撑宽左栏。
+	if !a.selectPort(current) && len(ports) > 0 {
+		_ = a.ports.SetCurrentIndex(0)
+	}
+}
+
+// portLabel 在端口名后附上设备说明，如「COM5  USB-SERIAL CH340」，方便认出转换线。
+func portLabel(p core.SerialPortInfo) string {
+	if p.Description == "" {
+		return p.Name
+	}
+	return p.Name + "  " + p.Description
+}
+
+// portName 从下拉框文字里取出端口名：选项带设备说明，手动输入的只有端口名。
+func portName(text string) string {
+	if fields := strings.Fields(text); len(fields) > 0 {
+		return fields[0]
+	}
+	return ""
+}
+
+// selectPort 选中名为 name 的端口；列表里没有时保留为手动输入的文字。
+func (a *application) selectPort(name string) bool {
+	if model, ok := a.ports.Model().([]string); ok {
+		for i, label := range model {
+			if name != "" && strings.EqualFold(portName(label), name) {
+				_ = a.ports.SetCurrentIndex(i)
+				return true
+			}
 		}
 	}
-	if len(ports) > 0 {
-		_ = a.ports.SetCurrentIndex(0)
-	} else {
-		_ = a.ports.SetText(current)
-	}
+	_ = a.ports.SetText(name)
+	return false
 }
 
 func (a *application) updateMode() {
@@ -478,7 +513,7 @@ func (a *application) config() (core.Config, error) {
 		interval = v
 	}
 	return core.BuildConfig(core.ConnParams{
-		Mode: mode, SerialName: strings.TrimSpace(a.ports.Text()), Address: address,
+		Mode: mode, SerialName: portName(a.ports.Text()), Address: address,
 		Baud: baud, DataBits: dataBits, StopBits: stopBits, Parity: a.parity.Text(),
 		Protocol: a.protocol.Text(), Role: a.role.Text(),
 		AutoReconnect: autoReconnect, ReconnectInterval: time.Duration(interval) * time.Second,
@@ -565,6 +600,7 @@ func (a *application) sendOnce(fromTimer bool) {
 	input, asHex, eol := a.sendEdit.Text(), a.hexSend.Checked(), a.eol.Text()
 	id, address := a.selectedSendTarget()
 	a.sending = true
+	startedAt := time.Now()
 	a.setSendFeedback("正在发送…", false)
 	go func() {
 		err := a.sendCaptured(input, asHex, eol, id, address)
@@ -581,6 +617,9 @@ func (a *application) sendOnce(fromTimer bool) {
 				return
 			}
 			a.setSendFeedback("发送完成 · "+time.Now().Format("15:04:05"), false)
+			if !fromTimer {
+				a.watchReply(startedAt)
+			}
 			a.refreshSendHistory()
 			if a.clearAfterSend != nil && a.clearAfterSend.Checked() && a.sendEdit.Text() == input {
 				a.sendEdit.SetText("")
@@ -776,7 +815,11 @@ func packetFromCore(raw core.Packet) Packet {
 			ascii.WriteByte('.')
 		}
 	}
-	return Packet{Raw: raw, TS: raw.Timestamp, Direction: raw.Direction, Hex: fmt.Sprintf("% X", raw.Data), ASCII: ascii.String(), Length: len(raw.Data)}
+	p := Packet{Raw: raw, TS: raw.Timestamp, Direction: raw.Direction, Hex: fmt.Sprintf("% X", raw.Data), ASCII: ascii.String(), Length: len(raw.Data)}
+	if raw.Direction == "RX" || raw.Direction == "TX" {
+		p.Note = core.ModbusException(raw.Transport, raw.Data)
+	}
+	return p
 }
 
 func (a *application) onPacket(raw core.Packet) {
@@ -796,6 +839,9 @@ func (a *application) onPacket(raw core.Packet) {
 			dir = a.dirFilter.Text()
 		}
 		a.packetModel.add(p, kw, dir)
+		if p.Direction == "RX" {
+			a.noteRX(p)
+		}
 		if a.packetTable != nil && a.autoScroll.Checked() && a.packetModel.RowCount() > 0 {
 			a.packetTable.EnsureItemVisible(a.packetModel.RowCount() - 1)
 		}
@@ -1202,7 +1248,7 @@ func (a *application) onRecentConnSelected() {
 	switch core.Mode(s.Mode) {
 	case core.ModeSerial:
 		_ = a.mode.SetCurrentIndex(0)
-		_ = a.ports.SetText(p["serial"])
+		a.selectPort(p["serial"])
 		_ = a.baud.SetText(p["baud"])
 		_ = a.data.SetText(p["data"])
 		_ = a.parity.SetText(p["parity"])
@@ -1225,7 +1271,7 @@ func (a *application) onRecentConnSelected() {
 		setIPPort(s.Endpoint, a.netIP, a.netPort)
 	case core.ModeSerialServer:
 		_ = a.mode.SetCurrentIndex(3)
-		_ = a.ports.SetText(p["serial"])
+		a.selectPort(p["serial"])
 		_ = a.protocol.SetText(p["protocol"])
 		_ = a.role.SetText(p["role"])
 		setIPPort(s.Endpoint, a.netIP, a.netPort)

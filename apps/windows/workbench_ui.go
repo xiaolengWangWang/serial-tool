@@ -445,10 +445,19 @@ func (a *application) updateFooterIcon() {
 
 // 方向保留文字，并用颜色帮助快速区分收发；其他列保持系统的选择与焦点绘制。
 func (a *application) stylePacketCell(style *walk.CellStyle) {
-	if style.Col() != 1 || style.Row() < 0 || style.Row() >= len(a.packetModel.visible) {
+	if style.Row() < 0 || style.Row() >= len(a.packetModel.visible) {
 		return
 	}
-	switch a.packetModel.visible[style.Row()].Direction {
+	p := a.packetModel.visible[style.Row()]
+	// Modbus 异常应答的 HEX 与说明标红，一眼能看出设备拒绝了请求。
+	if p.Note != "" && style.Col() == 2 {
+		style.TextColor = colorRed
+		return
+	}
+	if style.Col() != 1 {
+		return
+	}
+	switch p.Direction {
 	case "RX":
 		style.TextColor = colorGreen
 	case "TX":

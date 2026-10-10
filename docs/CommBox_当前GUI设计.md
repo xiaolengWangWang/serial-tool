@@ -12,13 +12,15 @@
 | `apps/windows/ai_chat.go` | AI 面板与历史数据分析窗口共用的对话：流式显示、Markdown 转可读文本、发送 / 停止、复制与导出 |
 | `apps/windows/analysis_ui.go` `analysis_helpers.go` | 历史数据分析窗口与本地分析、流式 AI 请求与错误说明 |
 | `apps/windows/connections_ui.go` | 发送目标解析、客户端列表刷新、连接管理对话框 |
+| `apps/windows/reply_hint.go` | 发送后的应答提示：手动发送 1 秒内没收到数据时提示排查方向，收到 Modbus 异常应答时说明含义 |
 | `apps/windows/http_ui.go` `http_workspace_helpers.go` | HTTP 工作台与 cURL 导入导出 |
 | `apps/windows/update_ui.go` | 检查更新：菜单入口、启动自检、更新对话框（下载并安装、立即重启） |
 | `apps/windows/icons.go` | 主图标从 EXE 资源加载，其余图标从 `icons/*.ico` 缓存加载 |
 | `core/engine.go` | 连接、收发、串口服务器桥接、定向发送、设置读写 |
 | `core/storage.go` `storage_packet.go` | SQLite 会话与报文落盘，按日期与 100 MiB 分文件 |
 | `core/update.go` | 版本检查、安装包挑选、SHA256 解析与校验、下载 |
-| `core/analysis.go` `database_analysis.go` | 本地协议分析与历史库分析 |
+| `core/analysis.go` `database_analysis.go` | 本地协议分析与历史库分析；Modbus 帧由 `parseModbus` 统一拆分，本地报告、交给 AI 的摘要和数据表的异常标注结论一致 |
+| `core/serial_port.go` `serial_port_windows.go` | 打开串口（含 VirtualCOM）与端口列表；Windows 端口附设备管理器里的友好名称；打不开时返回带端口名的 `SerialOpenError` |
 | `core/toolbox.go` | CRC / Base64 / Unix 时间戳换算 |
 | `core/http_request.go` `curl.go` `http_redact.go` | HTTP 请求执行、cURL 解析与脱敏 |
 | `core/vserial*.go` | 虚拟串口：`vserial_unix.go` 为 PTY 实现；`vserial_windows.go` 是返回"开发中"的桩 |
@@ -151,8 +153,10 @@ go test ./... -count=1
 
 ## 8. 已知限制与后续候选
 
-限制：Windows 虚拟串口未开放（com0com 的驱动安装、串口命名、命令超时三项未在真机验证通过）；数据表表头中文在等宽字体下字距偏开（表头与单元格无法分别设字体，而 HEX 列需要等宽）；布局主要在 100% 缩放下复测，其他 DPI 仍需核对；未做代码签名，SmartScreen 会提示未知发布者。
+限制：Windows 虚拟串口未开放（com0com 的驱动安装、串口命名、命令超时三项未在真机验证通过）；数据表表头中文在等宽字体下字距偏开（表头与单元格无法分别设字体，而 HEX 列需要等宽）；布局主要在 100% 缩放下复测，其他 DPI 仍需核对；未做代码签名，SmartScreen 会提示未知发布者；数据表 HEX 列后附的 Modbus 异常含义在窗口较窄时显示不全（walk 表格不支持单元格提示），完整说明在发送区状态行。
+
+现场排查提示已做实测（2026-10-11）：用 VirtualCOM 建 COM5 / COM6，另一端由模拟从站应答（站号 1，地址 100 起返回异常码 02），通过窗口消息驱动界面。端口下拉显示设备名，正常应答不误报，读越界地址时状态行显示“收到 Modbus 异常应答 02：非法数据地址”且该行标红，向站号 2 发送 1 秒后提示排查方向，打开不存在的 COM250 时提示“找不到 COM250”，本地检查对应答列出寄存器值 100。
 
 软件内更新已做点击级实测（2026-10-10）：版本号改为 0.11.1 的构建放在只有 CommBox.exe 的目录，启动自检弹出更新，选中 GUI 包，下载并安装约 7 秒，立即重启后新版本 v0.11.2 正常启动。测试时把 APPDATA / LOCALAPPDATA 指向临时目录，不碰本机数据。
 
-值得做的下一步：配置导入导出（把连接参数与收藏搬到另一台机器）；数据表列宽记忆；深色模式；发送区快捷键（如 Ctrl+Enter 发送）；虚拟串口在真机上补完后重新开放。
+值得做的下一步：发送区“自动追加 CRC16 Modbus”与发送前 CRC 检查；接收按间隔合并或按 Modbus TCP 长度字段分帧；启动监听时显示本机 IP 并提醒防火墙；配置导入导出（把连接参数与收藏搬到另一台机器）；数据表列宽记忆；深色模式；发送区快捷键（如 Ctrl+Enter 发送）；虚拟串口在真机上补完后重新开放。

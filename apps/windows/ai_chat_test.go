@@ -451,7 +451,7 @@ func TestAssistantConversationFlow(t *testing.T) {
 	if len(*bodies) != 2 {
 		t.Fatalf("expected 2 requests, got %d", len(*bodies))
 	}
-	if !strings.Contains((*bodies)[0], "本地解析：Modbus RTU 从站 1 功能码 0x03 读保持寄存器 数据字节数 8，CRC 不匹配（收到 0xD743，应为 0x2843）") {
+	if !strings.Contains((*bodies)[0], "本地解析：Modbus RTU 从站 1 功能码 0x03 读保持寄存器 数据字节数 8 寄存器值 103、500、65436、10，CRC 不匹配（收到 0xD743，应为 0x2843）") {
 		t.Errorf("first request lacks local parse:\n%s", (*bodies)[0])
 	}
 	if (*bodies)[1] != "第 2 条怎么修？" {

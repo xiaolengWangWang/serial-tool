@@ -9,6 +9,10 @@ import (
 	"os"
 	"strings"
 	"unicode"
+
+	"serial-tool/core"
+
+	"go.bug.st/serial"
 )
 
 // Keep diagnostic text intact, with a Chinese explanation before OS/driver errors.
@@ -20,10 +24,21 @@ func chineseError(err error) string {
 	lower := strings.ToLower(detail)
 	var network net.Error
 	var dns *net.DNSError
+	var serialErr *serial.PortError
+	port := "串口"
+	if openErr := (*core.SerialOpenError)(nil); errors.As(err, &openErr) {
+		port = openErr.Port
+	}
 	message := ""
 	switch {
 	case errors.Is(err, context.Canceled):
 		message = "操作已取消。"
+	case errors.As(err, &serialErr) && serialErr.Code() == serial.PortBusy:
+		message = port + " 正被其他程序占用。请关闭串口助手、组态软件或采集程序后，再点击「打开串口」。"
+	case errors.As(err, &serialErr) && serialErr.Code() == serial.PortNotFound:
+		message = "找不到 " + port + "。请检查转换线是否插好，点击「刷新」后重新选择端口。"
+	case errors.As(err, &serialErr) && serialErr.Code() == serial.PermissionDenied:
+		message = "没有权限打开 " + port + "。请检查设备权限，或确认端口没有被其他程序占用。"
 	case errors.Is(err, os.ErrPermission) || strings.Contains(lower, "access is denied") || strings.Contains(lower, "permission denied"):
 		message = "无法访问目标。请检查文件或设备权限；串口也可能正被其他程序占用。"
 	case errors.Is(err, os.ErrNotExist) || strings.Contains(lower, "cannot find the file") || strings.Contains(lower, "cannot find the path"):

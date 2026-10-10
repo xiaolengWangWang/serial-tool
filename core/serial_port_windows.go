@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"go.bug.st/serial/enumerator"
 	"golang.org/x/sys/windows"
 )
 
@@ -258,4 +259,31 @@ func (p *virtualCOMPort) Close() error {
 		p.closeErr = windows.CloseHandle(p.handle)
 	})
 	return p.closeErr
+}
+
+// portDescriptions 取设备管理器里的友好名称，如「USB-SERIAL CH340 (COM5)」去掉末尾端口号；
+// VirtualCOM 端口不是即插即用设备，按命名管道识别后单独标出。
+func portDescriptions(ports []string) map[string]string {
+	out := make(map[string]string, len(ports))
+	if details, err := enumerator.GetDetailedPortsList(); err == nil {
+		for _, d := range details {
+			product := strings.TrimSpace(d.Product)
+			if suffix := "(" + d.Name + ")"; len(product) >= len(suffix) && strings.EqualFold(product[len(product)-len(suffix):], suffix) {
+				product = strings.TrimSpace(product[:len(product)-len(suffix)])
+			}
+			if product != "" {
+				out[strings.ToUpper(d.Name)] = product
+			}
+		}
+	}
+	for _, port := range ports {
+		key, com := strings.ToUpper(port), virtualCOMName(port)
+		if out[key] != "" || com == "" {
+			continue
+		}
+		if targets, err := queryCOMDevices(com); err == nil && len(targets) > 0 && virtualCOMPipe(targets[0]) != "" {
+			out[key] = "VirtualCOM 免驱动"
+		}
+	}
+	return out
 }

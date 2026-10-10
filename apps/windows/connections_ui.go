@@ -76,15 +76,20 @@ func (a *application) validateSend() {
 }
 
 func (a *application) setSendFeedback(text string, failed bool) {
-	if a.sendPreview == nil {
-		return
-	}
-	a.sendPreview.SetText(strings.SplitN(text, "\r\n", 2)[0])
-	a.sendPreview.SetToolTipText(text)
 	color := colorMuted
 	if failed {
 		color = colorRed
 	}
+	a.setSendFeedbackColor(text, color)
+}
+
+func (a *application) setSendFeedbackColor(text string, color walk.Color) {
+	if a.sendPreview == nil {
+		return
+	}
+	a.replyHintShown = false
+	a.sendPreview.SetText(strings.SplitN(text, "\r\n", 2)[0])
+	a.sendPreview.SetToolTipText(text)
 	a.sendPreview.SetTextColor(color)
 }
 
