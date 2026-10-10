@@ -76,7 +76,10 @@ function Read-Json {
     if ($null -eq $Response) { return $null }
     $text = $Response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
     if (!$text.Trim()) { return $null }
-    return $text | ConvertFrom-Json
+    # PowerShell 5.1 的 ConvertFrom-Json 把整个 JSON 数组当一个对象输出，
+    # 先存变量再 return 才会逐个输出元素，调用方 @(...) 拿到的才是扁平数组
+    $value = $text | ConvertFrom-Json
+    return $value
 }
 
 function Invoke-Gitee {
@@ -119,16 +122,15 @@ try {
     }
     $owner = $giteeRepo.Split('/')[0]
     $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($owner + ':' + $token))
-    $env:GIT_CONFIG_COUNT = '2'
+    # 给 $env: 赋空串等于删掉变量，所以清空凭据助手放命令行（不含令牌）
+    $env:GIT_CONFIG_COUNT = '1'
     $env:GIT_CONFIG_KEY_0 = 'http.https://gitee.com/.extraHeader'
     $env:GIT_CONFIG_VALUE_0 = 'Authorization: Basic ' + $basic
-    $env:GIT_CONFIG_KEY_1 = 'credential.helper'
-    $env:GIT_CONFIG_VALUE_1 = ''
     try {
-        git -C $repoRoot push ('https://gitee.com/' + $giteeRepo + '.git') ($commit.Trim() + ':refs/heads/main') ('refs/tags/' + $Tag + ':refs/tags/' + $Tag)
+        git -C $repoRoot -c credential.helper= push ('https://gitee.com/' + $giteeRepo + '.git') ($commit.Trim() + ':refs/heads/main') ('refs/tags/' + $Tag + ':refs/tags/' + $Tag)
         if ($LASTEXITCODE -ne 0) { throw 'git push to Gitee failed' }
     } finally {
-        foreach ($name in 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'GIT_CONFIG_KEY_1', 'GIT_CONFIG_VALUE_1') {
+        foreach ($name in 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0') {
             Remove-Item ('Env:' + $name) -ErrorAction SilentlyContinue
         }
     }
