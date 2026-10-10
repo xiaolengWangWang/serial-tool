@@ -13,7 +13,7 @@
 | `apps/windows/analysis_ui.go` `analysis_helpers.go` | 历史数据分析窗口与本地分析、流式 AI 请求与错误说明 |
 | `apps/windows/connections_ui.go` | 发送目标解析、客户端列表刷新、连接管理对话框 |
 | `apps/windows/http_ui.go` `http_workspace_helpers.go` | HTTP 工作台与 cURL 导入导出 |
-| `apps/windows/update_ui.go` | 检查更新：菜单入口、启动自检、更新对话框 |
+| `apps/windows/update_ui.go` | 检查更新：菜单入口、启动自检、更新对话框（下载并安装、立即重启） |
 | `apps/windows/icons.go` | 主图标从 EXE 资源加载，其余图标从 `icons/*.ico` 缓存加载 |
 | `core/engine.go` | 连接、收发、串口服务器桥接、定向发送、设置读写 |
 | `core/storage.go` `storage_packet.go` | SQLite 会话与报文落盘，按日期与 100 MiB 分文件 |
@@ -126,11 +126,15 @@
 
 构建、打包与发布步骤见 README「构建」。`apps/windows/rsrc_windows_amd64.syso` 提供清单与图标（含 PerMonitorV2 DPI 感知），Go 构建自动链接，不能删。发布说明写在 `docs/releases/release-v<版本>.md`，同时作为 GitHub Release 正文。
 
-**发布说明有一条硬约束**：正文必须保留 SHA256 代码块，格式为 `<64 位小写十六进制><两个空格><文件名>`。更新器就是从发布说明里解析这一行来校验下载的安装包（`sha256FromNotes`），删掉它下载就没有校验。说明本身保持精简：标题、本版变化、校验、注意四节即可——更新对话框直接显示这段文字，620×520 的窗口读不完长篇。
+**发布说明有一条硬约束**：正文必须保留 SHA256 代码块，格式为 `<64 位小写十六进制><两个空格><文件名>`。更新器就是从发布说明里解析这一行来校验下载的安装包（`sha256FromNotes`），删掉它下载就没有校验。说明本身保持精简：标题、本版变化、校验、注意四节即可——更新对话框直接显示这段文字，620×520 的窗口读不完长篇。第一行写成 `# CommBox v<版本> — 标题`，CI 用它生成发布标题。
+
+**更新的下载源**：`core/update.go` 同时查 Gitee（`sun_xuanqi/serial-tool`）和 GitHub，一样新时用 Gitee 的地址，GitHub 的同名包作为镜像，下载出错时轮换。所以 GitHub 发布后必须运行 `scripts/publish-gitee.ps1` 同步，否则国内用户要等 Gitee 查询出错才会换到 GitHub。Gitee 的发布信息不带附件大小和发布页地址，大小从 GitHub 补，发布页用 Gitee 的发行版列表。
+
+**软件内安装**（`core/update_install.go`，仅 Windows 且程序名为 `CommBox.exe`）：zip 先解压到程序目录下的 `.commbox-update-staged`，旧文件改名为 `*.old` 再放新文件，任何一步失败全部改回；换下来的文件记进 `.commbox-update-old`，下次启动只删清单里的文件，不碰目录里别的 `*.old`。用户选“立即重启”时走正常退出，`main` 最后（窗口、SQLite 都已关闭）才启动新版本；装好未重启时再点检查更新只提示重启。
 
 ## 7. 测试现状
 
-`go test ./...` 覆盖引擎（连接、重连、定向发送、桥接、存储、统计、HTTP、cURL、分析、工具箱）与 Windows 侧的纯函数（报文格式化、筛选、AI 范围选择、HTTP 拼装、更新文案）。更新模块另有 11 个用例覆盖版本比较、发布信息解析、安装包挑选、下载域名白名单、SHA256 解析与校验失败清理。
+`go test ./...` 覆盖引擎（连接、重连、定向发送、桥接、存储、统计、HTTP、cURL、分析、工具箱）与 Windows 侧的纯函数（报文格式化、筛选、AI 范围选择、HTTP 拼装、更新文案）。更新模块另有用例覆盖版本比较、发布信息解析、安装包挑选、多下载源选择与镜像、下载域名白名单、SHA256 解析与校验失败清理、断点续传与换源，以及 zip 安装的替换、回滚、路径安全和旧文件清理。
 
 联网用例默认跳过，手动跑：
 

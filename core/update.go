@@ -19,9 +19,29 @@ import (
 	"time"
 )
 
-// UpdateAPIURL 是版本检查地址。只发 GET,不带任何用户数据,
-// 返回的也只是公开的发布信息。
-const UpdateAPIURL = "https://api.github.com/repos/xiaolengWangWang/serial-tool/releases/latest"
+// 发布安装包的仓库:Gitee 上是 GitHub 仓库的镜像,两边发同样的安装包和说明。
+const (
+	updateGitHubRepo = "xiaolengWangWang/serial-tool"
+	updateGiteeRepo  = "sun_xuanqi/serial-tool"
+)
+
+// UpdateReleasesPage 是检查失败时给用户手动下载的发布页。
+const UpdateReleasesPage = "https://gitee.com/" + updateGiteeRepo + "/releases"
+
+// updateSource 是一个发布安装包的地方。检查只发 GET,不带任何用户数据,
+// 返回的也只是公开的发布信息;GitHub 和 Gitee 的 releases/latest 字段相同。
+type updateSource struct {
+	name string // 给用户看的名字
+	api  string // 最新正式版的接口地址
+	page string // 接口没给发布页地址时(Gitee 不给)用的下载页
+}
+
+// updateSources 是检查更新时同时查询的下载源,一样新时取排在前面的。国内连 GitHub
+// 握手要十几秒、下载常断,Gitee 排在前面。测试时换成本地服务器。
+var updateSources = []updateSource{
+	{"Gitee", "https://gitee.com/api/v5/repos/" + updateGiteeRepo + "/releases/latest", UpdateReleasesPage},
+	{"GitHub", "https://api.github.com/repos/" + updateGitHubRepo + "/releases/latest", "https://github.com/" + updateGitHubRepo + "/releases"},
+}
 
 // updateAssetSuffix 返回当前平台对应的安装包文件名后缀,用来从发布附件里挑出
 // 该平台的包(发布页同时还挂着裸 exe、其他平台的包)。实现按平台拆到
@@ -30,15 +50,17 @@ const UpdateAPIURL = "https://api.github.com/repos/xiaolengWangWang/serial-tool/
 // UpdateInfo 描述一次检查结果。没有可用安装包时 AssetURL 为空,
 // 此时界面只提供"打开发布页",不提供下载。
 type UpdateInfo struct {
-	Version   string // 去掉 v 前缀的版本号
-	Name      string // 发布标题
-	Notes     string // 发布说明正文
-	PageURL   string // 发布页地址
-	AssetURL  string // 安装包下载地址
+	Version   string   // 去掉 v 前缀的版本号
+	Name      string   // 发布标题
+	Notes     string   // 发布说明正文
+	PageURL   string   // 发布页地址
+	AssetURL  string   // 安装包下载地址
+	Mirrors   []string // 别的下载源上同一个安装包的地址,下载出错时换着用
 	AssetName string
-	AssetSize int64
+	AssetSize int64  // 0 表示未知(Gitee 不给大小)
 	SHA256    string // 从发布说明里解析出的安装包校验和,可能为空
 	Newer     bool   // 是否比传入的当前版本新
+	Source    string // 从哪个下载源查到的
 }
 
 // ShouldAutoPrompt 判断启动时的自动检查是否值得弹窗:有新版本,且这次发布
@@ -46,9 +68,62 @@ type UpdateInfo struct {
 // 在 Windows 上每次启动都弹一个没法下载的提示(反之亦然);手动检查照常告知。
 func (i UpdateInfo) ShouldAutoPrompt() bool { return i.Newer && i.AssetURL != "" }
 
-// CheckUpdate 查询最新发布版本并与 current 比较。
+// CheckUpdate 同时查询全部下载源的最新发布并与 current 比较,取版本最新的那个;
+// 一样新时优先带本平台安装包的,再按 updateSources 的顺序。别的下载源上同版本的
+// 同名安装包记进 Mirrors。全部下载源都查不到才报错。
 func CheckUpdate(ctx context.Context, current string) (UpdateInfo, error) {
-	return checkUpdateFrom(ctx, UpdateAPIURL, current)
+	return checkUpdateSources(ctx, updateSources, current)
+}
+
+func checkUpdateSources(ctx context.Context, sources []updateSource, current string) (UpdateInfo, error) {
+	infos := make([]UpdateInfo, len(sources))
+	errs := make([]error, len(sources))
+	var wg sync.WaitGroup
+	for i, src := range sources {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			infos[i], errs[i] = checkUpdateFrom(ctx, src.api, current)
+			infos[i].Source = src.name
+			if infos[i].PageURL == "" {
+				infos[i].PageURL = src.page
+			}
+		}()
+	}
+	wg.Wait()
+	best := -1
+	var failed []string
+	for i := range sources {
+		if errs[i] != nil {
+			failed = append(failed, sources[i].name+": "+errs[i].Error())
+			continue
+		}
+		if best < 0 {
+			best = i
+			continue
+		}
+		c := CompareVersions(infos[i].Version, infos[best].Version)
+		if c > 0 || c == 0 && infos[best].AssetURL == "" && infos[i].AssetURL != "" {
+			best = i
+		}
+	}
+	if best < 0 {
+		return UpdateInfo{}, errors.New(strings.Join(failed, ";"))
+	}
+	info := infos[best]
+	for i, other := range infos {
+		if i == best || errs[i] != nil || other.AssetURL == "" || other.Version != info.Version || other.AssetName != info.AssetName {
+			continue
+		}
+		info.Mirrors = append(info.Mirrors, other.AssetURL)
+		if info.AssetSize <= 0 {
+			info.AssetSize = other.AssetSize
+		}
+		if info.SHA256 == "" {
+			info.SHA256 = other.SHA256
+		}
+	}
+	return info, nil
 }
 
 func checkUpdateFrom(ctx context.Context, api, current string) (UpdateInfo, error) {
@@ -153,15 +228,16 @@ func updateClient() *http.Client {
 	return &http.Client{Transport: updateHTTPTransport(), Timeout: updateCheckTimeout}
 }
 
-// allowedDownloadURL 只信任 GitHub 自己的下载域名。检查接口是固定地址且走 TLS,
-// 但下载地址来自响应正文,限制域名可避免被一个异常响应引到别处。
+// allowedDownloadURL 只信任 GitHub 和 Gitee 自己的下载域名。检查接口是固定地址且走 TLS,
+// 但下载地址来自响应正文,限制域名可避免被一个异常响应引到别处。Gitee 的附件会跳到
+// foruda.gitee.com,同属 gitee.com。
 func allowedDownloadURL(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
-	for _, ok := range []string{"github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"} {
+	for _, ok := range []string{"github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com", "gitee.com"} {
 		if host == ok || strings.HasSuffix(host, "."+ok) {
 			return true
 		}
@@ -245,21 +321,32 @@ func DownloadUpdate(ctx context.Context, info UpdateInfo, dir string, progress f
 		return "", fmt.Errorf("本次发布没有可下载的安装包")
 	}
 	if !allowedDownloadURL(info.AssetURL) {
-		return "", fmt.Errorf("下载地址不是 GitHub 官方域名,已拒绝")
+		return "", fmt.Errorf("下载地址不是 Gitee 或 GitHub 官方域名,已拒绝")
 	}
+	var mirrors []string
+	for _, m := range info.Mirrors {
+		if allowedDownloadURL(m) {
+			mirrors = append(mirrors, m)
+		}
+	}
+	info.Mirrors = mirrors
 	return downloadAsset(ctx, info, dir, progress)
 }
 
 // 慢网络下(实测 39 KB/s)13 MB 的安装包要下 6 分钟,中途断一次很常见。
-// GitHub 的资源地址支持 Range,断了就从断点接着下,不从头再来。
-// 不设整体超时,只看是否停滞:慢但一直在收数据就让它下完,用户关窗可随时取消。
+// GitHub 的资源地址支持 Range,断了就从断点接着下,不从头再来;Gitee 不认 Range,
+// 只能从头下。不设整体超时,只看是否停滞:慢但一直在收数据就让它下完,用户关窗可随时取消。
 var (
 	downloadAttempts     = 5
 	downloadStallTimeout = 60 * time.Second
 )
 
-// downloadFatal 包装不值得重试的错误:服务器明确拒绝、本地磁盘写不进去。
+// downloadFatal 包装不值得重试的错误:本地磁盘写不进去。
 type downloadFatal struct{ error }
+
+// downloadRefused 是服务器明确拒绝(404、403 等):只有一个下载源时不值得重试,
+// 有镜像时换下一个。
+type downloadRefused struct{ error }
 
 // downloadAsset 是不含域名白名单的下载实现,白名单在 DownloadUpdate 里把关。
 func downloadAsset(ctx context.Context, info UpdateInfo, dir string, progress func(done, total int64)) (string, error) {
@@ -279,13 +366,16 @@ func downloadAsset(ctx context.Context, info UpdateInfo, dir string, progress fu
 		return "", err
 	}
 	d := &resumableDownload{file: tmp, hash: sha256.New(), total: info.AssetSize, progress: progress}
+	// 出错后换下一个下载源:同一个文件,认 Range 的接着下,不认的从头下,最后统一按大小和 SHA256 校验。
+	urls := append([]string{info.AssetURL}, info.Mirrors...)
 	for attempt := 1; ; attempt++ {
-		err = d.fetch(ctx, info.AssetURL)
+		err = d.fetch(ctx, urls[(attempt-1)%len(urls)])
 		if err == nil {
 			break
 		}
 		var fatal downloadFatal
-		if ctx.Err() != nil || errors.As(err, &fatal) {
+		var refused downloadRefused
+		if ctx.Err() != nil || errors.As(err, &fatal) || errors.As(err, &refused) && len(urls) == 1 {
 			return fail(err)
 		}
 		if attempt == downloadAttempts {
@@ -353,7 +443,7 @@ func (d *resumableDownload) fetch(parent context.Context, assetURL string) error
 			d.total = resp.ContentLength
 		}
 	default:
-		return downloadFatal{fmt.Errorf("下载失败: 服务器返回 %s", resp.Status)}
+		return downloadRefused{fmt.Errorf("下载失败: 服务器返回 %s", resp.Status)}
 	}
 	// 响应头到了以后只看数据是否还在流动。
 	stall := time.AfterFunc(downloadStallTimeout, cancel)

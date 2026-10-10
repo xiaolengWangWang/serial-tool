@@ -210,10 +210,14 @@ func TestAllowedDownloadURL(t *testing.T) {
 		"https://github.com/x/y/releases/download/v1/a.zip",
 		"https://objects.githubusercontent.com/a.zip",
 		"https://release-assets.githubusercontent.com/a.zip",
+		"https://gitee.com/sun_xuanqi/serial-tool/releases/download/v1/a.zip",
+		"https://foruda.gitee.com/attach_file/1/a.zip",
 	}
 	bad := []string{
 		"http://github.com/x/y/a.zip",
 		"https://github.com.evil.example/a.zip",
+		"https://gitee.com.evil.example/a.zip",
+		"https://evilgitee.com/a.zip",
 		"https://evil.example/a.zip",
 		"",
 	}
@@ -298,7 +302,8 @@ func TestDownloadUpdateChecksumMismatch(t *testing.T) {
 	}
 }
 
-// TestLiveUpdateDownload 打通真实链路:查最新发布 → 下载安装包 → 校验 SHA256。
+// TestLiveUpdateDownload 打通真实链路:查最新发布 → 下载安装包 → 校验 SHA256,
+// Windows zip 再装进临时目录,确认发布包能被软件内安装解开(含中文文件名)。
 // 需要联网,默认跳过,用 COMMBOX_LIVE_UPDATE=1 go test -run TestLiveUpdateDownload 手动跑。
 func TestLiveUpdateDownload(t *testing.T) {
 	if os.Getenv("COMMBOX_LIVE_UPDATE") != "1" {
@@ -325,6 +330,22 @@ func TestLiveUpdateDownload(t *testing.T) {
 	}
 	if info.AssetSize > 0 && st.Size() != info.AssetSize {
 		t.Fatalf("下载大小 %d 与发布信息 %d 不符", st.Size(), info.AssetSize)
+	}
+	t.Logf("来自 %s,镜像 %q", info.Source, info.Mirrors)
+	if !strings.HasSuffix(info.AssetName, ".zip") {
+		return
+	}
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{"CommBox.exe": "old"})
+	exe, err := installZip(path, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(exe); err != nil || st.Size() < 1<<20 {
+		t.Fatalf("安装后的 CommBox.exe 不对: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "CommBox使用手册.md")); err != nil {
+		t.Fatalf("中文文件名没有正确解出: %v", err)
 	}
 }
 
@@ -525,6 +546,145 @@ func TestDownloadSlowConnectionSetupIsNotCut(t *testing.T) {
 	if got := atomic.LoadInt32(&hits); got != 1 {
 		t.Fatalf("响应头慢不应触发重试,实际请求 %d 次", got)
 	}
+}
+
+// giteeReleaseJSON 复刻 Gitee releases/latest:没有 html_url,附件没有 size,
+// 另带两个源码包附件。
+func giteeReleaseJSON(tag, asset, notes string) string {
+	return fmt.Sprintf(`{"id":1,"tag_name":%q,"name":"CommBox %s","body":%q,"assets":[
+		{"browser_download_url":"https://gitee.com/sun_xuanqi/serial-tool/releases/download/%s/%s","name":%q},
+		{"browser_download_url":"https://gitee.com/sun_xuanqi/serial-tool/archive/refs/tags/%s.zip","name":"%s.zip"},
+		{"browser_download_url":"https://gitee.com/sun_xuanqi/serial-tool/archive/refs/tags/%s.tar.gz","name":"%s.tar.gz"}]}`,
+		tag, tag, notes, tag, asset, asset, tag, tag, tag, tag)
+}
+
+// releaseSource 起一个只返回 body 的发布接口;status 非 200 时只返回状态码。
+func releaseSource(t *testing.T, name string, status int, body string) updateSource {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		fmt.Fprint(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return updateSource{name: name, api: srv.URL, page: "https://" + strings.ToLower(name) + ".example/releases"}
+}
+
+// 两边版本一样时用 Gitee 的地址,GitHub 的同名安装包作为镜像,大小也从 GitHub 补上。
+func TestCheckUpdateSourcesPrefersGiteeAndKeepsMirror(t *testing.T) {
+	asset := "CommBox-0.8.5" + updateAssetSuffix()
+	notes := "## SHA256\n\n```\n" + strings.Repeat("cd", 32) + "  " + asset + "\n```\n"
+	sources := []updateSource{
+		releaseSource(t, "Gitee", http.StatusOK, giteeReleaseJSON("v0.8.5", asset, notes)),
+		releaseSource(t, "GitHub", http.StatusOK, releaseJSON("v0.8.5", asset, 6369803, notes)),
+	}
+	info, err := checkUpdateSources(context.Background(), sources, "0.8.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Source != "Gitee" || !strings.HasPrefix(info.AssetURL, "https://gitee.com/") || info.AssetName != asset {
+		t.Fatalf("应选 Gitee 上的本平台安装包: %+v", info)
+	}
+	if len(info.Mirrors) != 1 || !strings.HasPrefix(info.Mirrors[0], "https://github.com/") {
+		t.Fatalf("GitHub 的同名安装包应作为镜像: %q", info.Mirrors)
+	}
+	if info.AssetSize != 6369803 || info.SHA256 != strings.Repeat("cd", 32) {
+		t.Fatalf("大小或校验和错误: %d %q", info.AssetSize, info.SHA256)
+	}
+	if info.PageURL != sources[0].page {
+		t.Fatalf("Gitee 不给发布页地址时应用下载源的页面: %q", info.PageURL)
+	}
+}
+
+// 版本更新的下载源优先,哪怕排在后面;版本不同的安装包不能当镜像。
+func TestCheckUpdateSourcesNewestWins(t *testing.T) {
+	sources := []updateSource{
+		releaseSource(t, "Gitee", http.StatusOK, giteeReleaseJSON("v0.8.4", "CommBox-0.8.4"+updateAssetSuffix(), "")),
+		releaseSource(t, "GitHub", http.StatusOK, releaseJSON("v0.8.5", "CommBox-0.8.5"+updateAssetSuffix(), 1, "")),
+	}
+	info, err := checkUpdateSources(context.Background(), sources, "0.8.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Version != "0.8.5" || info.Source != "GitHub" || !info.Newer || len(info.Mirrors) != 0 {
+		t.Fatalf("应取 GitHub 上更新的版本且没有镜像: %+v", info)
+	}
+}
+
+// Gitee 刚建好发布、安装包还没传完时,同版本有安装包的 GitHub 优先。
+func TestCheckUpdateSourcesTiePrefersPlatformAsset(t *testing.T) {
+	sources := []updateSource{
+		releaseSource(t, "Gitee", http.StatusOK, `{"tag_name":"v0.8.5","name":"n","body":"","assets":[]}`),
+		releaseSource(t, "GitHub", http.StatusOK, releaseJSON("v0.8.5", "CommBox-0.8.5"+updateAssetSuffix(), 1, "")),
+	}
+	info, err := checkUpdateSources(context.Background(), sources, "0.8.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Source != "GitHub" || info.AssetURL == "" {
+		t.Fatalf("应取带安装包的 GitHub: %+v", info)
+	}
+}
+
+// 一个下载源出错不影响结果;全部出错才报错,且说明每个下载源的原因。
+func TestCheckUpdateSourcesFailures(t *testing.T) {
+	ok := releaseSource(t, "GitHub", http.StatusOK, releaseJSON("v0.8.5", "CommBox-0.8.5"+updateAssetSuffix(), 1, ""))
+	down := releaseSource(t, "Gitee", http.StatusForbidden, "")
+	info, err := checkUpdateSources(context.Background(), []updateSource{down, ok}, "0.8.4")
+	if err != nil || info.Source != "GitHub" {
+		t.Fatalf("Gitee 出错时应取 GitHub: %+v %v", info, err)
+	}
+	_, err = checkUpdateSources(context.Background(), []updateSource{down, releaseSource(t, "GitHub", http.StatusBadGateway, "")}, "0.8.4")
+	if err == nil || !strings.Contains(err.Error(), "Gitee") || !strings.Contains(err.Error(), "GitHub") {
+		t.Fatalf("全部出错时应说明每个下载源: %v", err)
+	}
+}
+
+// 正式的下载源列表:Gitee 在前,都走 HTTPS。
+func TestUpdateSourcesGiteeFirst(t *testing.T) {
+	if len(updateSources) != 2 || updateSources[0].name != "Gitee" || updateSources[1].name != "GitHub" {
+		t.Fatalf("下载源顺序错误: %+v", updateSources)
+	}
+	for _, s := range updateSources {
+		if !strings.HasPrefix(s.api, "https://") || !strings.HasPrefix(s.page, "https://") {
+			t.Fatalf("下载源必须走 HTTPS: %+v", s)
+		}
+	}
+}
+
+// 第一个下载源拒绝(404)时换镜像接着下,不算失败。
+func TestDownloadSwitchesToMirror(t *testing.T) {
+	payload, info := testPayload()
+	var refused int32
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&refused, 1)
+		http.NotFound(w, r)
+	}))
+	defer bad.Close()
+	good, hits, _ := assetServer(t, payload, 0, false, true)
+	info.AssetURL, info.Mirrors = bad.URL+"/a.zip", []string{good.URL + "/a.zip"}
+	path, err := downloadAsset(context.Background(), info, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDownloaded(t, path, payload)
+	if atomic.LoadInt32(&refused) != 1 || atomic.LoadInt32(hits) != 1 {
+		t.Fatalf("应先试主地址一次再换镜像: 主 %d 次, 镜像 %d 次", refused, *hits)
+	}
+}
+
+// 下载中途断开后换到不认 Range 的镜像(Gitee)要从头写,不能拼出一个错包。
+func TestDownloadMirrorWithoutRangeRestarts(t *testing.T) {
+	payload, info := testPayload()
+	flaky, _, _ := assetServer(t, payload, 100, false, true)
+	plain, _, _ := assetServer(t, payload, 0, false, false)
+	info.AssetURL, info.Mirrors = flaky.URL+"/a.zip", []string{plain.URL + "/a.zip"}
+	path, err := downloadAsset(context.Background(), info, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDownloaded(t, path, payload)
 }
 
 func TestShouldAutoPromptNeedsPlatformAsset(t *testing.T) {

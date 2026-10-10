@@ -6,7 +6,7 @@ Windows 在“帮助 → 完整使用手册”或按 F1 打开离线手册。选
 
 ## 1. 安装与快速开始
 
-发布页：https://github.com/xiaolengWangWang/serial-tool/releases
+发布页：https://gitee.com/sun_xuanqi/serial-tool/releases（国内推荐），https://github.com/xiaolengWangWang/serial-tool/releases（两边安装包相同）
 
 Windows：解压 ZIP 或 7z，运行 CommBox.exe。日常使用可选体积较小的 GUI 包，包含主程序、内置虚拟串口管理和手册；完整包另含命令行及独立 VirtualCOM。CommBox-CLI.exe 是命令行工具；VirtualCOM-GUI.exe 和 VirtualCOM.exe 可独立管理虚拟串口。主程序已集成虚拟串口管理，通常无需另开它们。
 
@@ -162,7 +162,9 @@ GUI 数据目录：Windows 为 %APPDATA%\CommBox\data，macOS 为 ~/Library/Appl
 
 “文件 → 新建实例”可连接不同设备或测试虚拟串口两端。各实例使用不同真实串口、监听端口，避免占用冲突。
 
-“帮助 → 检查更新”检查发布版本；设置中可控制启动检查。下载更新包后核对 SHA256，保持配套文件完整。更新前停止任务并保存内容。
+“帮助 → 检查更新”同时查询 Gitee 和 GitHub，取最新的发布，一样新时优先从 Gitee 下载，出错时自动换另一边；“设置 → 启动时检查更新”控制启动检查。安装包按发布说明里的 SHA256 校验，不一致时删除不用。
+
+Windows 解压运行的 CommBox.exe 可软件内更新：点击“下载并安装”，下载校验后直接替换程序目录里的文件，再点“立即重启”生效；不重启也可以，下次启动即为新版本。数据目录和设置不受影响。重启会结束连接和发送任务，更新前保存需要的内容。程序目录不可写入、文件被占用或安装失败时，会恢复原文件并提示原因，可改用“打开发布页”手动下载解压覆盖。macOS 下载 DMG 后自动打开，把 CommBox.app 拖入 Applications 替换。
 
 Windows 关闭主程序会结束通信和发送任务；macOS 关闭主窗口可能仅隐藏，使用退出菜单或 Command+Q 完全退出。
 

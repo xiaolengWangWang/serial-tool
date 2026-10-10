@@ -621,9 +621,6 @@ func GoUDPSend(text *C.char, hex C.int, eol *C.char) *C.char {
 
 // ---- 在线更新 ----
 
-// updateReleasesPage 是检查失败时兜底的发布页地址。
-const updateReleasesPage = "https://github.com/xiaolengWangWang/serial-tool/releases"
-
 // settingAutoUpdate 记录是否在启动时检查更新。空值按开启处理:检查只发一个 GET、
 // 不带任何用户数据,老用户升级上来无需先去设置里打开。
 const settingAutoUpdate = "update.auto_check"
@@ -677,7 +674,7 @@ func GoSetAutoUpdate(on C.int) {
 }
 
 //export GoReleasesPage
-func GoReleasesPage() *C.char { return C.CString(updateReleasesPage) }
+func GoReleasesPage() *C.char { return C.CString(core.UpdateReleasesPage) }
 
 // GoCheckUpdate 查最新发布并与当前版本比较,结果以 JSON 返回。缓存 UpdateInfo
 // 供随后的 GoDownloadUpdate 复用,避免下载前再查一次。由后台队列调用(会阻塞)。
@@ -705,7 +702,15 @@ func GoCheckUpdate() *C.char {
 	m["hasAsset"] = info.AssetURL != ""
 	m["autoPrompt"] = info.ShouldAutoPrompt()
 	m["assetName"] = info.AssetName
-	m["assetSizeText"] = core.FormatBytes(uint64(info.AssetSize))
+	// 界面把它放在安装包名后的括号里:大小(Gitee 不给大小,可能未知)和下载源。
+	var sizeText []string
+	if info.AssetSize > 0 {
+		sizeText = append(sizeText, core.FormatBytes(uint64(info.AssetSize)))
+	}
+	if info.Source != "" {
+		sizeText = append(sizeText, "来自 "+info.Source)
+	}
+	m["assetSizeText"] = strings.Join(sizeText, "，")
 	return jsonCString(m)
 }
 

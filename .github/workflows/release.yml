@@ -48,6 +48,8 @@ jobs:
           ./scripts/build-release.ps1
           New-Item -ItemType Directory -Force build/release | Out-Null
           Copy-Item "build/CommBox-$version-Windows-x64.zip" build/release/
+          # 完整 7z 与只含主程序的 GUI.zip / GUI.7z,逐文件核对 SHA256
+          ./scripts/compress-windows.ps1 -SourceArchive "build/release/CommBox-$version-Windows-x64.zip"
       - name: Build macOS or Linux
         if: runner.os != 'Windows'
         run: bash scripts/build-unix.sh
@@ -78,7 +80,7 @@ jobs:
           version=$(sed -n 's/^const Version = "\([^"]*\)"/\1/p' core/modes.go)
           tag="v$version"
           test -n "$version"
-          for asset in "CommBox-$version-Windows-x64.zip" "CommBox-$version-macOS-AppleSilicon.dmg" "CommBox-$version-macOS-Intel.dmg" commbox-linux-amd64 commbox-linux-arm64 "CommBox-$version-Linux-amd64.tar.gz" "CommBox-$version-Linux-arm64.tar.gz"; do
+          for asset in "CommBox-$version-Windows-x64.zip" "CommBox-$version-Windows-x64.7z" "CommBox-$version-Windows-x64-GUI.zip" "CommBox-$version-Windows-x64-GUI.7z" "CommBox-$version-macOS-AppleSilicon.dmg" "CommBox-$version-macOS-Intel.dmg" commbox-linux-amd64 commbox-linux-arm64 "CommBox-$version-Linux-amd64.tar.gz" "CommBox-$version-Linux-arm64.tar.gz" CommBox-Manual.md; do
             test -s "build/release/$asset"
           done
           (cd build/release && sha256sum * > SHA256SUMS.txt)
@@ -86,5 +88,8 @@ jobs:
           printf '\n## SHA256\n\n```text\n' >> build/release-notes.md
           cat build/release/SHA256SUMS.txt >> build/release-notes.md
           printf '```\n' >> build/release-notes.md
-          gh release create "$tag" --target "$GITHUB_SHA" --draft --title "CommBox $tag · Windows GUI 与交互优化" --notes-file build/release-notes.md build/release/*
+          # 标题取发布说明第一行:"# CommBox v0.11.3 — 软件内更新" → "CommBox v0.11.3 · 软件内更新"
+          title=$(head -n 1 "docs/releases/release-$tag.md" | sed 's/^# *//; s/ — / · /')
+          case "$title" in "CommBox $tag"*) ;; *) echo "发布说明第一行应以 '# CommBox $tag' 开头: $title"; exit 1 ;; esac
+          gh release create "$tag" --target "$GITHUB_SHA" --draft --title "$title" --notes-file build/release-notes.md build/release/*
           gh release edit "$tag" --draft=false --latest

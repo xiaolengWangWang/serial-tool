@@ -34,6 +34,14 @@ func TestUpdateDetail(t *testing.T) {
 	if got := updateDetail(core.UpdateInfo{Name: "只有说明"}); got != "只有说明" {
 		t.Fatalf("无安装包时详情错误: %q", got)
 	}
+	// Gitee 不给大小:只显示下载源,不能显示 0 B。
+	got = updateDetail(core.UpdateInfo{Name: "CommBox v0.11.3", AssetName: "CommBox-0.11.3-Windows-x64.zip", Source: "Gitee"})
+	if got != "CommBox v0.11.3 · CommBox-0.11.3-Windows-x64.zip（来自 Gitee）" {
+		t.Fatalf("大小未知时详情错误: %q", got)
+	}
+	if got := updateDetail(core.UpdateInfo{AssetName: "a.zip"}); got != "a.zip" {
+		t.Fatalf("没有大小和下载源时不应出现空括号: %q", got)
+	}
 }
 
 func TestUpdateProgress(t *testing.T) {

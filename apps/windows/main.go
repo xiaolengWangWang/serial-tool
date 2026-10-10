@@ -111,6 +111,10 @@ type application struct {
 	detailColumns                         *walk.Action
 	autoUpdateAction                      *walk.Action
 	checkingUpdate                        bool
+	// installedUpdate 是已装好、等重启的新版本及其 exe;用户选了重启时 restartAfterExit 为真,
+	// 退出后启动它。没选重启就正常退出,下次手动启动的就是新版本。
+	installedUpdate, installedExe string
+	restartAfterExit              bool
 	// 每秒刷新的上一次结果。只有内容真正变化时才写回控件：
 	// 无条件 SetModel/SetText 会触发重排，而重排会把展开中的下拉列表强制收起。
 	lastTargetLabels, lastPeerLabels []string
@@ -242,6 +246,13 @@ func main() {
 		os.Exit(runAIPDFWorker(os.Args[2]))
 	}
 	app := new(application)
+	// 最后执行:等窗口、SQLite 都关掉后再启动新版本,两个进程不同时写数据库。
+	defer app.startInstalledUpdate()
+	go func() {
+		// 刚重启时旧进程可能还没退出,旧 exe 删不掉,等几秒再清理。
+		time.Sleep(5 * time.Second)
+		core.CleanupUpdate()
+	}()
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		walk.MsgBox(nil, "CommBox", chineseError(err), walk.MsgBoxOK|walk.MsgBoxIconError)

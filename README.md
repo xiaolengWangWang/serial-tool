@@ -3,6 +3,8 @@
 一个跨平台的串口与网络调试工具:命令行 + macOS / Windows 原生桌面版,共享同一套核心引擎(`core/`)。支持串口、TCP/UDP 服务端与客户端、串口↔网络透传、HTTP 客户端、虚拟串口,以及全量 SQLite 收发存档。
 
 > 📖 完整使用说明见 **[CommBox 使用手册](docs/CommBox使用手册.md)**。
+>
+> ⬇️ 下载：[Gitee 发行版](https://gitee.com/sun_xuanqi/serial-tool/releases)（国内推荐） · [GitHub Releases](https://github.com/xiaolengWangWang/serial-tool/releases)，两边安装包相同。
 
 ## 目录
 - [目录结构](#目录结构)
@@ -55,7 +57,7 @@ Windows 串口名可写 `COM3`。`./commbox -h` 查看全部参数。
   - macOS：在分析中心内流式对话。点击即发送当前报文、选中报文或数据库报告，回答在结果区逐段显示；可停止并保留部分回答，在下方输入框继续提问，对话自动存入本地 Markdown。
   - Windows：右侧 AI 面板与历史数据分析窗口共用流式对话，可停止、追问、复制与导出；疑似 Modbus 帧附带本地功能码、字节数与 CRC 结论；长报告截取前 32 KiB；服务错误说明 Key、余额、限流或网络原因。AI Key 存 Windows 凭据管理器。
   - Windows 对话可添加文本日志、CSV、JSON、DOCX、可选中文字的 PDF 和 PNG / JPEG / GIF / WebP 图片；附件随提问发送，图片需使用支持视觉的模型（DeepSeek 可选 `deepseek-flash`）。支持多选或分批添加，列表显示附件数量并可逐项移除；重复路径自动跳过，单个文件失败不会取消其他有效附件。每次最多 6 个附件，文本提取上限 64 KiB / 个，PDF / DOCX 文件上限 5 MiB / 个，PDF 单页解压内容上限 4 MiB，图片上限 2 MiB / 个且不超过 3200 万像素；扫描版 PDF 暂不支持。PDF 在独立进程中解析，限时 20 秒；对话累计文字上限 512 KiB、图片编码上限 24 MiB。
-- **在线更新**（帮助 → 检查更新）：启动时自动检查（可关闭），只在新版本带本平台安装包时提示；macOS 按芯片匹配 DMG，下载后校验 SHA256 再打开。
+- **在线更新**（帮助 → 检查更新）：启动时自动检查（可关闭），同时查询 Gitee 与 GitHub，一样新时优先从 Gitee 下载，出错自动换另一边；只在新版本带本平台安装包时提示，下载后校验 SHA256。Windows 软件内安装：替换程序目录里的文件后重启生效，按已安装的 GUI 包或完整包选择更新包，失败时恢复原文件；macOS 按芯片匹配 DMG，下载后打开。
 
 ## 工作模式
 
@@ -156,7 +158,15 @@ macOS/Linux 使用 PTY，无需额外驱动。Windows 不提供 TCP→虚拟串�
 
 本仓库分别提供 Windows、macOS 和 Linux 构建产物，按各平台的构建与验证流程发布。
 
-GitHub Actions 的 `Build and release CommBox` 工作流可手动运行，在 Windows x64、macOS Apple Silicon / Intel、Linux amd64 / arm64 原生环境执行测试并构建。勾选 `publish` 后，所有平台成功才创建正式版本并上传产物与 SHA256 校验值。macOS / Linux 本机打包入口为 `bash scripts/build-unix.sh`。
+GitHub Actions 的 `Build and release CommBox` 工作流可手动运行，在 Windows x64、macOS Apple Silicon / Intel、Linux amd64 / arm64 原生环境执行测试并构建，Windows 任务同时生成完整 7z 与 GUI.zip / GUI.7z。勾选 `publish` 后，所有平台成功才创建正式版本并上传产物与 SHA256 校验值，发布标题取发布说明第一行（`# CommBox v<版本> — 标题`）。macOS / Linux 本机打包入口为 `bash scripts/build-unix.sh`。
+
+GitHub 发布成功后同步到 Gitee 镜像（软件内更新优先从 Gitee 下载）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/publish-gitee.ps1
+```
+
+脚本把该版本的提交推到 Gitee 的 main 并推 tag，建同名发行版，附件在内存里从 GitHub 下载、按发布说明校验 SHA256 后上传，最后按软件内更新的方式匿名核对。令牌放在 `~/.gitee_token` 或环境变量 `GITEE_TOKEN`（Gitee 私人令牌，勾选 projects），只放在请求头里。
 
 Windows 发布包（两个 CommBox 程序、两个 VirtualCOM 程序、说明文档与 SHA256SUMS）由 `scripts/build-release.ps1` 生成，版本号从源码常量读取：
 
@@ -166,7 +176,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1
 
 脚本要求工作区干净且 HEAD 落在 `v<版本>` 标签上，逐个校验 PE 头、构建来源 commit、版本资源和压缩包内容。改版本号时同时改各目录的 `versioninfo.json` 并重新生成 `.syso`（`go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.5.0 -64 -o rsrc_windows_amd64.syso versioninfo.json`，新版 goversioninfo 生成的文件大一倍），漏改会有测试报错。
 
-需要减小 Windows 下载包时，可在生成完整 ZIP 后执行：
+本机需要减小 Windows 下载包时，可在生成完整 ZIP 后执行（CI 已自动执行）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/compress-windows.ps1 -SourceArchive build/CommBox-<版本>-Windows-x64.zip
