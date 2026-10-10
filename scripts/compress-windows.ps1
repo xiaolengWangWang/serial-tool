@@ -38,7 +38,8 @@ function Test-SevenZip {
     $listing.CreateNoWindow = $true
     $listing.RedirectStandardOutput = $true
     # Windows bsdtar 的重定向列表使用系统 ANSI 编码，与控制台编码无关。
-    $listing.StandardOutputEncoding = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage)
+    $ansi = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage)
+    $listing.StandardOutputEncoding = $ansi
     $process = [Diagnostics.Process]::Start($listing)
     try {
         $names = @($process.StandardOutput.ReadToEnd() -split '\r?\n' | Where-Object { $_ })
@@ -46,8 +47,14 @@ function Test-SevenZip {
         if ($process.ExitCode -ne 0) { throw ('Cannot list archive: ' + $Path) }
     } finally { $process.Dispose() }
     if ($names.Count -ne $ExpectedHashes.Count) { throw ('Archive entry count mismatch: ' + $Path) }
+    # 英文系统（如 CI）的 ANSI 代码页没有中文，bsdtar 列出的中文字符变成 ?。预期文件名做同样的转换再对照，
+    # 解压时 ? 作为通配符仍匹配原文件。中文系统上转换前后不变。
+    $byListed = @{}
+    foreach ($expectedName in $ExpectedHashes.Keys) { $byListed[$ansi.GetString($ansi.GetBytes($expectedName))] = $expectedName }
+    if ($byListed.Count -ne $ExpectedHashes.Count) { throw ('Archive entry names collide in the ANSI code page: ' + $Path) }
     foreach ($name in $names) {
-        if (!$ExpectedHashes.ContainsKey($name)) { throw ('Unexpected archive entry: ' + $name) }
+        if (!$byListed.ContainsKey($name)) { throw ('Unexpected archive entry: ' + $name) }
+        $expectedHash = $ExpectedHashes[$byListed[$name]]
         # 二进制 stdout 直接进入 SHA256，不经过 PowerShell 文本管道或落盘解压。
         $psi = New-Object Diagnostics.ProcessStartInfo
         $psi.FileName = $tar
@@ -59,7 +66,7 @@ function Test-SevenZip {
         try {
             $hash = Get-StreamHash $process.StandardOutput.BaseStream
             $process.WaitForExit()
-            if ($process.ExitCode -ne 0 -or $hash -ne $ExpectedHashes[$name]) {
+            if ($process.ExitCode -ne 0 -or $hash -ne $expectedHash) {
                 throw ('Extracted SHA256 mismatch: ' + $name)
             }
         } finally { $process.Dispose() }

@@ -17,7 +17,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: windows-2022
+          # 2022 自带的 tar.exe 不支持 LZMA2,打不了 7z
+          - runner: windows-2025
             platform: windows-amd64
           - runner: macos-15
             platform: darwin-arm64

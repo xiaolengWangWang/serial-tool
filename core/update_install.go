@@ -175,8 +175,8 @@ func readOldFiles(list string) []string {
 	}
 	var names []string
 	for _, line := range strings.Split(string(data), "\n") {
-		// 只认 *.old 文件名:清单被改坏时也不会删到别的文件或别的目录
-		if name := strings.TrimSpace(line); name != "" && name == filepath.Base(name) && strings.HasSuffix(name, updateOldSuffix) {
+		// 只认本目录的 *.old 文件名:清单被改坏时也不会删到别的文件或别的目录
+		if name := strings.TrimSpace(line); name != "" && !strings.ContainsAny(name, `\/:`) && strings.HasSuffix(name, updateOldSuffix) {
 			names = append(names, name)
 		}
 	}
