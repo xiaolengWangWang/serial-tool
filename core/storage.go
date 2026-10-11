@@ -34,6 +34,11 @@ type Store struct {
 	endpoint   string
 	parameters string
 	captureKey string
+	// Cache only well below the rotation limit. Each skipped check consumes a
+	// conservative allowance for SQLite pages, indexes and WAL, not just raw bytes.
+	sizeCheckedAt time.Time
+	sizeHeadroom  int64
+	sizeWrites    int
 	// bg 是后台任务(虚拟串口)的会话,按调用方持有的句柄索引。会话行只存在于
 	// 当时的数据文件里,换文件后行 ID 失效,所以对外只给句柄,换文件时在新文件
 	// 重建会话行,否则后续数据会挂到不存在或别人的会话上。
@@ -118,6 +123,10 @@ func (s *Store) Received(source string, data []byte) error {
 		return nil
 	}
 	now := time.Now()
+	if len(source) > 4<<10 {
+		s.sizeCheckedAt = time.Time{}
+		defer func() { s.sizeCheckedAt = time.Time{} }()
+	}
 	if err := s.rotateIfNeededLocked(now, int64(len(data))); err != nil {
 		return err
 	}
@@ -179,8 +188,21 @@ func (s *Store) Close() {
 
 func (s *Store) rotateIfNeededLocked(now time.Time, incomingSize int64) error {
 	date := now.Format("20060102")
-	if date == s.date && databaseFamilySize(s.path)+incomingSize < databaseSizeLimit {
-		return nil
+	if date == s.date {
+		checkedAt := time.Now() // Packet timestamps may be historical or out of order.
+		allowance := int64(128<<10) + 4*incomingSize
+		if s.sizeWrites < 32 && checkedAt.Sub(s.sizeCheckedAt) < 250*time.Millisecond &&
+			incomingSize <= 4<<10 && s.sizeHeadroom > allowance {
+			s.sizeHeadroom -= allowance
+			s.sizeWrites++
+			return nil
+		}
+		size := databaseFamilySize(s.path)
+		s.sizeCheckedAt, s.sizeWrites = checkedAt, 1
+		s.sizeHeadroom = databaseSizeLimit - size - allowance
+		if size+incomingSize < databaseSizeLimit {
+			return nil
+		}
 	}
 	active := s.sessionID != 0
 	s.finishSessionLocked(now)
@@ -262,6 +284,7 @@ func (s *Store) openFileLocked(now time.Time, forceNew bool) error {
 		return err
 	}
 	s.db, s.path, s.date, s.index = db, path, date, index
+	s.sizeCheckedAt = time.Time{}
 	return nil
 }
 
@@ -276,6 +299,7 @@ func (s *Store) insertSessionLocked(now time.Time) error {
 
 // insertSessionRow 插入一条会话记录并返回其 ID,不影响全局 sessionID。
 func (s *Store) insertSessionRow(now time.Time, mode, endpoint, parameters string) (int64, error) {
+	s.sizeCheckedAt = time.Time{} // Session metadata can grow independently of packets.
 	result, err := s.db.Exec(`INSERT INTO sessions(started_at, mode, endpoint, parameters) VALUES (?, ?, ?, ?)`,
 		now.Format(time.RFC3339Nano), mode, endpoint, parameters)
 	if err != nil {
@@ -314,6 +338,7 @@ func (s *Store) EndSessionID(handle int64) {
 	}
 	delete(s.bg, handle)
 	if s.db != nil {
+		s.sizeCheckedAt = time.Time{}
 		_, _ = s.db.Exec(`UPDATE sessions SET ended_at = ? WHERE id = ?`, time.Now().Format(time.RFC3339Nano), b.rowID)
 	}
 }
@@ -326,6 +351,10 @@ func (s *Store) ReceivedForSession(handle int64, source string, data []byte) err
 		return nil
 	}
 	now := time.Now()
+	if len(source) > 4<<10 {
+		s.sizeCheckedAt = time.Time{}
+		defer func() { s.sizeCheckedAt = time.Time{} }()
+	}
 	if err := s.rotateIfNeededLocked(now, int64(len(data))); err != nil {
 		return err
 	}
@@ -344,6 +373,7 @@ func (s *Store) finishSessionLocked(now time.Time) {
 	if s.db == nil || s.sessionID == 0 {
 		return
 	}
+	s.sizeCheckedAt = time.Time{}
 	_, _ = s.db.Exec(`UPDATE sessions SET ended_at = ? WHERE id = ?`, now.Format(time.RFC3339Nano), s.sessionID)
 	s.sessionID = 0
 }

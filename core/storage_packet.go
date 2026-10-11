@@ -51,6 +51,10 @@ func (s *Store) Record(p Packet) error {
 	if p.Timestamp.IsZero() {
 		p.Timestamp = time.Now()
 	}
+	if len(p.Source)+len(p.ID)+len(p.Direction)+len(p.Transport)+len(p.ConnectionID)+len(p.Endpoint)+len(p.Leg)+len(p.SessionKey) > 4<<10 {
+		s.sizeCheckedAt = time.Time{}
+		defer func() { s.sizeCheckedAt = time.Time{} }()
+	}
 	if err := s.rotateIfNeededLocked(p.Timestamp, int64(len(p.Data))); err != nil {
 		return err
 	}
