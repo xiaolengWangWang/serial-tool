@@ -168,7 +168,17 @@ func (e *Engine) recordEventAt(epoch uint64, message string) {
 	packet := e.newPacket("EVENT", "", "", "", "断开", "", []byte(message))
 	packet.epoch = epoch
 	packet.SessionKey = fmt.Sprintf("%s-%d", e.idPrefix, epoch)
-	if err := e.emitPacket(packet); err != nil {
+	// Hold Engine's lock through the storage write so session rotation cannot
+	// move this event between the epoch check and Store.Record. Event rows remain
+	// storage-only and do not enter the receive/send packet callback.
+	e.Lock()
+	if e.epoch != epoch {
+		e.Unlock()
+		return
+	}
+	err := e.store.Record(packet)
+	e.Unlock()
+	if err != nil {
 		e.emitLog("SQLite 事件写入失败: " + err.Error())
 	}
 }

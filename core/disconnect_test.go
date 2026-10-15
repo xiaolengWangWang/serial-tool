@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -142,6 +143,12 @@ func TestServerCloseIsReportedAsServerSide(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer engine.Close()
+	var eventPackets atomic.Int32
+	engine.SetOnPacket(func(packet Packet) {
+		if packet.Direction == "EVENT" {
+			eventPackets.Add(1)
+		}
+	})
 	if err := engine.Connect(Config{Mode: ModeTCPClient, Address: listener.Addr().String(), Baud: 115200, DataBits: 8, StopBits: 1}); err != nil {
 		t.Fatal(err)
 	}
@@ -157,6 +164,9 @@ func TestServerCloseIsReportedAsServerSide(t *testing.T) {
 	}
 	if strings.Contains(line, "本端") {
 		t.Errorf("服务端关闭不应报告为本端断开: %s", line)
+	}
+	if got := eventPackets.Load(); got != 0 {
+		t.Errorf("持久化断开事件不应伪装成收发报文回调, got %d", got)
 	}
 }
 
