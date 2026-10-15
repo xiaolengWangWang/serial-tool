@@ -219,6 +219,56 @@ func TestManualDisconnectIsReportedAsLocal(t *testing.T) {
 	}
 }
 
+func TestStaleTCPDisconnectEventCannotEnterReplacementSession(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	engine, err := New(t.TempDir(), nil, func(line string) {
+		if strings.Contains(line, "TCP 连接已断开") {
+			once.Do(func() { close(entered); <-release })
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if err := engine.Connect(Config{Mode: ModeTCPClient, Address: listener.Addr().String()}); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("disconnect callback not reached")
+	}
+	if err := engine.Connect(Config{Mode: ModeTCPClient, Address: listener.Addr().String()}); err != nil {
+		t.Fatal(err)
+	}
+	replacementSession := engine.store.sessionID
+	close(release)
+	assertNoDisconnectEvent(t, engine, replacementSession)
+}
+
+func assertNoDisconnectEvent(t *testing.T, engine *Engine, sessionID int64) {
+	t.Helper()
+	time.Sleep(50 * time.Millisecond)
+	var count int
+	if err := engine.store.db.QueryRow(`SELECT COUNT(*) FROM received_data WHERE source='断开' AND session_id=?`, sessionID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("stale disconnect event recorded in replacement session: %d", count)
+	}
+}
+
 // 服务端没有任何客户端连进来时手动断开,本端也应算服务端,不能按"没有入向连接"当成客户端。
 func TestManualDisconnectOfIdleServerIsReportedAsServer(t *testing.T) {
 	for _, mode := range []Mode{ModeTCPServer, ModeUDPServer} {

@@ -164,6 +164,15 @@ func (e *Engine) recordEvent(message string) {
 	}
 }
 
+func (e *Engine) recordEventAt(epoch uint64, message string) {
+	packet := e.newPacket("EVENT", "", "", "", "断开", "", []byte(message))
+	packet.epoch = epoch
+	packet.SessionKey = fmt.Sprintf("%s-%d", e.idPrefix, epoch)
+	if err := e.emitPacket(packet); err != nil {
+		e.emitLog("SQLite 事件写入失败: " + err.Error())
+	}
+}
+
 // storeSent 把一条成功发送的报文入库(source=发送),一条报文一条记录。
 func (e *Engine) storeSent(data []byte) {
 	e.Lock()
@@ -789,7 +798,7 @@ func (e *Engine) acceptLoop(listener net.Listener, epoch uint64) {
 			if active {
 				msg := "TCP 监听错误: " + err.Error()
 				e.emitLog(msg)
-				e.recordEvent(msg)
+				e.recordEventAt(epoch, msg)
 				e.markPassiveClosed()
 				e.notifyClosed()
 			}
@@ -842,7 +851,7 @@ func (e *Engine) readTCP(connection *trackedConnection) {
 					TXCount: atomic.LoadUint64(&connection.txCount),
 				}, reason)
 			e.emitLog(msg)
-			e.recordEvent(msg)
+			e.recordEventAt(connection.epoch, msg)
 			if mode == ModeTCPClient {
 				if reconnect {
 					// 被动断开,自动重连(指数退避);UI 通过状态栏观察状态
@@ -926,7 +935,7 @@ func (e *Engine) readUDP(conn *net.UDPConn, epoch uint64) {
 			if active {
 				msg := "UDP 监听错误: " + err.Error()
 				e.emitLog(msg)
-				e.recordEvent(msg)
+				e.recordEventAt(epoch, msg)
 				e.markPassiveClosed()
 				e.notifyClosed()
 			}
@@ -970,7 +979,7 @@ func (e *Engine) readSerial(p io.ReadWriteCloser, epoch uint64) {
 				msg := serialDisconnectLine(endpoint, time.Since(time.Unix(0, atomic.LoadInt64(&e.startedAt))),
 					traffic.serialRX, traffic.serialTX, reason)
 				e.emitLog(msg)
-				e.recordEvent(msg)
+				e.recordEventAt(epoch, msg)
 				e.notifyClosed()
 			}
 			return
