@@ -8,3 +8,8 @@
 /CommBox.exe
 /macos
 /linux
+apps/android/.gradle/
+apps/android/local.properties
+apps/android/**/build/
+apps/android/*.jks
+apps/android/*.keystore

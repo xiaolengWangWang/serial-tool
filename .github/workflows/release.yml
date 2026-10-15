@@ -59,9 +59,70 @@ jobs:
           name: release-${{ matrix.platform }}
           path: build/release/*
           if-no-files-found: error
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-37" "build-tools;37.0.0"
+      - name: Test and build debug APK
+        run: |
+          gradle -p apps/android :app:testDebugUnitTest :app:assembleDebugAndroidTest :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: commbox-android-debug
+          path: apps/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+      - name: Prepare signed release keystore
+        if: inputs.publish
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo "Missing Android release signing secrets"; exit 1; }
+          test -n "$ANDROID_KEYSTORE_PASSWORD" && test -n "$ANDROID_KEY_ALIAS" && test -n "$ANDROID_KEY_PASSWORD" || { echo "Missing Android keystore password or alias secrets"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/android-signing"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/android-signing/release.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/android-signing/release.jks" >> "$GITHUB_ENV"
+      - name: Build signed release APK
+        if: inputs.publish
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          version=$(sed -n 's/^const Version = "\([^"]*\)"/\1/p' core/modes.go)
+          version_code=$(git rev-list --count HEAD)
+          gradle -p apps/android :app:assembleRelease -PreleaseVersion="$version" -PreleaseVersionCode="$version_code"
+          apk=$(find apps/android/app/build/outputs/apk/release -name '*.apk' -print -quit)
+          test -n "$apk"
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose --print-certs "$apk"
+          app_id=$("$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" manifest application-id "$apk")
+          test "$app_id" = "com.xiaoleng.commbox"
+          mkdir -p build/release
+          cp "$apk" "build/release/CommBox-$version-Android.apk"
+      - uses: actions/upload-artifact@v4
+        if: inputs.publish
+        with:
+          name: release-android
+          path: build/release/CommBox-*-Android.apk
+          if-no-files-found: error
   release:
     if: inputs.publish
-    needs: build
+    needs: [build, android]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -81,7 +142,7 @@ jobs:
           version=$(sed -n 's/^const Version = "\([^"]*\)"/\1/p' core/modes.go)
           tag="v$version"
           test -n "$version"
-          for asset in "CommBox-$version-Windows-x64.zip" "CommBox-$version-Windows-x64.7z" "CommBox-$version-Windows-x64-GUI.zip" "CommBox-$version-Windows-x64-GUI.7z" "CommBox-$version-macOS-AppleSilicon.dmg" "CommBox-$version-macOS-Intel.dmg" commbox-linux-amd64 commbox-linux-arm64 "CommBox-$version-Linux-amd64.tar.gz" "CommBox-$version-Linux-arm64.tar.gz" CommBox-Manual.md; do
+          for asset in "CommBox-$version-Windows-x64.zip" "CommBox-$version-Windows-x64.7z" "CommBox-$version-Windows-x64-GUI.zip" "CommBox-$version-Windows-x64-GUI.7z" "CommBox-$version-macOS-AppleSilicon.dmg" "CommBox-$version-macOS-Intel.dmg" commbox-linux-amd64 commbox-linux-arm64 "CommBox-$version-Linux-amd64.tar.gz" "CommBox-$version-Linux-arm64.tar.gz" "CommBox-$version-Android.apk" CommBox-Manual.md; do
             test -s "build/release/$asset"
           done
           (cd build/release && sha256sum * > SHA256SUMS.txt)
