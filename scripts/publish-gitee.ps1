@@ -12,7 +12,14 @@
 #   powershell -ExecutionPolicy Bypass -File scripts/publish-gitee.ps1             # 版本号取源码常量
 #   powershell -ExecutionPolicy Bypass -File scripts/publish-gitee.ps1 -Tag v0.11.3
 [CmdletBinding()]
-param([string]$Tag)
+param(
+    [string]$Tag,
+    [switch]$PrepareOnly,
+    [switch]$SkipCodePush,
+    [int]$ShardIndex = 0,
+    [int]$ShardCount = 1,
+    [switch]$VerifyOnly
+)
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -108,9 +115,11 @@ try {
     if ($release.draft -or $release.prerelease) { throw ('GitHub release ' + $Tag + ' is a draft or prerelease') }
     $sums = @{}
     foreach ($m in [regex]::Matches($release.body, '(?m)^([0-9a-f]{64})  (\S+)\s*$')) { $sums[$m.Groups[2].Value] = $m.Groups[1].Value }
-    $assets = @($release.assets)
-    if ($assets.Count -eq 0) { throw ('GitHub release ' + $Tag + ' has no assets') }
-    foreach ($a in $assets) {
+    $allAssets = @($release.assets)
+    if ($allAssets.Count -eq 0) { throw ('GitHub release ' + $Tag + ' has no assets') }
+    if ($ShardCount -lt 1 -or $ShardIndex -lt 0 -or $ShardIndex -ge $ShardCount) { throw 'Invalid asset shard' }
+    $assets = @(for ($i = 0; $i -lt $allAssets.Count; $i++) { if ($i % $ShardCount -eq $ShardIndex) { $allAssets[$i] } })
+    foreach ($a in $allAssets) {
         if ($a.name -ne 'SHA256SUMS.txt' -and !$sums.ContainsKey($a.name)) { throw ('No SHA256 for ' + $a.name + ' in release notes') }
     }
 
@@ -120,18 +129,20 @@ try {
     if ($commit.Trim() -ne $release.target_commitish -and $release.target_commitish -match '^[0-9a-f]{40}$') {
         throw ('Local tag ' + $Tag + ' does not match the GitHub release commit')
     }
-    $owner = $giteeRepo.Split('/')[0]
-    $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($owner + ':' + $token))
-    # 给 $env: 赋空串等于删掉变量，所以清空凭据助手放命令行（不含令牌）
-    $env:GIT_CONFIG_COUNT = '1'
-    $env:GIT_CONFIG_KEY_0 = 'http.https://gitee.com/.extraHeader'
-    $env:GIT_CONFIG_VALUE_0 = 'Authorization: Basic ' + $basic
-    try {
-        git -C $repoRoot -c credential.helper= push ('https://gitee.com/' + $giteeRepo + '.git') ($commit.Trim() + ':refs/heads/main') ('refs/tags/' + $Tag + ':refs/tags/' + $Tag)
-        if ($LASTEXITCODE -ne 0) { throw 'git push to Gitee failed' }
-    } finally {
-        foreach ($name in 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0') {
-            Remove-Item ('Env:' + $name) -ErrorAction SilentlyContinue
+    if (!$SkipCodePush) {
+        $owner = $giteeRepo.Split('/')[0]
+        $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($owner + ':' + $token))
+        # 给 $env: 赋空串等于删掉变量，所以清空凭据助手放命令行（不含令牌）
+        $env:GIT_CONFIG_COUNT = '1'
+        $env:GIT_CONFIG_KEY_0 = 'http.https://gitee.com/.extraHeader'
+        $env:GIT_CONFIG_VALUE_0 = 'Authorization: Basic ' + $basic
+        try {
+            git -C $repoRoot -c credential.helper= push ('https://gitee.com/' + $giteeRepo + '.git') ($commit.Trim() + ':refs/heads/main') ('refs/tags/' + $Tag + ':refs/tags/' + $Tag)
+            if ($LASTEXITCODE -ne 0) { throw 'git push to Gitee failed' }
+        } finally {
+            foreach ($name in 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0') {
+                Remove-Item ('Env:' + $name) -ErrorAction SilentlyContinue
+            }
         }
     }
 
@@ -146,10 +157,11 @@ try {
         $target = Invoke-Gitee 'PATCH' ('/releases/' + $target.id) $body
         Write-Output ('Updated Gitee release notes for ' + $Tag)
     }
+    if ($PrepareOnly) { Write-Output ('Gitee release ' + $Tag + ' prepared'); return }
 
     # 4. 附件：同名同大小的跳过，大小不对的删掉重传
     $files = @(Invoke-Gitee 'GET' ('/releases/' + $target.id + '/attach_files?per_page=100'))
-    foreach ($a in $assets) {
+    if (!$VerifyOnly) { foreach ($a in $assets) {
         $have = @($files | Where-Object { $_.name -eq $a.name })
         if ($have.Count -eq 1 -and [int64]$have[0].size -eq [int64]$a.size) { Write-Output ('Already on Gitee: ' + $a.name); continue }
         foreach ($f in $have) { $null = Invoke-Gitee 'DELETE' ('/releases/' + $target.id + '/attach_files/' + $f.id) }
@@ -164,13 +176,14 @@ try {
         $form.Add($file, 'file', $a.name)
         $null = Send-Request $gitee 'POST' ($giteeApi + '/releases/' + $target.id + '/attach_files') $form
         Write-Output ('Uploaded to Gitee: {0} ({1:N2} MiB)' -f $a.name, ($bytes.Length / 1MB))
-    }
+    } }
+    if ($ShardCount -gt 1 -and !$VerifyOnly) { return }
 
     # 5. 按软件内更新的方式匿名核对：latest 是这个版本，附件齐全且大小对，Windows 安装包能下载且校验一致
     $latest = Read-Json (Send-Request $anonymous 'GET' ($giteeApi + '/releases/latest'))
     if ($latest.tag_name -ne $Tag) { throw ('Gitee latest release is ' + $latest.tag_name + ', expected ' + $Tag) }
     $files = @(Invoke-Gitee 'GET' ('/releases/' + $target.id + '/attach_files?per_page=100'))
-    foreach ($a in $assets) {
+    foreach ($a in $allAssets) {
         $have = @($files | Where-Object { $_.name -eq $a.name -and [int64]$_.size -eq [int64]$a.size })
         if ($have.Count -ne 1) { throw ('Gitee attachment missing, duplicated or wrong size: ' + $a.name) }
     }
@@ -178,7 +191,7 @@ try {
     if (!$zip) { throw 'Gitee latest release has no Windows x64 zip' }
     $bytes = (Send-Request $anonymous 'GET' $zip.browser_download_url).Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
     if ((Get-Sha256 $bytes) -ne $sums[$zip.name]) { throw ('Gitee download SHA256 mismatch: ' + $zip.name) }
-    Write-Output ('Gitee release ' + $Tag + ' verified: ' + $assets.Count + ' attachments, ' + $zip.name + ' downloads with matching SHA256')
+    Write-Output ('Gitee release ' + $Tag + ' verified: ' + $allAssets.Count + ' attachments, ' + $zip.name + ' downloads with matching SHA256')
     Write-Output ('https://gitee.com/' + $giteeRepo + '/releases/tag/' + $Tag)
 } finally {
     $github.Dispose()

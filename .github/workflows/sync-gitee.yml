@@ -9,17 +9,48 @@ on:
 permissions:
   contents: read
 jobs:
-  sync:
+  prepare:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Sync and verify release
+      - name: Prepare Gitee release
         shell: pwsh
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           if (!$env:GITEE_TOKEN) { throw 'Missing GITEE_TOKEN secret' }
-          ./scripts/publish-gitee.ps1 -Tag $env:RELEASE_TAG
+          ./scripts/publish-gitee.ps1 -Tag $env:RELEASE_TAG -PrepareOnly
+  upload:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Upload release assets
+        shell: pwsh
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          ASSET_SHARD: ${{ matrix.shard }}
+        run: ./scripts/publish-gitee.ps1 -Tag $env:RELEASE_TAG -SkipCodePush -ShardIndex ([int]$env:ASSET_SHARD) -ShardCount 4
+  verify:
+    needs: upload
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify Gitee release
+        shell: pwsh
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: ./scripts/publish-gitee.ps1 -Tag $env:RELEASE_TAG -SkipCodePush -VerifyOnly
