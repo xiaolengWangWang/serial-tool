@@ -16,10 +16,10 @@ APK 包名为 `com.xiaoleng.commbox`，版本号 `0.11.8`，版本代码 `142`�
 - 华为 HarmonyOS 4 及更早的 Android APK 环境：使用同一 APK。USB、SPP、BLE 仍要按具体机型和外设实测。
 - HarmonyOS 5／NEXT 原生环境：需另行开发并签名 HAP，**此 APK 不适用**。不能把 APK 安装成功视为原生鸿蒙兼容。华为的[应用格式说明](https://developer.huawei.com/consumer/en/doc/harmonyos-guides/gameservice-gameplayer-huawei)分别列出 HarmonyOS 5.0 及以上的 HAP 和 HarmonyOS 4 及以下的 APK。
 
-本地已通过 JVM 单元测试、debug APK 与测试 APK 构建、签名 release APK 构建，并核对签名、包名和版本。当前未连接 Android 设备，尚未完成小米及鸿蒙 4 设备的安装、界面和 USB／蓝牙实测，也没有 HarmonyOS 5／NEXT 的 HAP。
+本地与 [GitHub CI](https://github.com/xiaolengWangWang/serial-tool/actions/runs/38922280822) 均已通过 JVM 单元测试、debug APK 与测试 APK 构建、签名 release APK 构建，并核对签名、包名和版本。下方 SHA256 对应 CI 发布的 APK。当前未连接 Android 设备，尚未完成小米及鸿蒙 4 设备的安装、界面和 USB／蓝牙实测，也没有 HarmonyOS 5／NEXT 的 HAP。
 
 ## SHA256
 
 ```text
-9d638ac108c4eed0da823d9f558eb993571d574353511c77dcbfbf903f9e55d5  CommBox-0.11.8-Android.apk
+8deedde8877ba49c1a1580c86dfafb4f8f4811c466392493d06f81f780aa0842  CommBox-0.11.8-Android.apk
 ```
