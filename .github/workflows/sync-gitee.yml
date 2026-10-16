@@ -1,0 +1,25 @@
+name: Sync GitHub release to Gitee
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published GitHub release tag
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Sync and verify release
+        shell: pwsh
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if (!$env:GITEE_TOKEN) { throw 'Missing GITEE_TOKEN secret' }
+          ./scripts/publish-gitee.ps1 -Tag $env:RELEASE_TAG
