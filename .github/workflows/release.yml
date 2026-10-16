@@ -2,6 +2,13 @@ name: Build and release CommBox
 on:
   workflow_dispatch:
     inputs:
+      scope:
+        description: Platforms to build and publish
+        type: choice
+        options:
+          - windows
+          - all
+        default: windows
       publish:
         description: Publish a release after all platform builds and tests pass
         type: boolean
@@ -16,18 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # 2022 自带的 tar.exe 不支持 LZMA2,打不了 7z
-          - runner: windows-2025
-            platform: windows-amd64
-          - runner: macos-15
-            platform: darwin-arm64
-          - runner: macos-15-intel
-            platform: darwin-amd64
-          - runner: ubuntu-24.04
-            platform: linux-amd64
-          - runner: ubuntu-24.04-arm
-            platform: linux-arm64
+        include: ${{ fromJSON(inputs.scope == 'all' && '[{"runner":"windows-2025","platform":"windows-amd64"},{"runner":"macos-15","platform":"darwin-arm64"},{"runner":"macos-15-intel","platform":"darwin-amd64"},{"runner":"ubuntu-24.04","platform":"linux-amd64"},{"runner":"ubuntu-24.04-arm","platform":"linux-arm64"}]' || '[{"runner":"windows-2025","platform":"windows-amd64"}]') }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -60,6 +56,7 @@ jobs:
           path: build/release/*
           if-no-files-found: error
   android:
+    if: inputs.scope == 'all'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -121,7 +118,7 @@ jobs:
           path: build/release/CommBox-*-Android.apk
           if-no-files-found: error
   release:
-    if: inputs.publish
+    if: ${{ always() && inputs.publish && needs.build.result == 'success' && (inputs.scope != 'all' || needs.android.result == 'success') }}
     needs: [build, android]
     runs-on: ubuntu-24.04
     permissions:
@@ -136,15 +133,21 @@ jobs:
       - name: Publish verified artifacts
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_SCOPE: ${{ inputs.scope }}
         shell: bash
         run: |
           set -euo pipefail
           version=$(sed -n 's/^const Version = "\([^"]*\)"/\1/p' core/modes.go)
           tag="v$version"
           test -n "$version"
-          for asset in "CommBox-$version-Windows-x64.zip" "CommBox-$version-Windows-x64.7z" "CommBox-$version-Windows-x64-GUI.zip" "CommBox-$version-Windows-x64-GUI.7z" "CommBox-$version-macOS-AppleSilicon.dmg" "CommBox-$version-macOS-Intel.dmg" commbox-linux-amd64 commbox-linux-arm64 "CommBox-$version-Linux-amd64.tar.gz" "CommBox-$version-Linux-arm64.tar.gz" "CommBox-$version-Android.apk" CommBox-Manual.md; do
+          for asset in "CommBox-$version-Windows-x64.zip" "CommBox-$version-Windows-x64.7z" "CommBox-$version-Windows-x64-GUI.zip" "CommBox-$version-Windows-x64-GUI.7z" CommBox-Manual.md; do
             test -s "build/release/$asset"
           done
+          if [[ "$RELEASE_SCOPE" == all ]]; then
+            for asset in "CommBox-$version-macOS-AppleSilicon.dmg" "CommBox-$version-macOS-Intel.dmg" commbox-linux-amd64 commbox-linux-arm64 "CommBox-$version-Linux-amd64.tar.gz" "CommBox-$version-Linux-arm64.tar.gz" "CommBox-$version-Android.apk"; do
+              test -s "build/release/$asset"
+            done
+          fi
           (cd build/release && sha256sum * > SHA256SUMS.txt)
           cp "docs/releases/release-$tag.md" build/release-notes.md
           printf '\n## SHA256\n\n```text\n' >> build/release-notes.md

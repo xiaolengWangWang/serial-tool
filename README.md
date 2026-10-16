@@ -159,9 +159,9 @@ macOS/Linux 使用 PTY，无需额外驱动。Windows 不提供 TCP→虚拟串�
 
 ## 构建
 
-本仓库分别提供 Windows、macOS 和 Linux 构建产物，按各平台的构建与验证流程发布。
+本仓库支持 Windows、macOS、Linux 和 Android 构建。后续默认只优化并发布 Windows 版；其他平台仅在明确提出时单独构建和发布。
 
-GitHub Actions 的 `Build and release CommBox` 工作流可手动运行，在 Windows x64、macOS Apple Silicon / Intel、Linux amd64 / arm64 原生环境执行测试并构建，Windows 任务同时生成完整 7z 与 GUI.zip / GUI.7z。勾选 `publish` 后，所有平台成功才创建正式版本并上传产物与 SHA256 校验值，发布标题取发布说明第一行（`# CommBox v<版本> — 标题`）。macOS / Linux 本机打包入口为 `bash scripts/build-unix.sh`。
+GitHub Actions 的 `Build and release CommBox` 工作流可手动运行，`scope` 默认是 `windows`：仅在 Windows x64 构建并测试，生成完整 ZIP/7z 和 GUI.zip/GUI.7z。只有明确选择 `all` 才同时构建 macOS Apple Silicon / Intel、Linux amd64 / arm64 和 Android。勾选 `publish` 后，所选平台全部成功才创建正式版本并上传产物与 SHA256 校验值，发布标题取发布说明第一行（`# CommBox v<版本> — 标题`）。macOS / Linux 本机打包入口为 `bash scripts/build-unix.sh`。
 
 GitHub 发布成功后运行 `Sync GitHub release to Gitee` 工作流，输入已发布的 tag（如 `v0.11.7`），同步到 Gitee 镜像（软件内更新优先从 Gitee 下载）。工作流使用仓库的 `GITEE_TOKEN` secret。也可在本机运行：
 
