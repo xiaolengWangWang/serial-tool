@@ -1,0 +1,7 @@
+{
+  "name": "entry",
+  "version": "0.1.0",
+  "description": "CommBox HarmonyOS entry module",
+  "license": "MIT",
+  "dependencies": {}
+}

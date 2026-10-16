@@ -17,6 +17,7 @@
 - [快捷键(macOS)](#快捷键macos)
 - [构建](#构建)
 - [安卓版](apps/android/README.md)
+- [鸿蒙 5／NEXT 原生工程（尚未构建 HAP）](apps/harmony/README.md)
 
 ## 目录结构
 
@@ -26,6 +27,7 @@ core/             核心代码：三端共用引擎(连接、收发、存储、�
   aiattachment/   AI 附件解析(文本 / DOCX / PDF / 图片)
 apps/
   android/        Android 手机/平板版(Kotlin):USB、蓝牙、TCP/UDP、Modbus、APK 更新
+  harmony/        HarmonyOS Stage 源码初版：TCP/UDP 与中文收发，尚未构建 HAP
   macos/          macOS 桌面版(Cocoa + CGo)
   windows/        Windows 桌面版(walk)，直接集成独立 VirtualCOM Go 模块
   linux/          命令行版:Linux 发布;Windows 包里的 CommBox-CLI.exe 也由它构建

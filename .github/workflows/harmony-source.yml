@@ -1,0 +1,23 @@
+name: Harmony source tests
+on:
+  push:
+    paths:
+      - 'apps/harmony/**'
+      - '.github/workflows/harmony-source.yml'
+  pull_request:
+    paths:
+      - 'apps/harmony/**'
+      - '.github/workflows/harmony-source.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  packet-codec:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Test portable packet codec
+        run: node --test apps/harmony/test/packet-codec.test.mjs

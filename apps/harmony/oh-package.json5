@@ -1,0 +1,11 @@
+{
+  "name": "commbox-harmony",
+  "version": "0.1.0",
+  "description": "CommBox HarmonyOS Stage application",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "@ohos/hvigor": "4.0.2",
+    "@ohos/hvigor-ohos-plugin": "4.0.2"
+  }
+}
