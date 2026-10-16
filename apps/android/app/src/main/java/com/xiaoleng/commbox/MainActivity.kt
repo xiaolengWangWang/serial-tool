@@ -14,8 +14,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -39,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.net.Uri
@@ -256,8 +260,10 @@ private fun CommBoxScreen(
     var bleWrite by rememberSaveable { mutableStateOf(com.xiaoleng.commbox.transport.BleConnectionFactory.NUS_WRITE.toString()) }
     var bleNotify by rememberSaveable { mutableStateOf(com.xiaoleng.commbox.transport.BleConnectionFactory.NUS_NOTIFY.toString()) }
     var input by rememberSaveable { mutableStateOf("") }
-    var hexMode by rememberSaveable { mutableStateOf(true) }
-    var captureHexMode by rememberSaveable { mutableStateOf(true) }
+    var hexMode by rememberSaveable { mutableStateOf(false) }
+    var captureHexMode by rememberSaveable { mutableStateOf(false) }
+    var textEncodingName by rememberSaveable { mutableStateOf(TextEncoding.UTF8.name) }
+    val textEncoding = TextEncoding.valueOf(textEncodingName)
     var errorText by rememberSaveable { mutableStateOf("") }
     val connected = state is SessionState.Connected || state is SessionState.Reconnecting
     val context = LocalContext.current
@@ -282,6 +288,7 @@ private fun CommBoxScreen(
         Scaffold { inset ->
             BoxWithConstraints(Modifier.fillMaxSize().padding(inset).padding(16.dp)) {
                 val wide = maxWidth >= 600.dp
+                val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
                 val connectionPanel: @Composable () -> Unit = {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("CommBox", style = MaterialTheme.typography.headlineMedium)
@@ -396,34 +403,39 @@ private fun CommBoxScreen(
                         LazyColumn(Modifier.weight(1f), reverseLayout = false) {
                             items(packets) { packet ->
                                 Card(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-                                val content = if (captureHexMode) packet.bytes.joinToString(" ") { "%02X".format(it) } else packet.bytes.toString(Charsets.UTF_8).replace("\u0000", "␀")
+                                val content = if (captureHexMode) packet.bytes.joinToString(" ") { "%02X".format(it) } else textEncoding.decode(packet.bytes).replace("\u0000", "␀")
                                 Text("${packet.direction} ${packet.peer.orEmpty()}  $content", Modifier.padding(10.dp))
                                 }
                             }
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick = { captureHexMode = !captureHexMode }) { Text(if (captureHexMode) "收发 HEX" else "收发文本") }
                             OutlinedButton(onClick = { hexMode = !hexMode }) { Text(if (hexMode) "HEX" else "文本") }
-                            OutlinedTextField(input, { input = it }, Modifier.weight(1f), label = { Text("发送内容") }, singleLine = true)
-                            Button(enabled = connected, onClick = {
-                                runCatching {
-                                    if (hexMode) input.split(Regex("[\\s,;]+" )).filter(String::isNotBlank).map {
-                                        val value = it.toInt(16)
-                                        require(value in 0..255) { "每个 HEX 字节必须为 00–FF" }
-                                        value.toByte()
-                                    }.toByteArray()
-                                    else input.toByteArray(Charsets.UTF_8)
-                                }.onSuccess(onSend).onFailure { errorText = it.message ?: "HEX 格式错误" }
-                            }) { Text("发送") }
+                            OutlinedButton(onClick = { textEncodingName = if (textEncoding == TextEncoding.UTF8) TextEncoding.GBK.name else TextEncoding.UTF8.name }) {
+                                Text("中文编码：${textEncoding.label}")
+                            }
                         }
+                        OutlinedTextField(input, { input = it }, Modifier.fillMaxWidth().heightIn(min = 120.dp), label = { Text("发送内容（支持中文）") }, minLines = 4, maxLines = 7)
+                        Button(enabled = connected, modifier = Modifier.fillMaxWidth(), onClick = {
+                            runCatching {
+                                if (hexMode) input.split(Regex("[\\s,;]+" )).filter(String::isNotBlank).map {
+                                    val value = it.toInt(16)
+                                    require(value in 0..255) { "每个 HEX 字节必须为 00–FF" }
+                                    value.toByte()
+                                }.toByteArray()
+                                else textEncoding.encode(input)
+                            }.onSuccess(onSend).onFailure { errorText = it.message ?: "HEX 格式错误" }
+                        }) { Text("发送") }
                     }
                 }
                 if (wide) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                     Column(Modifier.weight(0.38f).fillMaxSize().verticalScroll(rememberScrollState())) { connectionPanel() }
                     Column(Modifier.weight(0.62f)) { capturePanel() }
+                } else if (keyboardVisible) {
+                    capturePanel()
                 } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Column(Modifier.weight(0.48f).fillMaxWidth().verticalScroll(rememberScrollState())) { connectionPanel() }
-                    Column(Modifier.weight(0.52f).fillMaxWidth()) { capturePanel() }
+                    Column(Modifier.weight(0.4f).fillMaxWidth().verticalScroll(rememberScrollState())) { connectionPanel() }
+                    Column(Modifier.weight(0.6f).fillMaxWidth()) { capturePanel() }
                 }
             }
         }

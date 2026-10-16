@@ -19,7 +19,7 @@ The debug APK is written to `apps/android/app/build/outputs/apk/debug/`. The rep
 - **Bluetooth SPP:** enter the paired device MAC address. Android asks for Bluetooth Connect permission on first use. The remote device must provide the standard SPP service UUID.
 - **BLE:** enter the device MAC address and UART service/write/notify UUIDs. Nordic UART Service UUIDs are prefilled. BLE writes split according to the negotiated MTU.
 
-The capture list retains the latest 500 items in memory for the current screen and can display bytes as HEX or UTF-8 text. The local database keeps at most 10,000 packets and 32 MiB of raw payload, and CSV export preserves raw bytes as HEX. TCP reads are recorded as received chunks, not inferred protocol frames.
+The capture list retains the latest 500 items in memory for the current screen. Text display and sending support UTF-8 and GBK for Chinese devices; HEX mode remains available. The phone layout gives the multiline send field more room and resizes when the keyboard opens. The local database keeps at most 10,000 packets and 32 MiB of raw payload, and CSV export preserves raw bytes as HEX. TCP reads are recorded as received chunks, not inferred protocol frames.
 
 ## Modbus templates
 
