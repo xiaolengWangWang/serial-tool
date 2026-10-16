@@ -1,12 +1,12 @@
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
     namespace = "com.xiaoleng.commbox"
-    compileSdk = 37
+    compileSdk { version = release(37) { minorApiLevel = 0 } }
+    buildToolsVersion = "37.0.0"
 
     defaultConfig {
         applicationId = "com.xiaoleng.commbox"
@@ -23,8 +23,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
-
     testOptions { unitTests.isReturnDefaultValues = true }
 
     val storePath = System.getenv("ANDROID_KEYSTORE_PATH")

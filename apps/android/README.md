@@ -4,7 +4,7 @@ CommBox Android is a native Kotlin app for phones and tablets. It currently incl
 
 ## Build
 
-Requirements: JDK 17, Android SDK platform 37, Android build tools 37.0.0, and Gradle 9.6.0.
+Requirements: JDK 17, Android SDK platform 37.0, Android build tools 37.0.0, and Gradle 9.6.0.
 
 ```sh
 gradle -p apps/android :app:testDebugUnitTest :app:assembleDebug
@@ -40,4 +40,4 @@ Back up the keystore and passwords outside the repository. Every update must use
 
 ## Validation status
 
-Test sources exercise session event isolation, loopback network sockets, Modbus vectors, BLE chunk boundaries, APK update validation, and local storage. This workstation has no Java runtime, Gradle, Android SDK, or `adb`, so the Android tests and APK build have not run here. The attempted JDK download timed out. CI is configured to build and run JVM tests; connected UI tests, USB adapters, SPP devices, BLE UART implementations, and same-key upgrade installation still need emulator or device validation. The release APK also needs the persistent signing key configured in GitHub Actions. Enter a device's actual UUIDs for private BLE UART profiles.
+The JVM unit tests, debug APK, and instrumentation test APK build locally with JDK 17, Gradle 9.6.0, and Android SDK 37.0. Test sources exercise session event isolation, loopback network sockets, Modbus vectors, BLE chunk boundaries, APK update validation, and local storage. No Android device is connected here, so connected UI tests, USB adapters, SPP devices, BLE UART implementations, and same-key upgrade installation still need device validation. Enter a device's actual UUIDs for private BLE UART profiles.

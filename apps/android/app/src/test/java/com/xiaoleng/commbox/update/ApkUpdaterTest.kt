@@ -2,6 +2,7 @@ package com.xiaoleng.commbox.update
 
 import java.io.File
 import java.security.MessageDigest
+import kotlin.io.path.createTempDirectory
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -13,7 +14,7 @@ import org.junit.Test
 class ApkUpdaterTest {
     @Test fun selectsNewestAndroidReleaseAndIgnoresCurrentVersion() = runBlocking {
         val payload = release("v0.10.0", APK, "https://gitee.com/test/apk")
-        val updater = ApkUpdater(createTempDir(), FakeHttp(mapOf(ApkUpdater.GITEE_RELEASES to payload, ApkUpdater.GITHUB_RELEASES to payload)))
+        val updater = ApkUpdater(createTempDirectory().toFile(), FakeHttp(mapOf(ApkUpdater.GITEE_RELEASES to payload, ApkUpdater.GITHUB_RELEASES to payload)))
         assertNotNull(updater.check("0.9.9"))
         assertNull(updater.check("0.10.0"))
     }
@@ -25,7 +26,7 @@ class ApkUpdaterTest {
 
     @Test fun absentChecksumIsRejectedBeforeDownload() = runBlocking {
         val http = FakeHttp(emptyMap())
-        val updater = ApkUpdater(createTempDir(), http)
+        val updater = ApkUpdater(createTempDirectory().toFile(), http)
         assertThrows(IllegalArgumentException::class.java) {
             runBlocking { updater.downloadVerified(UpdateInfo("1.0.0", APK, "https://gitee.com/apk", "")) }
         }
@@ -33,7 +34,7 @@ class ApkUpdaterTest {
     }
 
     @Test fun checksumMismatchDeletesFile() = runBlocking {
-        val dir = createTempDir()
+        val dir = createTempDirectory().toFile()
         val updater = ApkUpdater(dir, FakeHttp(emptyMap(), APK_BYTES))
         val wrong = "0".repeat(64)
         assertThrows(IllegalArgumentException::class.java) {
@@ -43,7 +44,7 @@ class ApkUpdaterTest {
     }
 
     @Test fun rejectsUntrustedHostAndInterruptedDownload() = runBlocking {
-        val dir = createTempDir()
+        val dir = createTempDirectory().toFile()
         val http = FakeHttp(emptyMap(), APK_BYTES, failAfterWrite = true)
         val updater = ApkUpdater(dir, http)
         val hash = sha256(APK_BYTES)
