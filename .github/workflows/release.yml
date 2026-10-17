@@ -147,8 +147,9 @@ jobs:
           version=$(sed -n 's/^const Version = "\([^"]*\)"/\1/p' core/modes.go)
           tag="v$version"
           test -n "$version"
+          cp docs/CommBox使用手册.md build/release/CommBox-Manual.md
           for asset in "CommBox-$version-Windows-x64.zip" "CommBox-$version-Windows-x64.7z" "CommBox-$version-Windows-x64-GUI.zip" "CommBox-$version-Windows-x64-GUI.7z" CommBox-Manual.md; do
-            test -s "build/release/$asset"
+            test -s "build/release/$asset" || { echo "Missing release asset: $asset"; exit 1; }
           done
           if [[ "$RELEASE_SCOPE" == all ]]; then
             for asset in "CommBox-$version-macOS-AppleSilicon.dmg" "CommBox-$version-macOS-Intel.dmg" commbox-linux-amd64 commbox-linux-arm64 "CommBox-$version-Linux-amd64.tar.gz" "CommBox-$version-Linux-arm64.tar.gz"; do
