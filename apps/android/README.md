@@ -2,7 +2,7 @@
 
 CommBox Android is a native Kotlin app for phones and tablets. It currently includes TCP/UDP sockets, USB host serial, classic Bluetooth SPP, BLE UART profiles, raw HEX/text capture and send, Modbus request templates (03/04/06/10), bounded local history, CSV export, and checksum-checked APK updates.
 
-The APK targets Android 8.0 (API 26) and newer. This includes Xiaomi Android/HyperOS devices and Huawei devices that still support Android APKs, subject to device and peripheral testing. HarmonyOS 5/NEXT native devices require a separate HAP application; this Android APK is not a HarmonyOS native package. See [the Android UI preview release note](../../docs/releases/android-ui-v0.11.8.md) for the tested scope.
+The APK targets Android 8.0 (API 26) and newer. This includes Xiaomi Android/HyperOS devices and Huawei devices that still support Android APKs, subject to device and peripheral testing. HarmonyOS 5/NEXT native devices require a separate HAP application; this Android APK is not a HarmonyOS native package. See [the Android layout preview release note](../../docs/releases/android-layout-v0.11.9.md) for the tested scope.
 
 ## Build
 
@@ -18,10 +18,10 @@ The debug APK is written to `apps/android/app/build/outputs/apk/debug/`. The rep
 
 - **TCP/UDP:** enter a host and port. TCP client/server and UDP send/reply are supported. TCP clients can opt into automatic reconnect; UDP listeners reply to the most recent sender.
 - **USB serial:** connect a USB OTG serial adapter, refresh the device list, select the device and port, set baud rate and 5–8 data bits, 1–2 stop bits, and parity, then grant the Android USB prompt. Unplugging the adapter marks the session disconnected.
-- **Bluetooth SPP:** enter the paired device MAC address. Android asks for Bluetooth Connect permission on first use. The remote device must provide the standard SPP service UUID.
-- **BLE:** enter the device MAC address and UART service/write/notify UUIDs. Nordic UART Service UUIDs are prefilled. BLE writes split according to the negotiated MTU.
+- **Bluetooth SPP:** pair in Android settings, then choose a device from the paired-device list. Manual address entry remains available. Android asks for Bluetooth Connect permission on first use. The remote device must provide the standard SPP service UUID.
+- **BLE:** scan and select a BLE UART device. Nordic UART Service UUIDs are prefilled under advanced settings; devices with other UART profiles need their own service/write/notify UUIDs. BLE writes split according to the negotiated MTU.
 
-The capture list retains the latest 500 items in memory for the current screen. Text display and sending support UTF-8 and GBK for Chinese devices; HEX mode remains available. The phone layout gives the multiline send field more room and resizes when the keyboard opens. The launcher uses the CommBox icon, including an adaptive icon on Android 8 and newer. The local database keeps at most 10,000 packets and 32 MiB of raw payload, and CSV export preserves raw bytes as HEX. TCP reads are recorded as received chunks, not inferred protocol frames.
+The capture list retains the latest 500 items in memory for the current screen. Text display and sending support UTF-8 and GBK for Chinese devices; HEX mode remains available. Phones use separate connection and send pages in portrait and landscape; short or keyboard-covered windows keep the send form scrollable. The launcher uses the CommBox icon, including an adaptive icon on Android 8 and newer. The local database keeps at most 10,000 packets and 32 MiB of raw payload, and CSV export preserves raw bytes as HEX. TCP reads are recorded as received chunks, not inferred protocol frames.
 
 ## Modbus templates
 

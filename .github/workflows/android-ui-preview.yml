@@ -2,7 +2,7 @@ name: Android UI preview
 on:
   push:
     tags:
-      - v0.11.8-android-ui
+      - v0.11.9-android-ui
 permissions:
   contents: write
 jobs:
@@ -43,25 +43,25 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          gradle -p apps/android :app:assembleRelease -PreleaseVersion=0.11.8 -PreleaseVersionCode=142
+          gradle -p apps/android :app:assembleRelease -PreleaseVersion=0.11.9 -PreleaseVersionCode=150
           apk=apps/android/app/build/outputs/apk/release/app-release.apk
           "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs "$apk" > "$RUNNER_TEMP/apk-signature.txt"
           grep -q 'da9e5afe2215dd344fb3575d1dd52d2959eb6081a89e81948fac4a312fec210d' "$RUNNER_TEMP/apk-signature.txt"
           badging=$("$ANDROID_HOME/build-tools/37.0.0/aapt" dump badging "$apk")
-          grep -q "package: name='com.xiaoleng.commbox' versionCode='142' versionName='0.11.8'" <<< "$badging"
+          grep -q "package: name='com.xiaoleng.commbox' versionCode='150' versionName='0.11.9'" <<< "$badging"
           mkdir -p build/release
-          cp "$apk" build/release/CommBox-0.11.8-Android.apk
-          (cd build/release && sha256sum CommBox-0.11.8-Android.apk > SHA256SUMS-Android.txt)
-          sed '/^## SHA256/,$d' docs/releases/android-ui-v0.11.8.md > build/release-notes.md
+          cp "$apk" build/release/CommBox-0.11.9-Android.apk
+          (cd build/release && sha256sum CommBox-0.11.9-Android.apk > SHA256SUMS-Android.txt)
+          sed '/^## SHA256/,$d' docs/releases/android-layout-v0.11.9.md > build/release-notes.md
           printf '\n## SHA256\n\n```text\n' >> build/release-notes.md
           cat build/release/SHA256SUMS-Android.txt >> build/release-notes.md
           printf '```\n' >> build/release-notes.md
       - uses: actions/upload-artifact@v4
         with:
-          name: commbox-android-ui-preview
+          name: commbox-android-layout-preview
           path: build/release/*
           if-no-files-found: error
       - name: Publish Android prerelease
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --target "$GITHUB_SHA" --prerelease --title 'CommBox Android 中文界面预览 v0.11.8' --notes-file build/release-notes.md build/release/*
+        run: gh release create "$GITHUB_REF_NAME" --target "$GITHUB_SHA" --prerelease --title 'CommBox Android 横竖屏界面预览 v0.11.9' --notes-file build/release-notes.md build/release/*

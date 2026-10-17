@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -26,12 +27,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -43,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.net.Uri
@@ -244,6 +248,9 @@ private fun CommBoxScreen(
     recentProfiles: List<com.xiaoleng.commbox.session.ConnectionConfig>,
 ) {
     var host by rememberSaveable { mutableStateOf("192.168.1.10") }
+    var usbDeviceId by rememberSaveable { mutableStateOf("") }
+    var sppAddress by rememberSaveable { mutableStateOf("") }
+    var bleAddress by rememberSaveable { mutableStateOf("") }
     var port by rememberSaveable { mutableStateOf("502") }
     var transport by rememberSaveable { mutableStateOf("TCP") }
     var listen by rememberSaveable { mutableStateOf(false) }
@@ -265,8 +272,13 @@ private fun CommBoxScreen(
     var textEncodingName by rememberSaveable { mutableStateOf(TextEncoding.UTF8.name) }
     val textEncoding = TextEncoding.valueOf(textEncodingName)
     var errorText by rememberSaveable { mutableStateOf("") }
+    var activePage by rememberSaveable { mutableStateOf("连接") }
+    var helpTopic by rememberSaveable { mutableStateOf<String?>(null) }
+    var showBleUuids by rememberSaveable { mutableStateOf(false) }
+    var usbDevices by remember { mutableStateOf(emptyList<UsbDevice>()) }
     val connected = state is SessionState.Connected || state is SessionState.Reconnecting
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
     fun previewModbus(function: Int) {
         runCatching {
             val address = modbusAddress.toInt()
@@ -281,14 +293,19 @@ private fun CommBoxScreen(
             input = frame.joinToString(" ") { "%02X".format(it) }
             hexMode = true
             errorText = ""
+            activePage = "收发"
         }.onFailure { errorText = it.message ?: "Modbus 参数无效" }
     }
 
     MaterialTheme {
         Scaffold { inset ->
-            BoxWithConstraints(Modifier.fillMaxSize().padding(inset).padding(16.dp)) {
-                val wide = maxWidth >= 600.dp
+            BoxWithConstraints(Modifier.fillMaxSize().padding(inset).imePadding().padding(12.dp)) {
+                // Keep the layout mode stable while the keyboard resizes the window.
+                val twoPane = remember(configuration.orientation, configuration.screenWidthDp) {
+                    maxWidth >= 700.dp && maxHeight >= 500.dp
+                }
                 val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+                val compactComposer = keyboardVisible || maxHeight < 450.dp
                 val connectionPanel: @Composable () -> Unit = {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("CommBox", style = MaterialTheme.typography.headlineMedium)
@@ -306,10 +323,28 @@ private fun CommBoxScreen(
                             if (transport == "TCP" || transport == "UDP") OutlinedButton(onClick = { listen = !listen }) { Text(if (listen) "监听" else "客户端") }
                             if (transport == "TCP" && !listen) OutlinedButton(onClick = { autoReconnect = !autoReconnect }) { Text(if (autoReconnect) "✓ 自动重连" else "自动重连") }
                         }
-                        if (transport != "USB") OutlinedTextField(host, { host = it }, Modifier.fillMaxWidth(), label = { Text(if (transport == "SPP" || transport == "BLE") "蓝牙设备 MAC 地址" else "网络地址") }, singleLine = true)
+                        if (transport == "TCP" || transport == "UDP") OutlinedTextField(host, { host = it }, Modifier.fillMaxWidth(), label = { Text("网络地址") }, singleLine = true)
                         if (transport == "TCP" || transport == "UDP") OutlinedTextField(port, { port = it.filter(Char::isDigit).take(5) }, Modifier.fillMaxWidth(), label = { Text("端口") }, singleLine = true)
                         if (transport == "USB") {
-                            OutlinedTextField(host, { host = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), label = { Text("USB 设备 ID") }, singleLine = true)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("USB 转串口设备", style = MaterialTheme.typography.titleMedium)
+                                TextButton(onClick = { helpTopic = "USB 设备 ID" }) { Text("？") }
+                            }
+                            Text("插入 OTG 设备后刷新并选择；设备 ID 会自动填入。")
+                            OutlinedButton(onClick = {
+                                usbDevices = context.getSystemService(UsbManager::class.java).deviceList.values.toList()
+                            }, modifier = Modifier.fillMaxWidth()) { Text("刷新 USB 设备") }
+                            if (usbDevices.isEmpty()) Text("尚未发现 USB 设备。请检查 OTG 连接和手机的 USB 权限。")
+                            usbDevices.forEach { device ->
+                                val id = device.deviceId.toString()
+                                OutlinedButton(onClick = { usbDeviceId = id }, modifier = Modifier.fillMaxWidth()) {
+                                    Column(Modifier.fillMaxWidth()) {
+                                        Text("${if (usbDeviceId == id) "✓ " else ""}${device.productName ?: "USB 设备"} · ID $id")
+                                        Text("VID ${device.vendorId} · PID ${device.productId}", style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                            }
+                            OutlinedTextField(usbDeviceId, {}, Modifier.fillMaxWidth(), label = { Text("已选 USB 设备 ID") }, readOnly = true, singleLine = true)
                             OutlinedTextField(serialPort, { serialPort = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), label = { Text("串口号") }, singleLine = true)
                             OutlinedTextField(serialBaud, { serialBaud = it.filter(Char::isDigit).take(7) }, Modifier.fillMaxWidth(), label = { Text("波特率") }, singleLine = true)
                             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -317,38 +352,49 @@ private fun CommBoxScreen(
                                 listOf(1, 2).forEach { bits -> OutlinedButton(onClick = { serialStopBits = bits }) { Text("${if (serialStopBits == bits) "✓ " else ""}${bits}停止位") } }
                                 listOf(0 to "无校验", 1 to "奇校验", 2 to "偶校验").forEach { (value, label) -> OutlinedButton(onClick = { serialParity = value }) { Text(if (serialParity == value) "✓ $label" else label) } }
                             }
-                            val usbDevices = remember { androidx.compose.runtime.mutableStateOf(emptyList<UsbDevice>()) }
-                            OutlinedButton(onClick = {
-                                usbDevices.value = context.getSystemService(UsbManager::class.java).deviceList.values.toList()
-                            }) { Text("刷新 USB 设备") }
-                            if (usbDevices.value.isEmpty()) {
-                                OutlinedButton(onClick = { usbDevices.value = context.getSystemService(UsbManager::class.java).deviceList.values.toList() }) { Text("选择设备") }
-                            } else Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                usbDevices.value.forEach { device ->
-                                    OutlinedButton(onClick = { host = device.deviceId.toString() }) {
-                                        Text("${device.deviceName} · ${device.vendorId}:${device.productId}${if (host == device.deviceId.toString()) " ✓" else ""}")
+                        }
+                        if (transport == "BLE") {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("BLE 低功耗蓝牙", style = MaterialTheme.typography.titleMedium)
+                                TextButton(onClick = { helpTopic = "BLE" }) { Text("？") }
+                            }
+                            Text("扫描并选择支持 BLE UART 的设备。")
+                            OutlinedButton(onClick = onScanBle, modifier = Modifier.fillMaxWidth()) { Text("扫描 BLE 设备") }
+                            if (bleDevices.isEmpty()) Text("暂无扫描结果，点上方按钮开始扫描。")
+                            bleDevices.forEach { device ->
+                                OutlinedButton(onClick = { bleAddress = device.address }, modifier = Modifier.fillMaxWidth()) {
+                                    Column(Modifier.fillMaxWidth()) {
+                                        Text("${if (bleAddress == device.address) "✓ " else ""}${device.name.ifBlank { "未命名 BLE 设备" }}")
+                                        Text(device.address, style = MaterialTheme.typography.bodySmall)
                                     }
                                 }
                             }
-                        }
-                        if (transport == "BLE") {
-                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedButton(onClick = onScanBle) { Text("扫描 BLE UART") }
-                                bleDevices.forEach { device ->
-                                    OutlinedButton(onClick = { host = device.address }) { Text("${device.name.ifBlank { "BLE 设备" }} · ${device.address}") }
-                                }
+                            OutlinedTextField(bleAddress, { bleAddress = it }, Modifier.fillMaxWidth(), label = { Text("已选 BLE 地址（也可手动输入）") }, singleLine = true)
+                            OutlinedButton(onClick = { showBleUuids = !showBleUuids }, modifier = Modifier.fillMaxWidth()) { Text(if (showBleUuids) "收起 UUID 设置" else "高级设置：服务与特征 UUID") }
+                            if (showBleUuids) {
+                                Text("默认使用 Nordic UART Service；其他设备请按外设说明修改。")
+                                OutlinedTextField(bleService, { bleService = it }, Modifier.fillMaxWidth(), label = { Text("服务 UUID") }, singleLine = true)
+                                OutlinedTextField(bleWrite, { bleWrite = it }, Modifier.fillMaxWidth(), label = { Text("写入 UUID") }, singleLine = true)
+                                OutlinedTextField(bleNotify, { bleNotify = it }, Modifier.fillMaxWidth(), label = { Text("通知 UUID") }, singleLine = true)
                             }
-                            OutlinedTextField(bleService, { bleService = it }, Modifier.fillMaxWidth(), label = { Text("BLE 服务 UUID") }, singleLine = true)
-                            OutlinedTextField(bleWrite, { bleWrite = it }, Modifier.fillMaxWidth(), label = { Text("写入 UUID") }, singleLine = true)
-                            OutlinedTextField(bleNotify, { bleNotify = it }, Modifier.fillMaxWidth(), label = { Text("通知 UUID") }, singleLine = true)
                         }
                         if (transport == "SPP") {
-                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedButton(onClick = onScanSpp) { Text("已配对设备") }
-                                sppDevices.forEach { device ->
-                                    OutlinedButton(onClick = { host = device.address }) { Text("${device.name.ifBlank { "蓝牙串口" }} · ${device.address}") }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("SPP 经典蓝牙串口", style = MaterialTheme.typography.titleMedium)
+                                TextButton(onClick = { helpTopic = "SPP" }) { Text("？") }
+                            }
+                            Text("先在系统设置中配对，再从下方选择设备。")
+                            OutlinedButton(onClick = onScanSpp, modifier = Modifier.fillMaxWidth()) { Text("读取已配对设备") }
+                            if (sppDevices.isEmpty()) Text("暂无设备。请先完成系统蓝牙配对。")
+                            sppDevices.forEach { device ->
+                                OutlinedButton(onClick = { sppAddress = device.address }, modifier = Modifier.fillMaxWidth()) {
+                                    Column(Modifier.fillMaxWidth()) {
+                                        Text("${if (sppAddress == device.address) "✓ " else ""}${device.name.ifBlank { "未命名 SPP 设备" }}")
+                                        Text(device.address, style = MaterialTheme.typography.bodySmall)
+                                    }
                                 }
                             }
+                            OutlinedTextField(sppAddress, { sppAddress = it }, Modifier.fillMaxWidth(), label = { Text("已选 SPP 地址（也可手动输入）") }, singleLine = true)
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(enabled = !connected && state !is SessionState.Connecting, onClick = {
@@ -360,11 +406,11 @@ private fun CommBoxScreen(
                                             require(p in 1..65535) { "端口范围为 1–65535" }
                                             if (transport == "TCP") TcpConfig(host, p, listen, autoReconnect && !listen) else UdpConfig(host, p, listen)
                                         }
-                                        "USB" -> UsbConfig(host.toIntOrNull() ?: error("请选择 USB 设备"), serialPort.toIntOrNull() ?: 0, serialBaud.toIntOrNull() ?: error("波特率无效"), serialDataBits, serialStopBits, serialParity)
-                                        "SPP" -> SppConfig(host)
-                                        else -> BleConfig(host, bleService, bleWrite, bleNotify, true)
+                                        "USB" -> UsbConfig(usbDeviceId.toIntOrNull() ?: error("请选择 USB 设备"), serialPort.toIntOrNull() ?: 0, serialBaud.toIntOrNull() ?: error("波特率无效"), serialDataBits, serialStopBits, serialParity)
+                                        "SPP" -> SppConfig(sppAddress.takeIf(String::isNotBlank) ?: error("请选择 SPP 设备"))
+                                        else -> BleConfig(bleAddress.takeIf(String::isNotBlank) ?: error("请选择 BLE 设备"), bleService, bleWrite, bleNotify, true)
                                     }
-                                }.onSuccess(onConnect).onFailure { errorText = it.message ?: "连接参数无效" }
+                                }.onSuccess { onConnect(it); activePage = "收发" }.onFailure { errorText = it.message ?: "连接参数无效" }
                             }) { Text("连接") }
                             OutlinedButton(enabled = connected, onClick = onDisconnect) { Text("断开") }
                         }
@@ -372,7 +418,7 @@ private fun CommBoxScreen(
                             Text("最近连接")
                             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 recentProfiles.forEach { profile ->
-                                    OutlinedButton(onClick = { onConnect(profile) }) { Text(profile.label()) }
+                                    OutlinedButton(onClick = { onConnect(profile); activePage = "收发" }) { Text(profile.label()) }
                                 }
                             }
                         }
@@ -397,14 +443,23 @@ private fun CommBoxScreen(
                     }
                 }
                 val capturePanel: @Composable () -> Unit = {
-                    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("收发记录 · ${packets.size}", style = MaterialTheme.typography.titleMedium)
-                        OutlinedButton(onClick = onExport) { Text("导出记录") }
-                        LazyColumn(Modifier.weight(1f), reverseLayout = false) {
-                            items(packets) { packet ->
-                                Card(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-                                val content = if (captureHexMode) packet.bytes.joinToString(" ") { "%02X".format(it) } else textEncoding.decode(packet.bytes).replace("\u0000", "␀")
-                                Text("${packet.direction} ${packet.peer.orEmpty()}  $content", Modifier.padding(10.dp))
+                    Column(Modifier.fillMaxSize().then(if (compactComposer) Modifier.verticalScroll(rememberScrollState()) else Modifier), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(when (state) {
+                            SessionState.Disconnected -> "未连接"
+                            is SessionState.Connecting -> "正在连接…"
+                            is SessionState.Connected -> "已连接 · ${state.config.label()}"
+                            is SessionState.Reconnecting -> "连接中断，正在重连…"
+                            is SessionState.Failed -> "连接失败 · ${state.message}"
+                        }, style = MaterialTheme.typography.bodySmall)
+                        if (!compactComposer) {
+                            Text("收发记录 · ${packets.size}", style = MaterialTheme.typography.titleMedium)
+                            OutlinedButton(onClick = onExport) { Text("导出记录") }
+                            LazyColumn(Modifier.weight(1f), reverseLayout = false) {
+                                items(packets) { packet ->
+                                    Card(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                                        val content = if (captureHexMode) packet.bytes.joinToString(" ") { "%02X".format(it) } else textEncoding.decode(packet.bytes).replace("\u0000", "␀")
+                                        Text("${packet.direction} ${packet.peer.orEmpty()}  $content", Modifier.padding(10.dp))
+                                    }
                                 }
                             }
                         }
@@ -415,7 +470,7 @@ private fun CommBoxScreen(
                                 Text("中文编码：${textEncoding.label}")
                             }
                         }
-                        OutlinedTextField(input, { input = it }, Modifier.fillMaxWidth().heightIn(min = 120.dp), label = { Text("发送内容（支持中文）") }, minLines = 4, maxLines = 7)
+                        OutlinedTextField(input, { input = it }, Modifier.fillMaxWidth().heightIn(min = if (compactComposer) 72.dp else 120.dp), label = { Text("发送内容（支持中文）") }, minLines = if (compactComposer) 2 else 4, maxLines = 7)
                         Button(enabled = connected, modifier = Modifier.fillMaxWidth(), onClick = {
                             runCatching {
                                 if (hexMode) input.split(Regex("[\\s,;]+" )).filter(String::isNotBlank).map {
@@ -426,18 +481,33 @@ private fun CommBoxScreen(
                                 else textEncoding.encode(input)
                             }.onSuccess(onSend).onFailure { errorText = it.message ?: "HEX 格式错误" }
                         }) { Text("发送") }
+                        if (updateStatus.isNotBlank()) Text(updateStatus)
+                        if (errorText.isNotBlank()) Text(errorText, color = MaterialTheme.colorScheme.error)
                     }
                 }
-                if (wide) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                if (twoPane) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                     Column(Modifier.weight(0.38f).fillMaxSize().verticalScroll(rememberScrollState())) { connectionPanel() }
                     Column(Modifier.weight(0.62f)) { capturePanel() }
-                } else if (keyboardVisible) {
-                    capturePanel()
-                } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Column(Modifier.weight(0.4f).fillMaxWidth().verticalScroll(rememberScrollState())) { connectionPanel() }
-                    Column(Modifier.weight(0.6f).fillMaxWidth()) { capturePanel() }
+                } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("连接", "收发").forEach { page ->
+                            OutlinedButton(onClick = { activePage = page }, modifier = Modifier.weight(1f)) { Text(if (activePage == page) "✓ $page" else page) }
+                        }
+                    }
+                    if (activePage == "连接") Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) { connectionPanel() }
+                    else capturePanel()
                 }
             }
+            if (helpTopic != null) AlertDialog(
+                onDismissRequest = { helpTopic = null },
+                title = { Text(helpTopic.orEmpty()) },
+                text = { Text(when (helpTopic) {
+                    "USB 设备 ID" -> "设备 ID 是 Android 为当前插入的 USB 设备分配的数字编号，重新插拔后可能改变。插入 OTG 转串口设备，点“刷新 USB 设备”并选择即可；VID/PID 是厂商和产品编号。它不是 Modbus 从站地址。"
+                    "SPP" -> "SPP 是经典蓝牙串口。先在手机系统蓝牙设置中完成配对，再点“读取已配对设备”并选择。远端设备需要支持 SPP；选择后会自动填入蓝牙地址。"
+                    else -> "BLE 是低功耗蓝牙。点“扫描 BLE 设备”并选择支持 UART 服务的设备。默认使用 Nordic UART Service；其他设备需要按外设说明修改服务、写入和通知 UUID。BLE 设备不一定支持串口收发。"
+                }) },
+                confirmButton = { TextButton(onClick = { helpTopic = null }) { Text("知道了") } },
+            )
         }
     }
 }
