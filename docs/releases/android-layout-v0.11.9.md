@@ -10,6 +10,10 @@
 
 包名 `com.xiaoleng.commbox`，版本号 `0.11.9`，版本代码 `150`，使用与上一版相同的发布签名。Android 8.0 及更新系统可安装；小米 Android／HyperOS 和能安装 APK 的 HarmonyOS 4 设备仍需真机验证 USB、SPP、BLE。HarmonyOS 5／NEXT 原生设备需要 HAP，不能安装此 APK。
 
-本地已通过 JVM 单元测试及 debug、签名 release APK 构建。GitHub CI 会重新构建并核对签名、包名和版本；目前没有连接 Android 设备，横竖屏、软键盘、USB 与蓝牙操作尚未完成真机测试。
+本地已通过 JVM 单元测试及 debug、签名 release APK 构建。[GitHub CI](https://github.com/xiaolengWangWang/serial-tool/actions/runs/38991685932) 也已通过单元测试、debug／测试 APK 编译及签名 release APK 构建，并核对签名、包名和版本。下方 SHA256 对应 CI 发布的 APK。目前没有连接 Android 设备，横竖屏、软键盘、USB 与蓝牙操作尚未完成真机测试。
 
 ## SHA256
+
+```text
+18bd606be03dcd00046584b67e276a48483ad0fd967a101b14038cfc9f4edd84  CommBox-0.11.9-Android.apk
+```
