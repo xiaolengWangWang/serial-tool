@@ -1,4 +1,4 @@
-# CommBox Android 界面预览版 v0.11.8
+# CommBox Android 界面正式版 v0.11.8
 
 这是单独提供的 Android APK，方便查看和发送中文串口数据。
 
@@ -8,7 +8,7 @@
 - 弹出输入法时界面随窗口缩放，发送按钮保持可见。
 - 使用 CommBox 项目图标作为 Android 启动图标。
 
-APK 包名为 `com.xiaoleng.commbox`，版本号 `0.11.8`，版本代码 `142`，使用与 `v0.11.7` 相同的发布签名。此预览版只有 Android APK；桌面正式版仍是 `v0.11.7`。
+APK 包名为 `com.xiaoleng.commbox`，版本号 `0.11.8`，版本代码 `142`，使用与 `v0.11.7` 相同的发布签名。此版只有 Android APK；桌面正式版仍是 `v0.11.7`。
 
 ## 设备范围
 
