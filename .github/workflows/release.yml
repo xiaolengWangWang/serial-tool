@@ -7,6 +7,7 @@ on:
         type: choice
         options:
           - windows
+          - windows-android
           - all
         default: windows
       publish:
@@ -62,7 +63,7 @@ jobs:
           path: build/release/*
           if-no-files-found: error
   android:
-    if: inputs.scope == 'all'
+    if: inputs.scope == 'all' || inputs.scope == 'windows-android'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -124,7 +125,7 @@ jobs:
           path: build/release/CommBox-*-Android.apk
           if-no-files-found: error
   release:
-    if: ${{ always() && inputs.publish && needs.build.result == 'success' && (inputs.scope != 'all' || needs.android.result == 'success') }}
+    if: ${{ always() && inputs.publish && needs.build.result == 'success' && (inputs.scope == 'windows' || needs.android.result == 'success') }}
     needs: [build, android]
     runs-on: ubuntu-24.04
     permissions:
@@ -150,9 +151,12 @@ jobs:
             test -s "build/release/$asset"
           done
           if [[ "$RELEASE_SCOPE" == all ]]; then
-            for asset in "CommBox-$version-macOS-AppleSilicon.dmg" "CommBox-$version-macOS-Intel.dmg" commbox-linux-amd64 commbox-linux-arm64 "CommBox-$version-Linux-amd64.tar.gz" "CommBox-$version-Linux-arm64.tar.gz" "CommBox-$version-Android.apk"; do
+            for asset in "CommBox-$version-macOS-AppleSilicon.dmg" "CommBox-$version-macOS-Intel.dmg" commbox-linux-amd64 commbox-linux-arm64 "CommBox-$version-Linux-amd64.tar.gz" "CommBox-$version-Linux-arm64.tar.gz"; do
               test -s "build/release/$asset"
             done
+          fi
+          if [[ "$RELEASE_SCOPE" == all || "$RELEASE_SCOPE" == windows-android ]]; then
+            test -s "build/release/CommBox-$version-Android.apk"
           fi
           (cd build/release && sha256sum * > SHA256SUMS.txt)
           cp "docs/releases/release-$tag.md" build/release-notes.md

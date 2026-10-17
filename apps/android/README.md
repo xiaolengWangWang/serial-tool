@@ -2,7 +2,7 @@
 
 CommBox Android is a native Kotlin app for phones and tablets. It currently includes TCP/UDP sockets, USB host serial, classic Bluetooth SPP, BLE UART profiles, raw HEX/text capture and send, Modbus request templates (03/04/06/10), bounded local history, CSV export, and checksum-checked APK updates.
 
-The APK targets Android 8.0 (API 26) and newer. This includes Xiaomi Android/HyperOS devices and Huawei devices that still support Android APKs, subject to device and peripheral testing. HarmonyOS 5/NEXT native devices require a separate HAP application; this Android APK is not a HarmonyOS native package. See [the Android layout preview release note](../../docs/releases/android-layout-v0.11.9.md) for the tested scope.
+The APK targets Android 8.0 (API 26) and newer. This includes Xiaomi Android/HyperOS devices and Huawei devices that still support Android APKs, subject to device and peripheral testing. HarmonyOS 5/NEXT native devices require a separate HAP application; this Android APK is not a HarmonyOS native package. See [the v0.11.10 release note](../../docs/releases/release-v0.11.10.md) for the tested scope.
 
 ## Build
 
